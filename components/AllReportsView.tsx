@@ -62,12 +62,17 @@ function photoFolderKey(report: SubmittedReport): string {
   return report.projectId || 'photos';
 }
 
+function isAttendanceReport(report: SubmittedReport): boolean {
+  return report.reportType === 'attendance_report';
+}
+
 type AttachmentFilter = 'all' | 'photos' | 'videos' | 'documents' | 'other' | 'none';
 
 type ReportDownloadPreview = {
   title: string;
   subtitle: string;
   totalRows: number;
+  recordCount?: number;
   previewRows: Array<Record<string, string>>;
   columns: string[];
   fileName: string;
@@ -86,8 +91,7 @@ function reportAttachments(report: SubmittedReport) {
 
 function reportHasPhoto(report: SubmittedReport): boolean {
   return Boolean(
-    report.hasMediaFile ||
-      isImageMediaUri(report.mediaFile || '') ||
+    isImageMediaUri(report.mediaFile || '') ||
       reportAttachments(report).some(
         attachment => attachment.type === 'image' ||
           (attachment.type === 'media' && isImageMediaUri(attachment.url))
@@ -132,10 +136,6 @@ function reportHasOtherAttachment(report: SubmittedReport): boolean {
   );
 }
 
-function isAttendanceReport(report: SubmittedReport): boolean {
-  return String(report.id || '').startsWith('timelog-');
-}
-
 function formatReportDateTime(value?: string): string {
   const date = value ? new Date(value) : null;
   return date && !Number.isNaN(date.getTime()) ? date.toLocaleString() : 'Unknown date';
@@ -166,19 +166,15 @@ function buildSingleReportPdf(
   projectById: Map<string, Project>,
 ): string {
   const metricRows = Object.entries(report.metrics || {})
-    .filter(([metric]) => metric !== 'volunteerHours' && metric !== 'beneficiariesServed')
+    .filter(([metric]) => (
+      metric !== 'volunteerHours'
+      && metric !== 'beneficiariesServed'
+      && metric !== 'attendanceHours'
+    ))
     .map(([metric, value]) => ({
       metric: formatMetricLabel(metric),
       value,
     }));
-  const feedbackRows = [
-    ['Collaboration feedback', report.collaborationFeedback],
-    ['Volunteer praise', report.volunteerPraise],
-    ['Gratitude note', report.gratitudeNote],
-    ['Approval notes', report.approvalNotes],
-  ]
-    .filter(([, value]) => Boolean(value))
-    .map(([field, value]) => ({ field, value }));
 
   return buildTablePdf(report.title || 'Report', {
     subtitle: `Generated report export - ${formatReportDateTime(report.submittedAt)}`,
@@ -213,15 +209,6 @@ function buildSingleReportPdf(
         rows: metricRows,
         emptyMessage: 'No metrics captured for this report.',
       },
-      {
-        title: 'Feedback and Notes',
-        columns: [
-          { key: 'field', label: 'Field', width: 1 },
-          { key: 'value', label: 'Value', width: 2.8 },
-        ],
-        rows: feedbackRows,
-        emptyMessage: 'No additional feedback or notes.',
-      },
     ],
   });
 }
@@ -247,7 +234,11 @@ function buildBatchReportPdf(
   }));
   const metricRows = reports.flatMap((report, index) =>
     Object.entries(report.metrics || {})
-      .filter(([metric]) => metric !== 'volunteerHours' && metric !== 'beneficiariesServed')
+      .filter(([metric]) => (
+        metric !== 'volunteerHours'
+        && metric !== 'beneficiariesServed'
+        && metric !== 'attendanceHours'
+      ))
       .map(([metric, value]) => ({
       number: index + 1,
       report: report.title || 'Untitled report',
@@ -313,13 +304,16 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     return m;
   }, [projects]);
 
-  // Merge time-log attendance photos as synthetic reports so they show in All Reports
+  // Add one synthetic attendance report per canonical time-log.  The report
+  // values come from the time-log itself; its photo is optional evidence.
   const allItems = useMemo(() => {
     const base = [...reports];
     const volunteerById = new Map((volunteers || []).map(v => [v.id, v]));
     (volunteerTimeLogs || []).forEach(log => {
-      const photo = (log as any).attendancePhoto || (log as any).completionPhoto;
-      if (!photo || !isImageMediaUri(photo)) return;
+      const timeIn = new Date(log.timeIn || '').getTime();
+      if (!Number.isFinite(timeIn)) return;
+      const photo = (log as any).attendancePhoto;
+      const hasAttendancePhoto = Boolean(photo && isImageMediaUri(photo));
       const proj = log.projectId ? projectById.get(log.projectId) : undefined;
       const verified = Boolean((log as any).attendanceCheckedAt);
       const volunteer = volunteerById.get((log as any).volunteerId);
@@ -330,15 +324,21 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         submitterName: volunteerName,
         submitterRole: 'volunteer' as const,
         reportType: 'attendance_report',
-        title: verified ? `Verified Attendance - ${proj?.title || 'Event'}` : `Attendance Photo - ${proj?.title || 'Event'}`,
-        description: verified ? `Verified by ${(log as any).attendanceCheckedByName || 'Field Officer'} on ${new Date((log as any).attendanceCheckedAt).toLocaleDateString()}` : `Attendance submitted on ${new Date(log.timeIn || '').toLocaleDateString()}`,
+        title: verified ? `Verified Attendance - ${proj?.title || 'Event'}` : `Attendance Report - ${proj?.title || 'Event'}`,
+        description: verified
+          ? `Verified by ${(log as any).attendanceCheckedByName || 'Field Officer'} on ${new Date((log as any).attendanceCheckedAt).toLocaleDateString()}`
+          : `Attendance recorded on ${new Date(log.timeIn).toLocaleDateString()}`,
         projectId: log.projectId,
         projectTitle: proj?.title || 'Attendance',
         projectKind: 'event' as const,
         category: proj?.category,
         metrics: getAttendanceReportMetrics(log),
-        attachments: [{ url: photo, type: 'image' as const, description: 'Attendance Photo' }],
-        mediaFile: photo,
+        attachments: hasAttendancePhoto
+          ? [{ url: photo, type: 'image' as const, description: 'Attendance Photo' }]
+          : [],
+        mediaFile: hasAttendancePhoto ? photo : undefined,
+        hasAttachments: hasAttendancePhoto,
+        hasMediaFile: hasAttendancePhoto,
         status: verified ? 'Approved' as const : 'Submitted' as const,
         submittedAt: (log as any).attendanceCheckedAt || log.timeIn || new Date().toISOString(),
         viewedBy: [],
@@ -427,10 +427,19 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     return r.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
   }, [attachmentFilter, filterableItems, projectById, search]);
 
-  const attendanceReports = useMemo(() => searchFiltered.filter(isAttendanceReport), [searchFiltered]);
-  const taskReports = useMemo(() => searchFiltered.filter(report => !isAttendanceReport(report)), [searchFiltered]);
+  const attendanceReports = useMemo(
+    () => searchFiltered.filter(isAttendanceReport),
+    [searchFiltered],
+  );
+  const taskReports = useMemo(
+    () => searchFiltered.filter(report => !isAttendanceReport(report)),
+    [searchFiltered],
+  );
   const eventReports = useMemo(() => taskReports.filter(r => (r as any).projectKind === 'event'), [taskReports]);
-  const photoReports = useMemo(() => searchFiltered.filter(reportHasPhoto), [searchFiltered]);
+  const photoReports = useMemo(
+    () => searchFiltered.filter(report => reportHasPhoto(report) && (isAttendanceReport(report) || report.submitterRole === 'volunteer')),
+    [searchFiltered],
+  );
 
   // Build folders grouped by project — for Events/All show relevant, for Photos hide
   const folders = useMemo(() => {
@@ -495,16 +504,16 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     }
   }, [photoFolders, selectedPhotoFolderKey]);
 
-  const totalReports = activeFilter === 'Photos' ? photoReports.length : activeFilter === 'Events' ? eventReports.length : taskReports.length;
+  const totalReports = activeFilter === 'Photos'
+    ? photoReports.length
+    : activeFilter === 'Events'
+    ? eventReports.length + attendanceReports.length
+    : taskReports.length + attendanceReports.length;
   const totalFolders = activeFilter === 'Photos' ? photoFolders.length : folders.length;
   const eventSectionReports = activeFilter === 'All' ? taskReports : eventReports;
   const tableReports = selectedEventFolderKey
     ? eventSectionReports.filter(report => reportFolderKey(report) === selectedEventFolderKey)
     : eventSectionReports;
-  // Keep attendance in the same folder context as task/field reports. When an
-  // event folder is selected, its attendance must switch immediately too;
-  // otherwise the folder appears to change while the attendance table stays
-  // on every event.
   const visibleAttendanceReports = selectedEventFolderKey
     ? attendanceReports.filter(report => reportFolderKey(report) === selectedEventFolderKey)
     : attendanceReports;
@@ -563,15 +572,14 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       .toISOString()
       .slice(0, 10);
     const pdf = buildSingleReportPdf(report, projectById);
+    const previewRows = buildSingleReportPreviewRows(report, projectById);
     setDownloadPreview({
       title: `Preview: ${report.title || 'Report'}`,
-      subtitle: 'Review the report summary before downloading the PDF',
-      totalRows: 1,
+      subtitle: 'Review the report fields before downloading the PDF',
+      totalRows: previewRows.length,
+      recordCount: 1,
       columns: ['Field', 'Value'],
-      previewRows: [{
-        Field: 'Report summary',
-        Value: `${getReportActivityTitle(report, projectById)} • ${report.submitterName || 'Unknown user'} • ${report.status || 'Unknown'}`,
-      }],
+      previewRows,
       fileName: `${report.title || 'report'}-${dateKey}`,
       pdf,
       errorMessage: 'Unable to save this report on this device.',
@@ -821,11 +829,11 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           </View>
         ) : (
           renderReportRows(tableReports)
-          )}
+        )}
         </View>
       )}
 
-      {/* Attendance is kept separate from submitted task/field reports. */}
+      {/* Attendance is kept separate and is sourced from volunteer time logs. */}
       {(activeFilter === 'All' || activeFilter === 'Events') && (
         <View style={[styles.sectionCard, { marginTop: 16 }]}>
           <View style={styles.sectionHeader}>
@@ -835,24 +843,18 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
               </View>
               <View>
                 <Text style={styles.sectionTitle}>Attendance Reports</Text>
-                <Text style={styles.sectionSubtitle}>Attendance confirmations and attendance photos recorded for events.</Text>
+                <Text style={styles.sectionSubtitle}>Attendance records and photos submitted by volunteers.</Text>
               </View>
             </View>
             <View style={styles.sectionHeaderRight}>
               <Text style={styles.sectionMeta}>
                 {selectedEventFolder
                   ? `${selectedEventFolder.title} • ${visibleAttendanceReports.length} report${visibleAttendanceReports.length === 1 ? '' : 's'}`
-                  : `${visibleAttendanceReports.length} report${visibleAttendanceReports.length === 1 ? '' : 's'}`}
+                  : `${attendanceReports.length} report${attendanceReports.length === 1 ? '' : 's'}`}
               </Text>
               <TouchableOpacity
                 style={[styles.batchDownloadButton, !visibleAttendanceReports.length && styles.batchDownloadButtonDisabled]}
-                onPress={() =>
-                  handleBatchDownload(
-                    visibleAttendanceReports,
-                    'Attendance Reports',
-                    'attendance-reports',
-                  )
-                }
+                onPress={() => handleBatchDownload(visibleAttendanceReports, 'Attendance Reports', 'attendance-reports')}
                 disabled={!visibleAttendanceReports.length}
                 activeOpacity={0.8}
                 accessibilityRole="button"
@@ -861,9 +863,19 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 <MaterialIcons name="file-download" size={15} color="#fff" />
                 <Text style={styles.batchDownloadButtonText}>Batch Download</Text>
               </TouchableOpacity>
+              {selectedEventFolder ? (
+                <TouchableOpacity
+                  style={styles.clearFolderButton}
+                  onPress={() => setSelectedEventFolderKey(null)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.clearFolderButtonText}>Clear</Text>
+                </TouchableOpacity>
+              ) : null}
               <MaterialIcons name="keyboard-arrow-up" size={20} color="#5B564C" />
             </View>
           </View>
+
           <View style={styles.tableHeader}>
             <Text style={[styles.th, { flex: 2.2 }]}>Attendance <Text style={styles.thSort}>↕</Text></Text>
             <Text style={[styles.th, { flex: 1.4 }]}>Event <Text style={styles.thSort}>↕</Text></Text>
@@ -871,6 +883,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
             <Text style={[styles.th, { flex: 1.2 }]}>Submitted By <Text style={styles.thSort}>↕</Text></Text>
             <Text style={[styles.th, { flex: 0.6, textAlign: 'right' }]}>Actions</Text>
           </View>
+
           {visibleAttendanceReports.length === 0 ? (
             <View style={styles.emptyTable}>
               <Text style={styles.emptyTableText}>No attendance reports found</Text>
@@ -1043,7 +1056,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         columns={downloadPreview?.columns || []}
         stats={downloadPreview ? [
           { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
-          { label: 'Included records', value: String(downloadPreview.totalRows), icon: 'description' },
+          { label: 'Included records', value: String(downloadPreview.recordCount ?? downloadPreview.totalRows), icon: 'description' },
         ] : undefined}
         onConfirm={() => {
           if (!downloadPreview) return;
@@ -1057,6 +1070,35 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       />
     </View>
   );
+}
+
+function buildSingleReportPreviewRows(
+  report: SubmittedReport,
+  projectById: Map<string, Project>,
+): Array<Record<string, string>> {
+  const rows: Array<Record<string, string>> = [
+    { Field: 'Title', Value: report.title || 'Untitled report' },
+    { Field: 'Event / Project', Value: getReportActivityTitle(report, projectById) },
+    { Field: 'Submitted by', Value: report.submitterName || 'Unknown user' },
+    { Field: 'Status', Value: report.status || 'Unknown' },
+    { Field: 'Submitted', Value: formatReportDateTime(report.submittedAt) },
+    { Field: 'Attachments', Value: getReportAttachmentSummary(report) },
+    { Field: 'Report narrative', Value: report.description || 'No description provided.' },
+  ];
+
+  Object.entries(report.metrics || {})
+    .filter(([metric, value]) => (
+      value !== undefined
+      && value !== null
+      && metric !== 'volunteerHours'
+      && metric !== 'beneficiariesServed'
+      && metric !== 'attendanceHours'
+    ))
+    .forEach(([metric, value]) => {
+      rows.push({ Field: formatMetricLabel(metric), Value: String(value) });
+    });
+
+  return rows;
 }
 
 const styles = StyleSheet.create({

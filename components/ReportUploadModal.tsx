@@ -141,7 +141,6 @@ export default function ReportUploadModal({
         tasksCompleted: 0,
         attendanceDays: 0,
         hoursServed: 0,
-        latestAttendancePhoto: '',
         assignedTaskTitles: [] as string[],
       };
     }
@@ -172,13 +171,6 @@ export default function ReportUploadModal({
         (new Date(log.timeOut).getTime() - new Date(log.timeIn).getTime()) / 3_600_000;
       return sum + Math.max(0, duration);
     }, 0);
-    const latestPhotoLog = [...logsForProject]
-      .sort(
-        (left, right) =>
-          new Date(right.attendanceConfirmedAt || right.timeIn).getTime() -
-          new Date(left.attendanceConfirmedAt || left.timeIn).getTime()
-      )
-      .find(log => Boolean((log.attendancePhoto || log.completionPhoto || '').trim()));
     const assignedTaskTitles = selectedProjectRecord
       ? (selectedProjectRecord.internalTasks || [])
           .filter(task => isVolunteerAssignedToTask(task))
@@ -190,7 +182,6 @@ export default function ReportUploadModal({
       tasksCompleted: assignedTaskTitles.length,
       attendanceDays,
       hoursServed,
-      latestAttendancePhoto: latestPhotoLog?.attendancePhoto || latestPhotoLog?.completionPhoto || '',
       assignedTaskTitles,
     };
   }, [
@@ -540,11 +531,11 @@ export default function ReportUploadModal({
       description: volunteerNarrative,
       projectId: selectedProject,
       projectTitle: selectedProjectData?.title,
-      category: selectedProjectData?.category,
+      ...(isVolunteer ? {} : { category: selectedProjectData?.category }),
       metrics: metricsData,
       attachments: [],
       mediaFile: isVolunteer
-        ? selectedReportPhoto || volunteerMetrics.latestAttendancePhoto || undefined
+        ? selectedReportPhoto || undefined
         : undefined,
       status: 'Approved',
       approvedAt: new Date().toISOString(),
@@ -592,7 +583,6 @@ export default function ReportUploadModal({
     volunteerMetrics.assignedTaskTitles,
     volunteerMetrics.attendanceDays,
     volunteerMetrics.hoursServed,
-    volunteerMetrics.latestAttendancePhoto,
     volunteerMetrics.tasksCompleted,
     volunteerMetrics.volunteerEventJoins,
     selectedReportPhoto,
@@ -873,7 +863,7 @@ export default function ReportUploadModal({
 
       <Text style={styles.sectionTitle}>Report Photo</Text>
       <Text style={styles.sectionHelper}>
-        Add a supporting photo from your device. If you do not choose one, the attendance photo from your event record will be used automatically.
+        Add a supporting photo from your device if you have one.
       </Text>
       {selectedReportPhoto ? (
         <View style={styles.photoPreviewCard}>
@@ -896,38 +886,10 @@ export default function ReportUploadModal({
           </View>
         </View>
       ) : (
-        <View>
-          <TouchableOpacity style={styles.photoButton} onPress={handlePickReportPhoto}>
-            <MaterialIcons name="photo-library" size={20} color="#166534" />
-            <Text style={styles.photoButtonText}>Add Photo</Text>
-          </TouchableOpacity>
-          {volunteerMetrics.latestAttendancePhoto ? (
-            <View style={styles.photoPreviewCard}>
-              {isImageMediaUri(volunteerMetrics.latestAttendancePhoto) ? (
-                <Image
-                  source={{ uri: volunteerMetrics.latestAttendancePhoto }}
-                  style={styles.photoPreview}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={styles.photoFallbackCard}>
-                  <MaterialIcons name="image" size={24} color="#166534" />
-                </View>
-              )}
-              <View style={styles.photoPreviewMeta}>
-                <Text style={styles.photoPreviewTitle}>Attendance photo available for this report</Text>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.readOnlyCard}>
-              <Text style={styles.readOnlyDescription}>
-                {selectedProject
-                  ? 'No attendance photo found yet for this event.'
-                  : 'Select an event to load the field photo.'}
-              </Text>
-            </View>
-          )}
-        </View>
+        <TouchableOpacity style={styles.photoButton} onPress={handlePickReportPhoto}>
+          <MaterialIcons name="photo-library" size={20} color="#166534" />
+          <Text style={styles.photoButtonText}>Add Photo</Text>
+        </TouchableOpacity>
       )}
 
       <Text style={styles.sectionTitle}>Short Admin Summary</Text>

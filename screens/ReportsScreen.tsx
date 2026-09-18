@@ -204,7 +204,7 @@ function normalizeImpactHubReport(
     projectId: normalizedProjectId || undefined,
     projectTitle: linkedProject?.title || friendlyEventFallbackTitle(normalizedProjectId, isEvent),
     projectKind: isEvent ? 'event' : 'project',
-    category: linkedProject?.category,
+    category: normalizedSubmitterRole === 'volunteer' ? undefined : linkedProject?.category,
     metrics,
     attachments: report.attachments || [],
     mediaFile: report.mediaFile,

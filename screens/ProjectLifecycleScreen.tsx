@@ -4840,7 +4840,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-      await saveProgram(newProgram);
+      const savedProgram = await saveProgram(newProgram);
+      setProgramTracks(currentTracks => {
+        const withoutExisting = currentTracks.filter(track => track.id !== savedProgram.id);
+        return [...withoutExisting, savedProgram].sort((left, right) =>
+          String(left.title || left.id).localeCompare(String(right.title || right.id))
+        );
+      });
 
       setIsAddProgramSuccess(true);
 
@@ -4849,7 +4855,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setIsAddProgramSuccess(false);
       setNewProgramName('');
       setShowAddProgramModal(false);
-      void loadProgramTracks();
+      await loadProgramTracks();
       Alert.alert('Program Added', `"${newProgram.title}" has been added to the dashboard.`);
 
     } catch (error) {
@@ -4984,7 +4990,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       // Persist to the canonical programs table.
 
-      await saveProgram(program);
+      const savedProgram = await saveProgram(program);
+      setProgramTracks(currentTracks => {
+        const withoutExisting = currentTracks.filter(track => track.id !== savedProgram.id);
+        return [...withoutExisting, savedProgram].sort((left, right) =>
+          String(left.title || left.id).localeCompare(String(right.title || right.id))
+        );
+      });
 
 
 

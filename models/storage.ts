@@ -2849,7 +2849,7 @@ export async function getAllProgramTracks(options?: { includeImages?: boolean })
   return programTracks;
 }
 
-export async function saveProgram(program: ProgramTrack): Promise<void> {
+export async function saveProgram(program: ProgramTrack): Promise<ProgramTrack> {
   // Programs are stored as Project records in the 'programs' collection.
   // Persist only this record so creation/editing does not wait for the whole collection.
   const now = new Date().toISOString();
@@ -2904,7 +2904,26 @@ export async function saveProgram(program: ProgramTrack): Promise<void> {
   upsertCachedStorageRecord(STORAGE_KEYS.PROGRAMS, savedProgram);
   invalidateSharedStorageCache([STORAGE_KEYS.PROGRAM_TRACKS]);
   projectsSnapshotCache.clear();
-  notifyStorageChanged([STORAGE_KEYS.PROGRAMS]);
+  // Program-track consumers subscribe to the derived collection, while
+  // project dashboards consume the canonical programs collection. Notify
+  // both so every role refreshes from the same confirmed write.
+  notifyStorageChanged([STORAGE_KEYS.PROGRAMS, STORAGE_KEYS.PROGRAM_TRACKS]);
+
+  return {
+    id: savedProgram.id,
+    title: savedProgram.title,
+    description: savedProgram.description,
+    location: savedProgram.location,
+    locationRegion: savedProgram.locationRegion || savedProgram.location?.region,
+    locationCity: savedProgram.locationCity || savedProgram.location?.city,
+    icon: savedProgram.icon,
+    color: savedProgram.color,
+    imageUrl: savedProgram.imageUrl,
+    sortOrder: 0,
+    isActive: true,
+    createdAt: savedProgram.createdAt,
+    updatedAt: savedProgram.updatedAt,
+  };
 }
 
 export async function deleteProgram(programId: string): Promise<void> {
@@ -4439,6 +4458,40 @@ export async function saveEvent(event: Project): Promise<void> {
   upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, savedEvent);
   projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.EVENTS]);
+}
+
+// Updates only one event task assignment through the authorized workflow.
+// Field officers must not write the complete event through generic storage.
+export async function updateEventTaskAssignments(
+  eventId: string,
+  taskId: string,
+  volunteerIds: string[],
+): Promise<{ event: Project; task: ProjectInternalTask }> {
+  const payload = await requestApiJson<{
+    event?: Project | null;
+    task?: ProjectInternalTask | null;
+  }>(
+    `/events/${encodeURIComponent(eventId)}/task-assignments`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        volunteerIds,
+      }),
+    }
+  );
+
+  if (!payload.event || !payload.task) {
+    throw new Error('Event task assignment did not complete.');
+  }
+
+  upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, payload.event);
+  projectsSnapshotCache.clear();
+  notifyStorageChanged([STORAGE_KEYS.EVENTS]);
+  return { event: payload.event, task: payload.task };
 }
 
 // Deletes a project and cleans up dependent records that reference it.
@@ -6331,6 +6384,23 @@ export async function savePartnerReport(report: PartnerReport): Promise<void> {
   notifyStorageChanged([STORAGE_KEYS.PARTNER_REPORTS]);
 }
 
+// New reports must use the dedicated workflow endpoint. The generic storage
+// mutation route intentionally rejects report writes so report ownership,
+// attendance, and field-officer rules cannot be bypassed.
+async function submitRemoteReport(report: PartnerReport): Promise<PartnerReport> {
+  const payload = await requestApiJson<{ report?: PartnerReport }>('/reports', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(report),
+  });
+  const savedReport = payload.report || report;
+  upsertCachedStorageRecord(STORAGE_KEYS.PARTNER_REPORTS, savedReport);
+  notifyStorageChanged([STORAGE_KEYS.PARTNER_REPORTS]);
+  return savedReport;
+}
+
 // Returns partner reports associated with one project.
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getPartnerReportsByProject(projectId: string): Promise<PartnerReport[]> {
@@ -6601,8 +6671,7 @@ export async function submitImpactHubReport(input: {
     status: 'Submitted',
   };
 
-  await savePartnerReport(report);
-  return report;
+  return submitRemoteReport(report);
 }
 
 // Submits a field report with the same shared storage path as other impact reports.

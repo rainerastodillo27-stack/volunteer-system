@@ -25,7 +25,7 @@ import {
   getVolunteerProjectMatches,
   REALTIME_STORAGE_CHANGE_OPTIONS,
   requestVolunteerProjectJoin,
-  saveEvent,
+  updateEventTaskAssignments,
   notifyVolunteerAboutTaskUnassignment,
   notifyVolunteerAboutTaskUpdate,
   submitPartnerProgramProposal,
@@ -1347,7 +1347,16 @@ export default function ProjectsScreen({ navigation, route }: any) {
       );
 
       try {
-        await saveEvent(updatedEvent);
+        const savedAssignment = await updateEventTaskAssignments(
+          eventProject.id,
+          taskId,
+          volunteerId ? [volunteerId] : [],
+        );
+        setProjects(currentProjects =>
+          currentProjects.map(project =>
+            project.id === savedAssignment.event.id ? savedAssignment.event : project
+          )
+        );
       } catch (error) {
         setProjects(previousProjects);
         throw error;

@@ -64,7 +64,7 @@ import {
   getAllVolunteerTimeLogs,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
-  saveEvent,
+  updateEventTaskAssignments,
   startVolunteerTimeLog,
   notifyVolunteerAboutTaskUnassignment,
   notifyVolunteerAboutTaskUpdate,
@@ -1124,7 +1124,22 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       });
 
       try {
-        await saveEvent(updatedProject);
+        const savedAssignment = await updateEventTaskAssignments(
+          eventProject.id,
+          taskId,
+          nextAssignedVolunteerIds,
+        );
+        const canonicalProject = savedAssignment.event;
+        const canonicalProjects = allProjects.map(project =>
+          project.id === canonicalProject.id ? canonicalProject : project
+        );
+        setAllProjects(canonicalProjects);
+        setTasks(collectAssignedTasks(
+          canonicalProjects,
+          volunteerProfile,
+          volunteerJoinRecordByProjectId,
+          volunteerTimeLogs
+        ));
       } catch (error) {
         setAllProjects(previousProjects);
         setTasks(collectAssignedTasks(

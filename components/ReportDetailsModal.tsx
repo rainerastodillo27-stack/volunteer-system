@@ -36,7 +36,11 @@ export default function ReportDetailsModal({
   onRevise,
 }: ReportDetailsModalProps) {
   const [previewAttachmentUri, setPreviewAttachmentUri] = useState<string | null>(null);
-  const [downloadPreview, setDownloadPreview] = useState<{ fileName: string; pdf: string } | null>(null);
+  const [downloadPreview, setDownloadPreview] = useState<{
+    fileName: string;
+    pdf: string;
+    previewRows: Array<Record<string, string>>;
+  } | null>(null);
   const { width } = useWindowDimensions();
 
   if (!report) return null;
@@ -74,6 +78,7 @@ export default function ReportDetailsModal({
     setDownloadPreview({
       fileName: `${report.title}-${formatDateForFilename(report.submittedAt)}.pdf`,
       pdf: buildReportDownloadPdf(report),
+      previewRows: buildReportDownloadPreviewRows(report),
     });
   };
 
@@ -306,15 +311,11 @@ export default function ReportDetailsModal({
       <DownloadPreviewModal
         visible={Boolean(downloadPreview)}
         title={`Preview: ${report.title || 'Report'}`}
-        subtitle="Review the report summary before downloading the PDF"
-        totalRows={1}
-        previewRows={[{
-          Report: report.title || 'Untitled report',
-          'Event / Project': report.projectTitle || 'No linked activity',
-          'Submitted By': report.submitterName || 'Unknown user',
-          Status: report.status || 'Unknown',
-        }]}
-        columns={['Report', 'Event / Project', 'Submitted By', 'Status']}
+        subtitle="Review the report fields before downloading the PDF"
+        totalRows={downloadPreview?.previewRows.length || 0}
+        recordCount={1}
+        previewRows={downloadPreview?.previewRows || []}
+        columns={['Field', 'Value']}
         stats={[
           { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
           { label: 'Included records', value: '1', icon: 'description' },
@@ -338,18 +339,10 @@ function buildReportDownloadPdf(report: SubmittedReport): string {
     .filter(([key, value]) => {
       // Keep legacy beneficiary data stored, but omit it from the downloaded
       // report summary along with the other hidden metric.
-      if (key === 'volunteerHours' || key === 'beneficiariesServed') return false;
+      if (key === 'volunteerHours' || key === 'beneficiariesServed' || key === 'attendanceHours') return false;
       return value !== undefined && value !== null;
     })
     .map(([key, value]) => ({ metric: formatMetricKey(key), value }));
-  const feedbackRows = [
-    ['How was the collaboration?', report.collaborationFeedback],
-    ['Praise for the volunteers', report.volunteerPraise],
-    ['Thank you note', report.gratitudeNote],
-    ['Approval notes', report.approvalNotes],
-  ]
-    .filter(([, value]) => Boolean(value))
-    .map(([field, value]) => ({ field, value }));
 
   return buildTablePdf(report.title || 'Report', {
     subtitle: `Submitted ${formatDisplayDateTime(report.submittedAt, 'Unknown date')}`,
@@ -387,17 +380,37 @@ function buildReportDownloadPdf(report: SubmittedReport): string {
         rows: metricRows,
         emptyMessage: 'No metrics captured.',
       },
-      {
-        title: 'Feedback and Notes',
-        columns: [
-          { key: 'field', label: 'Field', width: 1 },
-          { key: 'value', label: 'Value', width: 2.8 },
-        ],
-        rows: feedbackRows,
-        emptyMessage: 'No additional feedback or notes.',
-      },
     ],
   });
+}
+
+function buildReportDownloadPreviewRows(report: SubmittedReport): Array<Record<string, string>> {
+  const rows: Array<Record<string, string>> = [
+    { Field: 'Title', Value: report.title || 'Untitled report' },
+    { Field: 'Submitted by', Value: report.submitterName || 'Unknown user' },
+    { Field: 'Status', Value: report.status || 'Unknown' },
+    {
+      Field: report.projectKind === 'event' ? 'Event' : 'Project',
+      Value: report.projectTitle || 'No linked activity',
+    },
+    { Field: 'Submitted', Value: formatDisplayDateTime(report.submittedAt, 'Unknown date') },
+    { Field: 'Attachments', Value: String((report.attachments || []).length + (report.mediaFile ? 1 : 0)) },
+    { Field: 'Report narrative', Value: report.description || 'No description provided.' },
+  ];
+
+  Object.entries(report.metrics)
+    .filter(([key, value]) => (
+      value !== undefined
+      && value !== null
+      && key !== 'volunteerHours'
+      && key !== 'beneficiariesServed'
+      && key !== 'attendanceHours'
+    ))
+    .forEach(([key, value]) => {
+      rows.push({ Field: formatMetricKey(key), Value: String(value) });
+    });
+
+  return rows;
 }
 
 function parseValidDate(value?: string): Date | null {

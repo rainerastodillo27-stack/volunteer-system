@@ -15,6 +15,7 @@ interface PreviewModalProps {
   title: string;
   subtitle: string;
   totalRows: number;
+  recordCount?: number;
   previewRows: Array<Record<string, string>>;
   columns: string[];
   stats?: {
@@ -34,6 +35,7 @@ export default function DownloadPreviewModal({
   title,
   subtitle,
   totalRows,
+  recordCount,
   previewRows,
   columns,
   stats,
@@ -147,7 +149,7 @@ export default function DownloadPreviewModal({
             <View style={styles.fileInfoRow}>
               <MaterialIcons name="insert-drive-file" size={16} color="#7c8aa5" />
               <Text style={styles.fileInfoText}>
-                Total records: {totalRows}
+                Total records: {recordCount ?? totalRows}
               </Text>
             </View>
             {fileSize && (

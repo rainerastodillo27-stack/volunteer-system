@@ -137,8 +137,8 @@ module.exports = () => {
   return {
     expo: {
       name: 'NVC',
-      slug: 'volcre',
-      owner: 'nvc-foundation',
+      slug: 'rainer',
+      owner: 'doom11s-team',
       icon: './assets/nvc-app-icon.png',
       version: '1.0.0',
       orientation: 'portrait',
@@ -180,7 +180,7 @@ module.exports = () => {
         googleAndroidClientId,
         googleIosClientId,
         eas: {
-          projectId: '76052145-d8f4-47a9-aedf-c18a0de136c8',
+          projectId: 'e9e490bb-050b-4230-a7d3-e6b19ca6d9c5',
         },
       },
       plugins: [

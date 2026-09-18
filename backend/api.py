@@ -658,6 +658,12 @@ class ReportSubmitPayload(BaseModel):
     status: str | None = None
 
 
+# Request payload for updating one event task's volunteer assignments.
+class EventTaskAssignmentPayload(BaseModel):
+    taskId: str
+    volunteerIds: list[str] = []
+
+
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
 APP_TIMEZONE = ZoneInfo("Asia/Manila")
 REMINDER_LEAD_DAYS = 3
@@ -3723,7 +3729,7 @@ def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -
         result = upsert_relational_item(connection, key, item)
         _invalidate_collection_cache([key])
         # Only clear snapshot cache for keys that affect the snapshot
-        if key in {"projects", "events", "volunteers", "programTracks", "statusUpdates", 
+        if key in {"projects", "events", "programs", "volunteers", "programTracks", "statusUpdates",
                    "volunteerMatches", "volunteerProjectJoins", "partnerProjectApplications"}:
             _projects_snapshot_cache.clear()
         return result
@@ -8319,6 +8325,124 @@ async def review_volunteer_match(
         connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
     )
     return {"match": updated_match}
+
+
+@app.post("/events/{event_id}/task-assignments")
+# API endpoint for admins and assigned field officers to manage event task assignments.
+async def update_event_task_assignments(
+    request: FastAPIRequest,
+    event_id: str,
+    payload: EventTaskAssignmentPayload,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
+    _require_postgres()
+
+    normalized_event_id = str(event_id or "").strip()
+    task_id = str(payload.taskId or "").strip()
+    requested_volunteer_ids = [
+        str(value or "").strip()
+        for value in (payload.volunteerIds or [])
+        if str(value or "").strip()
+    ]
+    if not normalized_event_id or not task_id:
+        raise HTTPException(status_code=400, detail="Event id and task id are required.")
+
+    with get_connection() as connection:
+        project, project_storage_key = _postgres_get_project_like_item_by_id(
+            connection,
+            normalized_event_id,
+        )
+        if project is None or project_storage_key != "events" or not bool(project.get("isEvent")):
+            raise HTTPException(status_code=404, detail="Event not found.")
+
+        role = _normalize_role(session)
+        if role != "admin":
+            if role != "volunteer" or not _user_is_field_officer_for_event(
+                connection,
+                str(session.get("sub") or "").strip(),
+                normalized_event_id,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the assigned field officer for this event can manage task assignments.",
+                )
+
+        _normalize_internal_task_assignment_ids(connection, [project])
+        tasks = [task for task in (project.get("internalTasks") or []) if isinstance(task, dict)]
+        target_task = next((task for task in tasks if str(task.get("id") or "").strip() == task_id), None)
+        if target_task is None:
+            raise HTTPException(status_code=404, detail="Event task not found.")
+        if bool(target_task.get("isFieldOfficer")):
+            raise HTTPException(status_code=403, detail="The field officer task can only be managed by an administrator.")
+
+        event_member_identifiers = {
+            str(value or "").strip()
+            for value in [*(project.get("volunteers") or []), *(project.get("joinedUserIds") or [])]
+            if str(value or "").strip()
+        }
+        canonical_ids: list[str] = []
+        canonical_names: list[str] = []
+        for requested_id in requested_volunteer_ids:
+            volunteer = _postgres_get_hot_item_by_id(
+                connection,
+                "volunteers",
+                requested_id,
+                include_media=False,
+            )
+            if volunteer is None:
+                volunteer = _postgres_get_volunteer_by_user_id(connection, requested_id)
+            if volunteer is None:
+                raise HTTPException(status_code=404, detail="One of the selected volunteers was not found.")
+
+            profile_id = str(volunteer.get("id") or "").strip()
+            user_id = str(volunteer.get("userId") or "").strip()
+            if not ({profile_id, user_id} & event_member_identifiers):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Volunteers must join this event before they can be assigned to a task.",
+                )
+            if profile_id and profile_id not in canonical_ids:
+                canonical_ids.append(profile_id)
+                canonical_names.append(str(volunteer.get("name") or "Volunteer").strip() or "Volunteer")
+
+        next_task = {
+            **target_task,
+            "assignedVolunteerId": canonical_ids[0] if canonical_ids else None,
+            "assignedVolunteerName": canonical_names[0] if canonical_names else None,
+            "assignedVolunteerIds": canonical_ids,
+            "assignedVolunteerNames": canonical_names,
+            "status": "Assigned" if canonical_ids and str(target_task.get("status") or "") == "Unassigned" else (
+                "Unassigned" if not canonical_ids else target_task.get("status") or "Assigned"
+            ),
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        next_tasks = [next_task if task is target_task else task for task in tasks]
+        updated_project = {
+            **project,
+            "internalTasks": next_tasks,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            _normalize_internal_task_assignment_ids(connection, [updated_project])
+            _validate_internal_task_assignment_limits([updated_project])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        saved_event = _postgres_upsert_hot_item(connection, "events", updated_project)
+        connection.commit()
+
+    _invalidate_collection_cache(["events"])
+    _projects_snapshot_cache.clear()
+    asyncio.create_task(connection_manager.broadcast_storage_event(["events"]))
+    saved_task = next(
+        (
+            task
+            for task in (saved_event.get("internalTasks") or [])
+            if isinstance(task, dict) and str(task.get("id") or "").strip() == task_id
+        ),
+        next_task,
+    )
+    return {"event": saved_event, "task": saved_task}
 
 
 @app.post("/projects/{project_id}/join")

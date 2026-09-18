@@ -22,7 +22,6 @@ import {
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
   getAllAdminPlanningCalendars,
-  saveEvent,
   requestVolunteerProjectJoin,
   getAllVolunteers,
 } from '../models/storage';
@@ -260,6 +259,13 @@ export default function VolunteerEventsScreen() {
       Alert.alert('Error', 'User profile not authenticated');
       return;
     }
+    if (event.id.startsWith('planner-item-') || event.id.startsWith('gcal-')) {
+      Alert.alert(
+        'Calendar event only',
+        'This calendar entry is view-only. Join the matching NVC event record to participate.'
+      );
+      return;
+    }
     const joinedCount = getActiveProjectJoinCount(event, joinRecords, volunteerMatches, allVolunteersList);
     const totalSlots = Number(event.volunteersNeeded || 0);
     if (totalSlots > 0 && joinedCount >= totalSlots) {
@@ -268,9 +274,6 @@ export default function VolunteerEventsScreen() {
     }
     try {
       setLoadingEventId(event.id);
-      if (event.id.startsWith('planner-item-') || event.id.startsWith('gcal-')) {
-        await saveEvent(event);
-      }
       const match = await requestVolunteerProjectJoin(event.id, user.id);
       setLoadingEventId(null);
       setVolunteerMatches(current => [
@@ -304,6 +307,9 @@ export default function VolunteerEventsScreen() {
   };
 
   const getEventStatus = (event: Project) => {
+    if (event.id.startsWith('planner-item-') || event.id.startsWith('gcal-')) {
+      return { label: 'View only', color: '#70757a', joinable: false };
+    }
     const currentJoinRecord = getCurrentUserJoinRecord(event);
     const isJoined = currentJoinRecord && (currentJoinRecord.participationStatus || 'Active') === 'Active';
     const isCompleted = currentJoinRecord && currentJoinRecord.participationStatus === 'Completed';
