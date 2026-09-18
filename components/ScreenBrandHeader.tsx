@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, useWindowDimensions, Modal, TouchableOpacity, ScrollView, Pressable } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions, Modal, TouchableOpacity, ScrollView, Pressable, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { PartnerProjectApplication, User, VolunteerProjectMatch } from '../models/types';
@@ -67,6 +67,9 @@ export default function ScreenBrandHeader({
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const isCompact = width < 380;
+  const glassSurfaceStyle = Platform.OS === 'web'
+    ? ({ backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' } as any)
+    : {};
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const canGoBack = !!navigation?.canGoBack?.();
   const handleGoBack = () => navigation?.goBack?.();
@@ -236,7 +239,7 @@ export default function ScreenBrandHeader({
   return (
     <>
       <View style={[styles.container, { paddingTop: Math.max(12, insets.top + 8) }]}>
-        <View style={[styles.brandBlock, isCompact && styles.brandBlockCompact]}>
+        <View style={[styles.brandBlock, glassSurfaceStyle, isCompact && styles.brandBlockCompact]}>
           <View style={{ paddingHorizontal: 4 }}>
             <AppLogo width={isCompact ? 64 : 80} />
           </View>
@@ -265,7 +268,7 @@ export default function ScreenBrandHeader({
 
       <Modal visible={showNotificationModal} animationType="fade" transparent onRequestClose={handleDismissNotification}>
         <Pressable style={styles.notificationModalOverlay} onPress={handleDismissNotification}>
-          <View style={styles.notificationModal}>
+          <View style={[styles.notificationModal, glassSurfaceStyle]}>
             <View style={styles.notificationModalHeader}>
               <Text style={styles.notificationModalTitle}>Notifications</Text>
               <TouchableOpacity
@@ -322,23 +325,26 @@ export default function ScreenBrandHeader({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#ffffff',
+    backgroundColor: 'transparent',
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 10,
   },
   brandBlock: {
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
     paddingHorizontal: 4,
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.82)',
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
   },
   brandBlockCompact: {
     flexDirection: 'column',
@@ -417,8 +423,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   notificationModal: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.86)',
     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
     shadowColor: '#000',
     shadowOpacity: 0.15,

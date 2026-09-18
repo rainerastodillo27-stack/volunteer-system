@@ -153,7 +153,7 @@ export default function VolunteerProjectDetailsScreen({
     useCallback(() => {
       loadData();
       return subscribeToStorageChanges(
-        ['projects', 'events', 'volunteerMatches'],
+        ['projects', 'events', 'volunteerMatches', 'volunteerProjectJoins'],
         loadData
       );
     }, [loadData])

@@ -30,6 +30,7 @@ import {
   getPrimaryProjectImageSource,
   mergeProjectRecordsPreservingMedia,
 } from '../utils/projectMap';
+import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 
 type ProgramGroup = {
   id: string;
@@ -502,17 +503,8 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       // Find the event and check if it's full
       const event = records.find(project => project.id === eventId);
       if (event) {
-        const volunteersNeeded = event.volunteersNeeded || 0;
-        const currentVolunteers = event.volunteers?.length || 0;
-        const pendingJoinRequests = volunteerMatches.filter(
-          match => match.projectId === eventId && match.status === 'Requested'
-        ).length;
-        const approvedJoinRecords = joinRecords.filter(
-          record => record.projectId === eventId
-        ).length;
-        
-        const totalSlotsTaken = currentVolunteers + pendingJoinRequests + approvedJoinRecords;
-        
+        const volunteersNeeded = Number(event.volunteersNeeded || 0);
+        const totalSlotsTaken = getActiveProjectJoinCount(event, joinRecords, volunteerMatches);
         if (totalSlotsTaken >= volunteersNeeded && volunteersNeeded > 0) {
           Alert.alert(
             'Event Full',
@@ -620,13 +612,8 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     const isEnded = isCompleted || isCancelled;
 
     // Check if event is full
-    const volunteersNeeded = event.volunteersNeeded || 0;
-    const currentVolunteers = event.volunteers?.length || 0;
-    const pendingJoinRequests = volunteerMatches.filter(
-      m => m.projectId === event.id && m.status === 'Requested'
-    ).length;
-    const approvedJoinRecords = joinRecords.filter(r => r.projectId === event.id).length;
-    const totalSlotsTaken = currentVolunteers + pendingJoinRequests + approvedJoinRecords;
+    const volunteersNeeded = Number(event.volunteersNeeded || 0);
+    const totalSlotsTaken = getActiveProjectJoinCount(event, joinRecords, volunteerMatches);
     const isFull = volunteersNeeded > 0 && totalSlotsTaken >= volunteersNeeded;
 
     const isDisabled = isJoined || isPending || isEnded || isFull || isLoading;

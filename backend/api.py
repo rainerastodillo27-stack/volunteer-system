@@ -217,6 +217,17 @@ def _require_session_user(request: FastAPIRequest, target_user_id: str) -> dict[
         raise HTTPException(status_code=403, detail="You can only change your own messages.")
     return session
 
+
+def _normalize_role(session: dict[str, Any]) -> str:
+    return str(session.get("role") or "").strip().lower()
+
+
+def _require_admin_or_self(request: FastAPIRequest, target_user_id: str) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if _normalize_role(session) != "admin" and str(session.get("sub") or "").strip() != str(target_user_id or "").strip():
+        raise HTTPException(status_code=403, detail="You are not allowed to act for this account.")
+    return session
+
 # Add CORS middleware to allow frontend requests. A wildcard origin cannot be
 # combined with credentialed browser requests, so only enable credentials when
 # the deployment explicitly supplies a concrete origin list.
@@ -473,6 +484,12 @@ class ApprovalEmailPayload(BaseModel):
 
 # Request payload for direct project joins.
 class ProjectJoinPayload(BaseModel):
+    userId: str
+
+
+# Request payload for a volunteer's event join request.
+class VolunteerMatchRequestPayload(BaseModel):
+    projectId: str
     userId: str
 
 
@@ -977,6 +994,89 @@ def _get_reminder_email_for_volunteer(volunteer: dict[str, Any], users_by_id: di
     if user_id and user_id in users_by_id:
         return str(users_by_id[user_id].get("email") or "").strip().lower()
     return ""
+
+
+def _get_active_event_volunteer_keys(
+    event: dict[str, Any],
+    join_records: list[dict[str, Any]],
+    volunteer_matches: list[dict[str, Any]],
+    volunteers: list[dict[str, Any]],
+) -> set[str]:
+    """Return unique volunteers currently consuming an event slot.
+
+    Join records are the canonical source for current participation. The
+    arrays on the event remain a fallback for older records, but completed or
+    removed join records must be able to invalidate stale array entries.
+    """
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        return set()
+
+    id_to_canonical: dict[str, str] = {}
+
+    for volunteer in volunteers:
+        volunteer_id = str(volunteer.get("id") or "").strip()
+        user_id = str(volunteer.get("userId") or "").strip()
+        canonical = user_id or volunteer_id
+        if canonical:
+            if volunteer_id:
+                id_to_canonical[volunteer_id] = canonical
+            if user_id:
+                id_to_canonical[user_id] = canonical
+
+    event_records = [
+        record
+        for record in join_records
+        if str(record.get("projectId") or "").strip() == event_id
+    ]
+    for record in event_records:
+        user_id = str(record.get("volunteerUserId") or "").strip()
+        volunteer_id = str(record.get("volunteerId") or "").strip()
+        canonical = id_to_canonical.get(user_id) or id_to_canonical.get(volunteer_id) or user_id or volunteer_id
+        if canonical:
+            if user_id:
+                id_to_canonical[user_id] = canonical
+            if volunteer_id:
+                id_to_canonical[volunteer_id] = canonical
+
+    def canonicalize(value: Any) -> str:
+        raw = str(value or "").strip()
+        return id_to_canonical.get(raw, raw) if raw else ""
+
+    confirmed_keys: set[str] = set()
+    inactive_keys: set[str] = set()
+    for record in event_records:
+        key = canonicalize(
+            record.get("volunteerUserId")
+            or record.get("volunteerId")
+            or record.get("id")
+        )
+        if not key:
+            continue
+        if str(record.get("participationStatus") or "Active").strip() == "Active":
+            confirmed_keys.add(key)
+        else:
+            inactive_keys.add(key)
+
+    for match in volunteer_matches:
+        if (
+            str(match.get("projectId") or "").strip() == event_id
+            and str(match.get("status") or "").strip() == "Matched"
+        ):
+            key = canonicalize(match.get("volunteerId"))
+            if key:
+                confirmed_keys.add(key)
+
+    fallback_keys: set[str] = set()
+    for identifier in [
+        *(event.get("volunteers") or []),
+        *(event.get("joinedUserIds") or []),
+    ]:
+        key = canonicalize(identifier)
+        if key and key not in inactive_keys:
+            fallback_keys.add(key)
+
+    return confirmed_keys | fallback_keys
 
 
 def _get_event_reminder_recipients(
@@ -3174,6 +3274,92 @@ def _require_terminal_admin_provisioning(connection: Any, key: str, item: dict[s
         raise ValueError("Admin accounts can only be created from the backend terminal.")
 
 
+def _reject_protected_storage_mutations(
+    existing: dict[str, Any] | None,
+    incoming: dict[str, Any],
+    protected_fields: set[str],
+) -> None:
+    if existing is None:
+        return
+    for field in protected_fields:
+        if field in incoming and incoming.get(field) != existing.get(field):
+            raise HTTPException(
+                status_code=403,
+                detail=f"The field '{field}' can only be changed by an administrator.",
+            )
+
+
+def _assert_storage_item_write_access(
+    connection: Any,
+    key: str,
+    item: dict[str, Any],
+    session: dict[str, Any],
+) -> None:
+    """Keep legacy item writes compatible while removing cross-role writes."""
+    if _normalize_role(session) == "admin":
+        return
+
+    session_user_id = str(session.get("sub") or "").strip()
+    item_id = str(item.get("id") or "").strip()
+    role = _normalize_role(session)
+
+    if key == "users":
+        if item_id != session_user_id:
+            raise HTTPException(status_code=403, detail="You can only edit your own account.")
+        existing = _postgres_get_hot_item_by_id(connection, "users", item_id, include_password=True)
+        _reject_protected_storage_mutations(
+            existing,
+            item,
+            {"id", "email", "password", "role", "approvalStatus", "status", "approvedBy", "reviewedBy", "rejectionReason"},
+        )
+        return
+
+    if key == "volunteers":
+        volunteer = _postgres_get_volunteer_by_user_id(connection, session_user_id)
+        if volunteer is None or str(volunteer.get("id") or "").strip() != item_id:
+            raise HTTPException(status_code=403, detail="You can only edit your own volunteer profile.")
+        _reject_protected_storage_mutations(
+            volunteer,
+            item,
+            {"id", "userId", "email", "status", "approvalStatus", "engagementStatus", "pastProjects", "totalHoursContributed"},
+        )
+        return
+
+    if key == "partners":
+        existing = _postgres_get_hot_item_by_id(connection, "partners", item_id)
+        owner_id = str((existing or {}).get("ownerUserId") or (existing or {}).get("owner_user_id") or "").strip()
+        incoming_owner_id = str(item.get("ownerUserId") or item.get("owner_user_id") or owner_id).strip()
+        if owner_id != session_user_id and incoming_owner_id != session_user_id:
+            raise HTTPException(status_code=403, detail="You can only edit your own partner profile.")
+        _reject_protected_storage_mutations(
+            existing,
+            item,
+            {"id", "ownerUserId", "owner_user_id", "status", "approvalStatus", "approvedBy", "reviewedBy"},
+        )
+        return
+
+    if key == "volunteerMatches":
+        if role != "volunteer":
+            raise HTTPException(status_code=403, detail="Only volunteers can create their own join requests.")
+        volunteer = _postgres_get_volunteer_by_user_id(connection, session_user_id)
+        if volunteer is None or str(item.get("volunteerId") or "").strip() != str(volunteer.get("id") or "").strip():
+            raise HTTPException(status_code=403, detail="You can only create your own volunteer request.")
+        if str(item.get("status") or "").strip() != "Requested":
+            raise HTTPException(status_code=403, detail="Volunteer requests must be submitted for admin review.")
+        project, _ = _postgres_get_project_like_item_by_id(connection, str(item.get("projectId") or "").strip())
+        if project is None or not bool(project.get("isEvent")):
+            raise HTTPException(status_code=400, detail="Volunteer requests can only target events.")
+        existing = _postgres_get_hot_item_by_id(connection, "volunteerMatches", item_id) if item_id else None
+        if existing is not None and str(existing.get("status") or "").strip() == "Matched":
+            raise HTTPException(status_code=409, detail="This volunteer is already approved for the event.")
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="This action must use an authorized workflow endpoint.",
+    )
+
+
 def _normalize_event_duplicate_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
@@ -3681,6 +3867,7 @@ def _scope_volunteer_storage_collection(
         "publishedImpactReports",
         "volunteerTimeLogs",
         "volunteerProjectJoins",
+        "volunteerMatches",
     }
     if key not in scoped_keys:
         return value
@@ -3715,6 +3902,14 @@ def _scope_volunteer_storage_collection(
             and str(item.get("volunteerId") or "").strip() in volunteer_identifiers
         ]
 
+    if key == "volunteerMatches":
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("volunteerId") or "").strip() in volunteer_identifiers
+        ]
+
     return [
         item
         for item in items
@@ -3727,6 +3922,119 @@ def _scope_volunteer_storage_collection(
         and str(item.get("participationStatus") or "Active").strip()
         in {"Active", "Completed"}
     ]
+
+
+def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str]:
+    """Return projects/events a partner is allowed to inspect.
+
+    Partner screens can still use the shared storage reader, but the server
+    now filters that reader to approved applications and projects owned by the
+    signed-in partner. This keeps the existing UI flow while preventing a
+    partner from receiving another organization's attendance or report data.
+    """
+    normalized_user_id = str(partner_user_id or "").strip()
+    if not normalized_user_id:
+        return set()
+
+    project_ids: set[str] = set()
+    applications = _postgres_get_hot_items_by_field(
+        connection,
+        "partnerProjectApplications",
+        "partnerUserId",
+        normalized_user_id,
+        include_media=False,
+    )
+    for application in applications:
+        if str(application.get("status") or "").strip() == "Approved":
+            project_id = str(application.get("projectId") or "").strip()
+            if project_id:
+                project_ids.add(project_id)
+
+    partner_records = get_postgres_hot_storage_collection(connection, "partners", include_images=False)
+    partner_ids = {
+        str(partner.get("id") or "").strip()
+        for partner in partner_records
+        if str(partner.get("ownerUserId") or partner.get("owner_user_id") or "").strip() == normalized_user_id
+    }
+    for key in ("projects", "events"):
+        for project in get_postgres_hot_storage_collection(connection, key, include_images=False):
+            if str(project.get("partnerId") or "").strip() in partner_ids:
+                project_id = str(project.get("id") or "").strip()
+                if project_id:
+                    project_ids.add(project_id)
+
+    return project_ids
+
+
+def _scope_storage_collection(
+    connection: Any,
+    key: str,
+    value: Any,
+    session: dict[str, Any],
+) -> Any:
+    """Apply role-aware collection filtering to the legacy storage API."""
+    scoped = _scope_volunteer_storage_collection(connection, key, value, session)
+    role = _normalize_role(session)
+    if role == "admin" or not isinstance(scoped, list):
+        return scoped
+
+    session_user_id = str(session.get("sub") or "").strip()
+    items = [item for item in scoped if isinstance(item, dict)]
+
+    if key == "messages":
+        return [
+            item
+            for item in items
+            if str(item.get("senderId") or item.get("sender_id") or "").strip() == session_user_id
+            or str(item.get("recipientId") or item.get("recipient_id") or "").strip() == session_user_id
+        ]
+
+    if role == "volunteer":
+        if key == "projectGroupMessages":
+            _, joined_event_ids = _get_volunteer_joined_event_scope(connection, session_user_id)
+            return [item for item in items if str(item.get("projectId") or item.get("project_id") or "").strip() in joined_event_ids]
+        if key == "volunteerMatches":
+            volunteer = _postgres_get_volunteer_by_user_id(connection, session_user_id)
+            identifiers = {session_user_id, str((volunteer or {}).get("id") or "").strip()}
+            identifiers.discard("")
+            return [item for item in items if str(item.get("volunteerId") or "").strip() in identifiers]
+        if key == "users":
+            return [item for item in items if str(item.get("id") or "").strip() in {session_user_id} or str(item.get("role") or "").strip() == "admin"]
+        if key == "volunteers":
+            return [item for item in items if str(item.get("userId") or "").strip() == session_user_id]
+        if key == "partners":
+            return []
+        return scoped
+
+    if role == "partner":
+        project_ids = _get_partner_project_scope(connection, session_user_id)
+        if key == "users":
+            return [item for item in items if str(item.get("id") or "").strip() == session_user_id or str(item.get("role") or "").strip() == "admin"]
+        if key == "partners":
+            return [
+                item
+                for item in items
+                if str(item.get("ownerUserId") or item.get("owner_user_id") or "").strip() == session_user_id
+            ]
+        if key == "partnerProjectApplications":
+            return [item for item in items if str(item.get("partnerUserId") or "").strip() == session_user_id]
+        if key == "volunteers":
+            participant_ids: set[str] = set()
+            for project_key in ("projects", "events"):
+                for project in get_postgres_hot_storage_collection(connection, project_key, include_images=False):
+                    if str(project.get("id") or "").strip() not in project_ids:
+                        continue
+                    participant_ids.update(str(value or "").strip() for value in (project.get("volunteers") or []))
+            return [
+                item
+                for item in items
+                if str(item.get("id") or "").strip() in participant_ids
+                or str(item.get("userId") or "").strip() in participant_ids
+            ]
+        if key in {"volunteerMatches", "volunteerProjectJoins", "volunteerTimeLogs", "partnerReports", "publishedImpactReports", "projectGroupMessages"}:
+            return [item for item in items if str(item.get("projectId") or "").strip() in project_ids]
+
+    return scoped
 
 
 def _volunteer_has_time_in_for_project(connection: Any, volunteer_id: str, project_id: str) -> bool:
@@ -6305,9 +6613,9 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
                 )
             connection.commit()
 
-    # For demo mode (most of the time), skip approval checks
-    if user.get("id", "").endswith("1") or user.get("id", "").startswith(("admin", "volunteer", "partner")):
-        # This is a demo account, skip database checks
+    # Only the explicitly configured demo account may skip approval checks.
+    # Account-id prefixes are not an authentication or approval signal.
+    if is_demo_account:
         pass
     else:
         # Real account from database - do approval checks
@@ -6408,7 +6716,14 @@ def send_approval_email_endpoint(payload: ApprovalEmailPayload) -> dict[str, Any
 
 @app.post("/auth/users/{user_id}/approve")
 # API endpoint for admin to approve a pending user account and linked records.
-async def approve_user(user_id: str, payload: UserApprovalPayload, admin_id: str) -> dict[str, Any]:
+async def approve_user(
+    request: FastAPIRequest,
+    user_id: str,
+    payload: UserApprovalPayload,
+    admin_id: str = "",
+) -> dict[str, Any]:
+    session = _require_admin_session(request)
+    admin_id = str(session.get("sub") or "").strip()
     with get_connection() as connection:
         user = _postgres_get_hot_item_by_id(connection, "users", user_id)
         if user is None:
@@ -7276,7 +7591,11 @@ async def end_volunteer_log(
 
 @app.get("/partner-project-applications/by-user/{partner_user_id}")
 # API endpoint that returns partner applications by partner user id.
-def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
+def get_partner_applications_by_user(
+    request: FastAPIRequest,
+    partner_user_id: str,
+) -> dict[str, Any]:
+    _require_admin_or_self(request, partner_user_id)
     _require_postgres()
     with get_connection() as connection:
         applications = _postgres_get_partner_project_applications_by_user(connection, partner_user_id)
@@ -7285,7 +7604,15 @@ def get_partner_applications_by_user(partner_user_id: str) -> dict[str, Any]:
 
 @app.post("/partner-project-applications/request")
 # API endpoint that creates a partner program proposal for admin review.
-async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload) -> dict[str, Any]:
+async def request_partner_project_join(
+    request: FastAPIRequest,
+    payload: PartnerProjectJoinRequestPayload,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if _normalize_role(session) != "partner":
+        raise HTTPException(status_code=403, detail="Only partner accounts can submit proposals.")
+    if str(payload.partnerUserId or "").strip() != str(session.get("sub") or "").strip():
+        raise HTTPException(status_code=403, detail="You can only submit proposals for your own partner account.")
     _require_postgres()
     print(f"\n{'='*60}")
     print("[PROPOSAL] REQUEST RECEIVED")
@@ -7418,11 +7745,14 @@ async def request_partner_project_join(payload: PartnerProjectJoinRequestPayload
 # API endpoint that lets an administrator save edits to a pending proposal
 # without creating a new submission or changing its review status.
 async def update_partner_project_application_details(
-    application_id: str, payload: PartnerProjectApplicationUpdatePayload
+    request: FastAPIRequest,
+    application_id: str,
+    payload: PartnerProjectApplicationUpdatePayload,
 ) -> dict[str, Any]:
+    session = _require_admin_session(request)
     _require_postgres()
 
-    updated_by = str(payload.updatedBy or "").strip()
+    updated_by = str(session.get("sub") or "").strip()
     if not updated_by:
         raise HTTPException(status_code=400, detail="An administrator id is required.")
 
@@ -7542,14 +7872,17 @@ async def update_partner_project_application_details(
 # API endpoint that approves or rejects a partner proposal/join request.
 # Approved partner program proposals automatically create a new project in the program management suite.
 async def review_partner_project_application(
-    application_id: str, payload: PartnerProjectApplicationReviewPayload
+    request: FastAPIRequest,
+    application_id: str,
+    payload: PartnerProjectApplicationReviewPayload,
 ) -> dict[str, Any]:
+    session = _require_admin_session(request)
     _require_postgres()
     next_status = str(payload.status or "").strip()
     if next_status not in {"Approved", "Rejected"}:
         raise HTTPException(status_code=400, detail="Partner application review must approve or reject the request.")
 
-    reviewed_by = str(payload.reviewedBy or "").strip()
+    reviewed_by = str(session.get("sub") or "").strip()
     if not reviewed_by:
         raise HTTPException(status_code=400, detail="A reviewer id is required.")
     review_notes = str(payload.reviewNotes or "").strip()
@@ -7802,15 +8135,103 @@ async def review_partner_project_application(
     return response
 
 
+# API endpoint that creates a volunteer join request for admin review.
+@app.post("/volunteer-matches/request")
+async def request_volunteer_match(
+    request: FastAPIRequest,
+    payload: VolunteerMatchRequestPayload,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if _normalize_role(session) != "volunteer":
+        raise HTTPException(status_code=403, detail="Only volunteer accounts can request event membership.")
+    if str(payload.userId or "").strip() != str(session.get("sub") or "").strip():
+        raise HTTPException(status_code=403, detail="You can only request membership for your own account.")
+
+    _require_postgres()
+    with get_connection() as connection:
+        volunteer = _postgres_get_volunteer_by_user_id(connection, payload.userId)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer profile not found.")
+
+        project, _ = _postgres_get_project_like_item_by_id(connection, payload.projectId)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        if not bool(project.get("isEvent")):
+            raise HTTPException(status_code=400, detail="Volunteers can only request event membership.")
+
+        existing_matches = _postgres_get_hot_items_by_field(
+            connection,
+            "volunteerMatches",
+            "volunteerId",
+            str(volunteer.get("id") or ""),
+            include_media=False,
+        )
+        existing = next(
+            (match for match in existing_matches if str(match.get("projectId") or "").strip() == payload.projectId),
+            None,
+        )
+        existing_status = str((existing or {}).get("status") or "").strip()
+        if existing_status == "Matched":
+            raise HTTPException(status_code=409, detail="You are already approved for this event.")
+        if existing_status == "Requested":
+            raise HTTPException(status_code=409, detail="Your join request is already pending admin approval.")
+        if existing_status == "Completed":
+            raise HTTPException(status_code=409, detail="You have already completed this event.")
+
+        try:
+            capacity = int(project.get("volunteersNeeded") or 0)
+        except (TypeError, ValueError):
+            capacity = 0
+        if capacity > 0:
+            active_volunteer_count = len(
+                _get_active_event_volunteer_keys(
+                    project,
+                    get_postgres_hot_storage_collection(connection, "volunteerProjectJoins", include_images=False),
+                    get_postgres_hot_storage_collection(connection, "volunteerMatches", include_images=False),
+                    get_postgres_hot_storage_collection(connection, "volunteers", include_images=False),
+                )
+            )
+            if active_volunteer_count >= capacity:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This event has reached its maximum volunteer capacity and is already full.",
+                )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        match = {
+            **(existing or {}),
+            "id": str((existing or {}).get("id") or f"match-{int(datetime.now(timezone.utc).timestamp() * 1000)}"),
+            "volunteerId": volunteer.get("id"),
+            "projectId": payload.projectId,
+            "status": "Requested",
+            "requestedAt": str((existing or {}).get("requestedAt") or now_iso),
+            "matchedAt": now_iso,
+            "reviewedAt": None,
+            "reviewedBy": None,
+        }
+        saved_match = _postgres_upsert_hot_item(connection, "volunteerMatches", match)
+        connection.commit()
+
+    _invalidate_collection_cache(["volunteerMatches"])
+    _projects_snapshot_cache.clear()
+    asyncio.create_task(connection_manager.broadcast_storage_event(["volunteerMatches"]))
+    return {"match": saved_match}
+
+
 @app.post("/volunteer-matches/{match_id}/review")
 # API endpoint that approves or rejects a volunteer join request.
-async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPayload) -> dict[str, Any]:
+async def review_volunteer_match(
+    request: FastAPIRequest,
+    match_id: str,
+    payload: VolunteerMatchReviewPayload,
+) -> dict[str, Any]:
+    session = _require_admin_session(request)
     _require_postgres()
     next_status = str(payload.status or "").strip()
     if next_status not in {"Matched", "Rejected"}:
         raise HTTPException(status_code=400, detail="Volunteer request review must match or reject the request.")
 
-    reviewed_by = str(payload.reviewedBy or "").strip()
+    reviewed_by = str(session.get("sub") or "").strip()
     if not reviewed_by:
         raise HTTPException(status_code=400, detail="A reviewer id is required.")
 
@@ -7819,6 +8240,8 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
         match = _postgres_get_hot_item_by_id(connection, "volunteerMatches", match_id)
         if match is None:
             raise HTTPException(status_code=404, detail="Volunteer request not found.")
+        if str(match.get("status") or "").strip() != "Requested":
+            raise HTTPException(status_code=409, detail="Only pending volunteer requests can be reviewed.")
 
         volunteer_id = str(match.get("volunteerId") or "")
         volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
@@ -7831,6 +8254,26 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
             raise HTTPException(status_code=404, detail="Project not found.")
         if not bool(project.get("isEvent")):
             raise HTTPException(status_code=400, detail="Volunteers can only join events.")
+
+        if next_status == "Matched":
+            try:
+                capacity = int(project.get("volunteersNeeded") or 0)
+            except (TypeError, ValueError):
+                capacity = 0
+            if capacity > 0:
+                active_volunteer_count = len(
+                    _get_active_event_volunteer_keys(
+                        project,
+                        get_postgres_hot_storage_collection(connection, "volunteerProjectJoins", include_images=False),
+                        get_postgres_hot_storage_collection(connection, "volunteerMatches", include_images=False),
+                        get_postgres_hot_storage_collection(connection, "volunteers", include_images=False),
+                    )
+                )
+                if active_volunteer_count >= capacity:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This event has reached its maximum volunteer capacity and is already full.",
+                    )
 
         updated_match = {
             **match,
@@ -7880,7 +8323,12 @@ async def review_volunteer_match(match_id: str, payload: VolunteerMatchReviewPay
 
 @app.post("/projects/{project_id}/join")
 # API endpoint that joins a user directly to a project or event.
-async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str, Any]:
+async def join_project(
+    request: FastAPIRequest,
+    project_id: str,
+    payload: ProjectJoinPayload,
+) -> dict[str, Any]:
+    _require_admin_session(request)
     _require_postgres()
     with get_connection() as connection:
         project, project_storage_key = _postgres_get_project_like_item_by_id(connection, project_id)
@@ -7890,6 +8338,28 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
             raise HTTPException(status_code=400, detail="Volunteers can only join events.")
 
         volunteer = _postgres_get_volunteer_by_user_id(connection, payload.userId)
+        try:
+            capacity = int(project.get("volunteersNeeded") or 0)
+        except (TypeError, ValueError):
+            capacity = 0
+        already_joined = payload.userId in (project.get("joinedUserIds") or []) or (
+            volunteer is not None and volunteer.get("id") in (project.get("volunteers") or [])
+        )
+        if capacity > 0 and not already_joined:
+            active_volunteer_count = len(
+                _get_active_event_volunteer_keys(
+                    project,
+                    get_postgres_hot_storage_collection(connection, "volunteerProjectJoins", include_images=False),
+                    get_postgres_hot_storage_collection(connection, "volunteerMatches", include_images=False),
+                    get_postgres_hot_storage_collection(connection, "volunteers", include_images=False),
+                )
+            )
+            if active_volunteer_count >= capacity:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This event has reached its maximum volunteer capacity and is already full.",
+                )
+
         joined_user_ids = list(project.get("joinedUserIds") or [])
         if payload.userId not in joined_user_ids:
             joined_user_ids.append(payload.userId)
@@ -7922,7 +8392,12 @@ async def join_project(project_id: str, payload: ProjectJoinPayload) -> dict[str
 
 @app.delete("/projects/{project_id}/volunteers/{volunteer_id}")
 # API endpoint that removes a volunteer from a project/event.
-async def remove_volunteer_from_project(project_id: str, volunteer_id: str) -> dict[str, Any]:
+async def remove_volunteer_from_project(
+    request: FastAPIRequest,
+    project_id: str,
+    volunteer_id: str,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
         project, project_storage_key = _postgres_get_project_like_item_by_id(connection, project_id)
@@ -7937,6 +8412,12 @@ async def remove_volunteer_from_project(project_id: str, volunteer_id: str) -> d
             # volunteer profile id. Resolve it before cleaning task aliases,
             # join records, and the derived engagement status.
             volunteer = _postgres_get_volunteer_by_user_id(connection, volunteer_id)
+
+        if _normalize_role(session) != "admin":
+            if _normalize_role(session) != "volunteer":
+                raise HTTPException(status_code=403, detail="Only the volunteer or an administrator can leave this event.")
+            if volunteer is None or str(volunteer.get("userId") or "").strip() != str(session.get("sub") or "").strip():
+                raise HTTPException(status_code=403, detail="You can only leave your own event membership.")
 
         volunteer_ids_to_remove = {
             str(value or "").strip()
@@ -8090,10 +8571,12 @@ def _compact_proposal_message_content(content: Any) -> str:
 @app.get("/messages")
 # API endpoint that returns all direct messages for one user.
 def get_messages(
+    request: FastAPIRequest,
     user_id: str,
     limit: int = 120,
     compact: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
+    _require_admin_or_self(request, user_id)
     import time
     ensure_message_storage_once()
     limit_val = max(1, min(int(limit), 100 if compact else 120))
@@ -8221,7 +8704,12 @@ def get_messages(
 
 
 @app.get("/messages/unread")
-def get_unread_messages(user_id: str, limit: int = 100) -> dict[str, list[dict[str, Any]]]:
+def get_unread_messages(
+    request: FastAPIRequest,
+    user_id: str,
+    limit: int = 100,
+) -> dict[str, list[dict[str, Any]]]:
+    _require_admin_or_self(request, user_id)
     ensure_message_storage_once()
     limit_val = max(1, min(int(limit), 100))
     cache_key = f"messages:unread:{user_id}:{limit_val}"
@@ -8264,7 +8752,15 @@ def get_unread_messages(user_id: str, limit: int = 100) -> dict[str, list[dict[s
 
 @app.get("/messages/conversation")
 # API endpoint that returns the direct-message history between two users.
-def get_conversation(user1: str, user2: str, limit: int = 120) -> dict[str, list[dict[str, Any]]]:
+def get_conversation(
+    request: FastAPIRequest,
+    user1: str,
+    user2: str,
+    limit: int = 120,
+) -> dict[str, list[dict[str, Any]]]:
+    session = _get_session_user(request)
+    if _normalize_role(session) != "admin" and str(session.get("sub") or "").strip() not in {user1, user2}:
+        raise HTTPException(status_code=403, detail="You cannot access this conversation.")
     import time
     ensure_message_storage_once()
     limit_val = max(1, min(int(limit), 120))
@@ -8410,11 +8906,13 @@ async def delete_conversation(
 @app.get("/projects/{project_id}/group-messages")
 # API endpoint that returns project group chat messages for an authorized user.
 def get_project_group_messages(
+    request: FastAPIRequest,
     project_id: str,
     user_id: str,
     limit: int = 200,
     compact: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
+    _require_admin_or_self(request, user_id)
     ensure_project_group_message_storage()
     from psycopg.rows import dict_row
 
@@ -8513,7 +9011,8 @@ def get_message_attachment(attachment_id: str, filename: str) -> FileResponse:
 
 @app.post("/messages")
 # API endpoint that creates a direct message.
-async def create_message(payload: MessagePayload) -> dict[str, Any]:
+async def create_message(request: FastAPIRequest, payload: MessagePayload) -> dict[str, Any]:
+    _require_session_user(request, payload.senderId)
     ensure_message_storage_once()
     attachments = payload.attachments or []
     from psycopg.rows import dict_row
@@ -8631,9 +9130,12 @@ async def delete_message(
 @app.post("/projects/{project_id}/group-messages")
 # API endpoint that creates a project group chat message.
 async def create_project_group_message(
-    project_id: str, payload: ProjectGroupMessagePayload
+    request: FastAPIRequest,
+    project_id: str,
+    payload: ProjectGroupMessagePayload,
 ) -> dict[str, Any]:
     try:
+        _require_session_user(request, payload.senderId)
         ensure_project_group_message_storage()
         attachments = payload.attachments or []
         message_kind = str(payload.kind or "message").strip() or "message"
@@ -8839,12 +9341,25 @@ async def delete_project_group_message(
 
 @app.patch("/messages/{message_id}/read")
 # API endpoint that marks one direct message as read.
-async def mark_message_read(message_id: str) -> dict[str, Any]:
+async def mark_message_read(request: FastAPIRequest, message_id: str) -> dict[str, Any]:
+    session = _get_session_user(request)
     ensure_message_storage_once()
     from psycopg.rows import dict_row
 
     with get_connection() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                where messages_id = %s
+                """,
+                (message_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Message not found.")
+            if _normalize_role(session) != "admin" and str(row["recipient_id"] or "").strip() != str(session.get("sub") or "").strip():
+                raise HTTPException(status_code=403, detail="Only the recipient can mark this message as read.")
             cursor.execute(
                 """
                 update public.messages
@@ -8870,7 +9385,7 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
     if session is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
-    if session.get("role") != "admin" and str(session.get("sub")) != str(user_id).strip():
+    if str(session.get("sub") or "").strip() != str(user_id).strip():
         await websocket.close(code=1008, reason="You are not allowed to open this channel")
         return
 
@@ -9003,7 +9518,7 @@ def get_storage_item(
                 )
             else:
                 value = _get_cached_collection(connection, key, include_images=include_images)
-            value = _scope_volunteer_storage_collection(connection, key, value, session)
+            value = _scope_storage_collection(connection, key, value, session)
             return {"key": key, "value": value}
     except Exception as error:
         print(f"[ERROR] Failed to get storage key '{key}': {type(error).__name__}: {error}")
@@ -9023,7 +9538,8 @@ def clear_backend_caches() -> dict[str, str]:
 
 @app.delete("/program-tracks/{track_id:path}")
 # API endpoint that deletes one program track and records linked to it.
-async def delete_program_track(track_id: str) -> dict[str, Any]:
+async def delete_program_track(request: FastAPIRequest, track_id: str) -> dict[str, Any]:
+    _require_admin_session(request)
     _require_postgres()
     normalized_track_id = str(track_id or "").strip()
     if not normalized_track_id:
@@ -9219,7 +9735,7 @@ def get_storage_items_batch(
                             key,
                             include_images=payload.include_images,
                         )
-                    value = _scope_volunteer_storage_collection(connection, key, value, session)
+                    value = _scope_storage_collection(connection, key, value, session)
                     query_time = time.time() - fetch_start - conn_time
                     if conn_time > 1.0 or query_time > 1.0:
                         print(f"[PERF] Key '{key}': connection={conn_time:.1f}s, query={query_time:.1f}s")
@@ -9413,9 +9929,10 @@ def _normalize_internal_task_assignment_ids(connection: Any, items: list[Any]) -
 # project/event edits. The existing collection endpoint remains available for
 # bulk imports and backwards compatibility.
 @app.get("/project-records/{item_id}")
-def get_project_record_by_id(item_id: str) -> dict[str, Any]:
+def get_project_record_by_id(request: FastAPIRequest, item_id: str) -> dict[str, Any]:
     """Read one project, event, or program without loading all media collections."""
     _require_postgres()
+    session = _get_session_user(request)
     normalized_item_id = str(item_id or "").strip()
     if not normalized_item_id:
         raise HTTPException(status_code=400, detail="Project id is required.")
@@ -9424,6 +9941,10 @@ def get_project_record_by_id(item_id: str) -> dict[str, Any]:
         item, key = _postgres_get_project_like_item_by_id(connection, normalized_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Project record not found.")
+    if _normalize_role(session) == "partner":
+        with get_connection() as connection:
+            if not _scope_storage_collection(connection, key, [item], session):
+                raise HTTPException(status_code=404, detail="Project record not found.")
     return {"key": key, "item": item}
 
 
@@ -9447,7 +9968,7 @@ def get_storage_item_by_id(
         with get_connection() as connection:
             item = _postgres_get_hot_item_by_id(connection, key, normalized_item_id)
             if item is not None:
-                scoped_items = _scope_volunteer_storage_collection(connection, key, [item], session)
+                scoped_items = _scope_storage_collection(connection, key, [item], session)
             else:
                 scoped_items = []
         if item is None:
@@ -9467,11 +9988,13 @@ def get_storage_item_by_id(
 
 @app.put("/storage/{key}/items/{item_id}")
 async def put_storage_item_by_id(
+    request: FastAPIRequest,
     key: str,
     item_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     _require_postgres()
+    session = _get_session_user(request)
     if not is_hot_storage_key(key):
         raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
@@ -9487,6 +10010,7 @@ async def put_storage_item_by_id(
 
     try:
         with get_connection() as connection:
+            _assert_storage_item_write_access(connection, key, item, session)
             if key in {"projects", "events"}:
                 try:
                     _normalize_internal_task_assignment_ids(connection, [item])
@@ -9533,13 +10057,17 @@ async def put_storage_item_by_id(
 
 @app.put("/storage/{key}")
 # API endpoint that writes one storage key and broadcasts the change.
-async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
+async def put_storage_item(
+    request: FastAPIRequest,
+    key: str,
+    payload: StoragePayload,
+) -> dict[str, str]:
     # Supabase pooler connections can be closed while a large relational mirror
     # write is flushing.  Retry the complete idempotent replacement with a fresh
     # connection before returning a 500 to the client.
     for attempt in range(3):
         try:
-            return await _put_storage_item_once(key, payload)
+            return await _put_storage_item_once(request, key, payload)
         except HTTPException as exc:
             if attempt >= 2 or not _is_retryable_connection_error(exc):
                 raise
@@ -9553,8 +10081,13 @@ async def put_storage_item(key: str, payload: StoragePayload) -> dict[str, str]:
     raise HTTPException(status_code=500, detail=f"Storage write failed for '{key}'.")
 
 
-async def _put_storage_item_once(key: str, payload: StoragePayload) -> dict[str, str]:
+async def _put_storage_item_once(
+    request: FastAPIRequest,
+    key: str,
+    payload: StoragePayload,
+) -> dict[str, str]:
     _require_postgres()
+    _require_admin_session(request)
     if is_hot_storage_key(key):
         if not isinstance(payload.value, list):
             raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
@@ -9734,7 +10267,8 @@ def _resolve_existing_relational_id(
 
 
 @app.delete("/projects/{project_id}")
-async def delete_project_record(project_id: str) -> dict[str, Any]:
+async def delete_project_record(request: FastAPIRequest, project_id: str) -> dict[str, Any]:
+    _require_admin_session(request)
     _require_postgres()
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
@@ -9779,7 +10313,8 @@ async def delete_project_record(project_id: str) -> dict[str, Any]:
 
 
 @app.delete("/events/{event_id}")
-async def delete_event_record(event_id: str) -> dict[str, Any]:
+async def delete_event_record(request: FastAPIRequest, event_id: str) -> dict[str, Any]:
+    _require_admin_session(request)
     _require_postgres()
     normalized_event_id = str(event_id or "").strip()
     if not normalized_event_id:
@@ -9857,6 +10392,11 @@ async def submit_report(request: FastAPIRequest, payload: ReportSubmitPayload) -
         raise HTTPException(status_code=403, detail="You can only submit reports for your own account.")
     if submitter_role and session.get("role") != "admin" and submitter_role != session.get("role"):
         raise HTTPException(status_code=403, detail="The report role does not match your account.")
+    if session.get("role") == "partner" and submitter_role == "partner":
+        raise HTTPException(
+            status_code=403,
+            detail="Partner accounts can view reports but cannot submit volunteer impact reports.",
+        )
     metrics = dict(payload.metrics) if isinstance(payload.metrics, dict) else {}
     report_type = str(payload.reportType or "").strip()
     if (
@@ -10025,7 +10565,8 @@ async def submit_report(request: FastAPIRequest, payload: ReportSubmitPayload) -
 
 @app.delete("/storage/{key}")
 # API endpoint that deletes one storage key and any backing hot-storage rows.
-async def delete_storage_item(key: str) -> dict[str, str]:
+async def delete_storage_item(request: FastAPIRequest, key: str) -> dict[str, str]:
+    _require_admin_session(request)
     _require_postgres()
     if is_hot_storage_key(key):
         with get_connection() as connection:
@@ -10050,7 +10591,8 @@ async def delete_storage_item(key: str) -> dict[str, str]:
 
 @app.delete("/storage")
 # API endpoint that clears all app storage and hot-storage collections.
-async def clear_storage() -> dict[str, str]:
+async def clear_storage(request: FastAPIRequest) -> dict[str, str]:
+    _require_admin_session(request)
     _require_postgres()
     with get_connection() as connection:
         clear_all_postgres_hot_storage(connection)

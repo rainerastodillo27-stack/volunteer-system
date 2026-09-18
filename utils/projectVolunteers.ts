@@ -176,49 +176,61 @@ export function getActiveProjectJoinCount(
     }
   });
 
-  const activeVolunteerKeys = new Set<string>();
+  const confirmedVolunteerKeys = new Set<string>();
+  const inactiveVolunteerKeys = new Set<string>();
 
-  // 1. From joinRecords with Active status
+  const canonicalize = (value: unknown): string => {
+    const raw = normalizeText(value);
+    return raw ? idToCanonical.get(raw) || raw : '';
+  };
+
+  // Join records are authoritative for current participation. Keep inactive
+  // identifiers so stale volunteers[]/joinedUserIds[] entries cannot keep a
+  // completed or removed volunteer counted against the event capacity.
   (joinRecords || [])
     .filter(record => normalizeText(record.projectId) === projectId)
-    .filter(record => (record.participationStatus || 'Active') === 'Active')
     .forEach(record => {
-      const raw =
+      const key = canonicalize(
         normalizeText(record.volunteerUserId) ||
-        normalizeText(record.volunteerId) ||
-        normalizeText(record.id);
-      if (raw) {
-        activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
+          normalizeText(record.volunteerId) ||
+          normalizeText(record.id)
+      );
+      if (!key) return;
+
+      if ((record.participationStatus || 'Active') === 'Active') {
+        confirmedVolunteerKeys.add(key);
+      } else {
+        inactiveVolunteerKeys.add(key);
       }
     });
 
-  // 2. From project.volunteers array
-  (project.volunteers || []).forEach(volunteerId => {
-    const raw = normalizeText(volunteerId);
-    if (raw) {
-      activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
-    }
-  });
-
-  // 3. From project.joinedUserIds array
-  (project.joinedUserIds || []).forEach(userId => {
-    const raw = normalizeText(userId);
-    if (raw) {
-      activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
-    }
-  });
-
-  // 4. From volunteerMatches with 'Matched' status
+  // Matched requests are also confirmed participants while their join record
+  // is being created or synchronized.
   (volunteerMatches || [])
     .filter(match => normalizeText(match.projectId) === projectId && match.status === 'Matched')
     .forEach(match => {
-      const raw = normalizeText(match.volunteerId);
-      if (raw) {
-        activeVolunteerKeys.add(idToCanonical.get(raw) || raw);
-      }
+      const key = canonicalize(match.volunteerId);
+      if (key) confirmedVolunteerKeys.add(key);
     });
 
-  return activeVolunteerKeys.size;
+  // Legacy event arrays are still needed for older records, but they are only
+  // fallback data and must not resurrect an inactive join record.
+  const fallbackVolunteerKeys = new Set<string>();
+  // The two event arrays store the same membership in different identifier
+  // namespaces. Prefer the volunteer-profile ids when they exist so a screen
+  // that is still loading the volunteer directory does not count both arrays
+  // as separate people.
+  const legacyIdentifiers = (project.volunteers || []).length > 0
+    ? project.volunteers || []
+    : project.joinedUserIds || [];
+  legacyIdentifiers.forEach(identifier => {
+    const key = canonicalize(identifier);
+    if (key && !inactiveVolunteerKeys.has(key)) {
+      fallbackVolunteerKeys.add(key);
+    }
+  });
+
+  return new Set([...confirmedVolunteerKeys, ...fallbackVolunteerKeys]).size;
 }
 
 export function getActiveProjectGroupJoinCount(
@@ -300,4 +312,3 @@ export function getActiveProjectGroupJoinCount(
 
   return uniqueVolunteerKeys.size;
 }
-

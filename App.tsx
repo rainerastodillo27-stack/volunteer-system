@@ -71,6 +71,9 @@ if (typeof document !== "undefined") {
   // Apply Nunito globally to the body for web
   document.body.style.fontFamily =
     'Nunito, sans-serif';
+  document.body.style.background =
+    'radial-gradient(circle at 12% 8%, rgba(167, 243, 208, 0.52), transparent 32%), radial-gradient(circle at 88% 12%, rgba(165, 243, 252, 0.42), transparent 30%), #eefcf5';
+  document.body.style.minHeight = '100vh';
 
   // React Native Web's Text primitive includes a `System` font shorthand in
   // its own style. Text/TextInput are patched in platformInit.ts so Nunito is
@@ -84,6 +87,12 @@ if (typeof document !== "undefined") {
     body select,
     body option {
       font-family: 'Nunito', sans-serif !important;
+    }
+    html, body, #root {
+      background: transparent !important;
+    }
+    #root {
+      min-height: 100vh;
     }
   `;
   document.head.appendChild(globalFontStyle);
@@ -280,7 +289,7 @@ function AppContent() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: 'rgba(238, 252, 245, 0.72)' }}>
       <NavigationContainer
         ref={navigationRef}
         initialState={initialNavigationState}

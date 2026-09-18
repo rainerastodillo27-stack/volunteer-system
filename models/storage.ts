@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAbortLikeError } from '../utils/requestErrors';
+import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -5634,26 +5635,14 @@ export async function requestVolunteerProjectJoin(
       getVolunteerProjectJoinRecords(projectId),
       getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
     ]);
-    const activeVolunteerKeys = new Set<string>();
-    (joinRecords || [])
-      .filter(record => (record.participationStatus || 'Active') === 'Active')
-      .forEach(record => {
-        const key = record.volunteerUserId || record.volunteerId || record.id;
-        if (key) activeVolunteerKeys.add(key);
-      });
-    (project.volunteers || []).forEach(vId => {
-      if (vId) activeVolunteerKeys.add(vId);
-    });
-    (project.joinedUserIds || []).forEach(uId => {
-      if (uId) activeVolunteerKeys.add(uId);
-    });
-    (allMatches || [])
-      .filter(m => m.projectId === projectId && m.status === 'Matched')
-      .forEach(m => {
-        if (m.volunteerId) activeVolunteerKeys.add(m.volunteerId);
-      });
+    const activeVolunteerCount = getActiveProjectJoinCount(
+      project,
+      joinRecords || [],
+      allMatches || [],
+      [volunteer]
+    );
 
-    if (activeVolunteerKeys.size >= volunteersNeeded) {
+    if (activeVolunteerCount >= volunteersNeeded) {
       throw new Error('This event has reached its maximum volunteer capacity and is already full.');
     }
   }
@@ -5670,13 +5659,26 @@ export async function requestVolunteerProjectJoin(
     hoursContributed: existingMatch?.hoursContributed || 0,
   };
 
-  await saveVolunteerProjectMatch(requestedMatch);
+  const requestPayload = await requestApiJson<{ match?: VolunteerProjectMatch | null }>(
+    '/volunteer-matches/request',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        projectId,
+        userId,
+      }),
+    },
+  );
+  const savedMatch = requestPayload.match || requestedMatch;
 
   void notifyAdminAboutVolunteerProjectJoinRequest(projectId, volunteer).catch(error => {
     console.error('Error notifying admin about volunteer join request:', error);
   });
 
-  return requestedMatch;
+  return savedMatch;
 }
 
 // Approves or rejects a volunteer join request.
@@ -5950,28 +5952,23 @@ export async function reconcileApprovedVolunteerEventMemberships(): Promise<void
 }
 
 export async function leaveVolunteerEventGroup(projectId: string, userId: string): Promise<void> {
-  const [records, project] = await Promise.all([
+  const [records, project, volunteer] = await Promise.all([
     getAllVolunteerProjectJoinRecords(),
     getProject(projectId),
+    getVolunteerByUserId(userId),
   ]);
 
+  if (project?.isEvent && volunteer?.id) {
+    await deleteVolunteerProjectJoinRecord(projectId, volunteer.id);
+    return;
+  }
+
+  // Preserve the legacy fallback for incomplete profiles that cannot be
+  // resolved to a volunteer record yet.
   await setStorageItem(
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
     records.filter(record => !(record.projectId === projectId && record.volunteerUserId === userId))
   );
-
-  if (project?.isEvent) {
-    await saveEvent({
-      ...project,
-      joinedUserIds: (project.joinedUserIds || []).filter(id => id !== userId),
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
-  const volunteer = await getVolunteerByUserId(userId);
-  if (volunteer?.id) {
-    await syncVolunteerEngagementStatus(volunteer.id);
-  }
 }
 
 // Returns project ids that a volunteer has already completed.

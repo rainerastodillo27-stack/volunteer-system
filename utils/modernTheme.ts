@@ -73,6 +73,17 @@ export const ModernTheme = {
       hover: '#f0fdf4',
     },
 
+    // Translucent surfaces used by the refreshed glass UI. The alpha values
+    // remain readable on native and web while allowing the mint background to
+    // show through cards and headers.
+    glass: {
+      surface: 'rgba(255, 255, 255, 0.78)',
+      surfaceStrong: 'rgba(255, 255, 255, 0.9)',
+      border: 'rgba(255, 255, 255, 0.72)',
+      tint: 'rgba(220, 252, 231, 0.38)',
+      shadow: 'rgba(15, 118, 110, 0.14)',
+    },
+
     // Text colors
     text: {
       primary: '#1c1917',
@@ -258,12 +269,12 @@ export function getModernStatusColor(status: string): string {
 
 // Helper for consistent card styling
 export const ModernCard = {
-  backgroundColor: ModernTheme.colors.background.card,
+  backgroundColor: ModernTheme.colors.glass.surface,
   borderRadius: ModernTheme.borderRadius.lg,
   padding: ModernTheme.spacing[6],
   ...ModernTheme.shadows.sm,
   borderWidth: 1,
-  borderColor: ModernTheme.colors.border.light,
+  borderColor: ModernTheme.colors.glass.border,
 };
 
 // Helper for modern button styling
