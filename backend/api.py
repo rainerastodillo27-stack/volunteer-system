@@ -68,6 +68,8 @@ from .db import (
 from .field_rules import is_valid_email, normalize_comparable_phone, normalize_ph_mobile_phone
 from .image_compression import compress_base64_image, get_image_size_kb
 from .password_utils import hash_password, is_bcrypt_hash, verify_password
+from .realtime_bus import publish as publish_realtime_event
+from .realtime_bus import start as start_realtime_bus
 from .relational_mirror import (
     TABLE_SPECS,
     LIGHTWEIGHT_MEDIA_COLUMNS,
@@ -305,6 +307,8 @@ _message_storage_ready = False
 _message_storage_lock = threading.Lock()
 _notification_reads_ready = False
 _notification_reads_lock = threading.Lock()
+_admin_dashboard_build_lock = threading.Lock()
+_realtime_event_loop: asyncio.AbstractEventLoop | None = None
 NON_CACHEABLE_COLLECTION_KEYS = {"programTracks", "programs"}
 # These fields can contain base64 images or large attachment payloads. They
 # are not needed by collection/list screens and are fetched only by an
@@ -1743,11 +1747,61 @@ class ConnectionManager:
         for socket in stale:
             self.disconnect(user_id, socket)
 
+    async def _publish_cross_worker(self, event: dict[str, Any]) -> None:
+        """Fan out an event to WebSocket registries owned by other workers."""
+        try:
+            published = await asyncio.to_thread(publish_realtime_event, event)
+            if not published and event.get("kind") == "project-group-message.changed":
+                await asyncio.to_thread(
+                    publish_realtime_event,
+                    {
+                        "kind": event.get("kind"),
+                        "projectId": event.get("projectId"),
+                        "messageId": event.get("messageId"),
+                    },
+                )
+        except Exception as error:
+            # Realtime delivery is best effort; the database write and the
+            # local worker's sockets must never fail because another worker's
+            # listener is unavailable.
+            print(f"[WARN] Cross-worker realtime publish failed: {type(error).__name__}", flush=True)
+
+    async def _publish_message_event(self, message: dict[str, Any], kind: str) -> None:
+        """Publish a message event, compacting oversized media payloads."""
+        event: dict[str, Any] = {"kind": kind}
+        if kind == "message.changed":
+            event["message"] = message
+            event["messageId"] = message.get("id")
+            event["senderId"] = message.get("senderId")
+            event["recipientId"] = message.get("recipientId")
+            event["projectId"] = message.get("projectId")
+        else:
+            event.update(message)
+        if not await asyncio.to_thread(publish_realtime_event, event):
+            # Oversized messages (usually attachment/proposal media) cannot
+            # fit in PostgreSQL NOTIFY. Remote workers can fetch them by id.
+            if kind == "message.changed":
+                compact_event = {
+                    "kind": kind,
+                    "messageId": message.get("id"),
+                    "senderId": message.get("senderId"),
+                    "recipientId": message.get("recipientId"),
+                    "projectId": message.get("projectId"),
+                }
+                await asyncio.to_thread(publish_realtime_event, compact_event)
+
     # Broadcasts a direct-message change to both sender and recipient.
-    async def broadcast_message_event(self, message: dict[str, Any]) -> None:
+    async def broadcast_message_event(
+        self,
+        message: dict[str, Any],
+        *,
+        publish: bool = True,
+    ) -> None:
         payload = {"type": "message.changed", "message": message}
         recipients = {message["senderId"], message["recipientId"]}
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish:
+            await self._publish_message_event(message, "message.changed")
 
     # Broadcasts a direct-message deletion to both participants.
     async def broadcast_message_deleted_event(
@@ -1755,6 +1809,8 @@ class ConnectionManager:
         message_ids: list[str],
         sender_id: str,
         recipient_id: str,
+        *,
+        publish: bool = True,
     ) -> None:
         if not message_ids:
             return
@@ -1766,6 +1822,13 @@ class ConnectionManager:
         }
         recipients = {sender_id, recipient_id}
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish:
+            await self._publish_cross_worker({
+                "kind": "message.deleted",
+                "messageIds": message_ids,
+                "senderId": sender_id,
+                "recipientId": recipient_id,
+            })
 
     # Relays a transient typing state without writing it to message storage.
     async def broadcast_typing_event(
@@ -1810,19 +1873,32 @@ class ConnectionManager:
 
     # Broadcasts a project-group message to all eligible project chat participants.
     async def broadcast_project_group_message_event(
-        self, project_id: str, message: dict[str, Any]
+        self,
+        project_id: str,
+        message: dict[str, Any],
+        *,
+        publish: bool = True,
     ) -> None:
         payload = {"type": "project-group-message.changed", "message": message}
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
         recipients.add(message["senderId"])
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish:
+            await self._publish_cross_worker({
+                "kind": "project-group-message.changed",
+                "message": message,
+                "messageId": message.get("id"),
+                "projectId": project_id,
+            })
 
     # Broadcasts a project-group message deletion to every eligible participant.
     async def broadcast_project_group_message_deleted_event(
         self,
         project_id: str,
         message_ids: list[str],
+        *,
+        publish: bool = True,
     ) -> None:
         if not message_ids:
             return
@@ -1834,9 +1910,15 @@ class ConnectionManager:
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish:
+            await self._publish_cross_worker({
+                "kind": "project-group-message.deleted",
+                "projectId": project_id,
+                "messageIds": message_ids,
+            })
 
     # Broadcasts a shared-storage change notification to all listeners.
-    async def broadcast_storage_event(self, keys: list[str]) -> None:
+    async def broadcast_storage_event(self, keys: list[str], *, publish: bool = True) -> None:
         if not keys:
             return
 
@@ -1860,9 +1942,79 @@ class ConnectionManager:
 
         for socket in stale:
             self.disconnect_storage(socket)
+        if publish:
+            await self._publish_cross_worker({
+                "kind": "storage.changed",
+                "keys": list(dict.fromkeys(keys)),
+            })
+
+    async def handle_cross_worker_event(self, event: dict[str, Any]) -> None:
+        """Deliver a PostgreSQL bus event to this worker's live sockets."""
+        kind = str(event.get("kind") or "").strip()
+        if kind == "storage.changed":
+            keys = [str(key).strip() for key in (event.get("keys") or []) if str(key).strip()]
+            await self.broadcast_storage_event(list(dict.fromkeys(keys)), publish=False)
+            return
+
+        if kind == "message.changed":
+            message = event.get("message")
+            if not isinstance(message, dict) or not message.get("id"):
+                message = await asyncio.to_thread(_get_direct_message_by_id, str(event.get("messageId") or ""))
+            if isinstance(message, dict) and message.get("senderId") and message.get("recipientId"):
+                await self.broadcast_message_event(message, publish=False)
+            return
+
+        if kind == "message.deleted":
+            await self.broadcast_message_deleted_event(
+                [str(value) for value in (event.get("messageIds") or []) if str(value)],
+                str(event.get("senderId") or ""),
+                str(event.get("recipientId") or ""),
+                publish=False,
+            )
+            return
+
+        if kind == "project-group-message.changed":
+            message = event.get("message")
+            if not isinstance(message, dict) or not message.get("id"):
+                message = await asyncio.to_thread(
+                    _get_project_group_message_by_id,
+                    str(event.get("projectId") or ""),
+                    str(event.get("messageId") or ""),
+                )
+            if isinstance(message, dict) and message.get("senderId"):
+                await self.broadcast_project_group_message_event(
+                    str(event.get("projectId") or message.get("projectId") or ""),
+                    message,
+                    publish=False,
+                )
+            return
+
+        if kind == "project-group-message.deleted":
+            await self.broadcast_project_group_message_deleted_event(
+                str(event.get("projectId") or ""),
+                [str(value) for value in (event.get("messageIds") or []) if str(value)],
+                publish=False,
+            )
 
 
 connection_manager = ConnectionManager()
+
+
+def _queue_cross_worker_realtime_event(event: dict[str, Any]) -> None:
+    """Bridge the listener thread back to the worker's asyncio loop."""
+    loop = _realtime_event_loop
+    if loop is None or loop.is_closed():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            connection_manager.handle_cross_worker_event(event),
+            loop,
+        )
+    except RuntimeError:
+        # The worker may be shutting down while the listener receives its last
+        # notification. No client-visible state is lost because clients
+        # reconcile their subscriptions after reconnecting.
+        return
 
 
 # Ensures the direct-message table exists before message APIs are used.
@@ -2118,6 +2270,55 @@ def serialize_project_group_message_row(row: Any) -> dict[str, Any]:
         "responseToTitle": row.get("response_to_title"),
         "attachments": attachments,
     }
+
+
+def _get_direct_message_by_id(message_id: str) -> dict[str, Any] | None:
+    """Load one direct message for a cross-worker realtime event."""
+    normalized_id = str(message_id or "").strip()
+    if not normalized_id:
+        return None
+    ensure_message_storage_once()
+    from psycopg.rows import dict_row
+
+    with get_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select messages_id, sender_id, recipient_id, project_id,
+                       content, timestamp, read, attachments
+                from public.messages
+                where messages_id = %s
+                """,
+                (normalized_id,),
+            )
+            row = cursor.fetchone()
+    return serialize_message_row(row) if row is not None else None
+
+
+def _get_project_group_message_by_id(project_id: str, message_id: str) -> dict[str, Any] | None:
+    """Load one group message for a cross-worker realtime event."""
+    normalized_project_id = str(project_id or "").strip()
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_project_id or not normalized_message_id:
+        return None
+    ensure_project_group_message_storage()
+    from psycopg.rows import dict_row
+
+    with get_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select project_group_messages_id, project_id, sender_id,
+                       content, timestamp, kind, need_post, scope_proposal,
+                       response_to_message_id, response_action,
+                       response_to_title, attachments
+                from public.project_group_messages
+                where project_id = %s and project_group_messages_id = %s
+                """,
+                (normalized_project_id, normalized_message_id),
+            )
+            row = cursor.fetchone()
+    return serialize_project_group_message_row(row) if row is not None else None
 
 
 SPECIAL_STORAGE_KEYS = {"messages", "projectGroupMessages", "programTracks"}
@@ -2892,6 +3093,8 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
         _storage_collection_cache.delete(f"collection:media:{key}:1")
         _storage_collection_cache.delete(f"collection:{key}:images:0")
         _storage_collection_cache.delete(f"collection:{key}:images:1")
+        _storage_collection_cache.delete(f"dashboard:{key}:images:0")
+        _storage_collection_cache.delete(f"dashboard:{key}:images:1")
     if "messages" in keys:
         _message_query_cache.clear()
     elif "users" in keys:
@@ -3015,6 +3218,19 @@ def _get_admin_dashboard_collection(
 ) -> Any:
     from psycopg.rows import dict_row
 
+    # Cache the custom dashboard branches too. This prevents repeated cold
+    # dashboard requests from re-reading reports and time logs in this worker.
+    dashboard_cache_key = f"dashboard:{key}:images:{1 if include_images else 0}"
+    if key in {"volunteerTimeLogs", "partnerReports", "partnerProjectApplications"}:
+        cached_dashboard_value = _storage_collection_cache.get(dashboard_cache_key)
+        if cached_dashboard_value is not None:
+            return cached_dashboard_value
+
+    def _cache_dashboard_value(value: Any) -> Any:
+        if key in {"volunteerTimeLogs", "partnerReports", "partnerProjectApplications"}:
+            _storage_collection_cache.set(dashboard_cache_key, value)
+        return value
+
     if key in {"projects", "events", "programs"}:
         # The dashboard list does not render full-size media. Keep its payload
         # small; detail screens request the real uploaded image separately.
@@ -3059,7 +3275,7 @@ def _get_admin_dashboard_collection(
                 for item in items:
                     item["attendancePhoto"] = _compress_image_data_uri(item.get("attendancePhoto"))
                     item["completionPhoto"] = _compress_image_data_uri(item.get("completionPhoto"))
-            return items
+            return _cache_dashboard_value(items)
 
     if key == "partnerReports":
         pk_column = _primary_key_column(key)
@@ -3080,7 +3296,7 @@ def _get_admin_dashboard_collection(
                 order by {pk_column} asc
                 """
             )
-            return [
+            return _cache_dashboard_value([
                 {
                     "id": row["id"],
                     "projectId": row["project_id"],
@@ -3106,7 +3322,7 @@ def _get_admin_dashboard_collection(
                     "sourceReportIds": row["source_report_ids"] or [],
                 }
                 for row in cursor.fetchall()
-            ]
+            ])
 
     if key == "partnerProjectApplications":
         pk_column = _primary_key_column(key)
@@ -3136,7 +3352,7 @@ def _get_admin_dashboard_collection(
                 order by {pk_column} asc
                 """
             )
-            return [
+            return _cache_dashboard_value([
                 {
                     "id": row["id"],
                     "projectId": row["project_id"],
@@ -3160,7 +3376,7 @@ def _get_admin_dashboard_collection(
                     ),
                 }
                 for row in cursor.fetchall()
-            ]
+            ])
 
     return _get_cached_collection(connection, key, include_images=include_images)
 
@@ -3845,11 +4061,11 @@ def _get_volunteer_joined_event_scope(
         return set(), set()
 
     joined_event_ids: set[str] = set()
-    join_records = get_postgres_hot_storage_collection(
+    join_records = _get_cached_collection(
         connection,
         "volunteerProjectJoins",
         include_images=False,
-    )
+    ) or []
     for record in join_records:
         status = str(record.get("participationStatus") or "Active").strip()
         record_identifiers = {
@@ -3862,8 +4078,8 @@ def _get_volunteer_joined_event_scope(
             joined_event_ids.add(project_id)
 
     event_records = (
-        get_postgres_hot_storage_collection(connection, "events", include_images=False)
-        + get_postgres_hot_storage_collection(connection, "projects", include_images=False)
+        _get_cached_media_light_collection(connection, "events", include_images=False)
+        + _get_cached_media_light_collection(connection, "projects", include_images=False)
     )
     known_event_ids = {
         str(event.get("id") or "").strip()
@@ -4350,8 +4566,13 @@ def _postgres_ensure_volunteer_project_join_record(
 def _postgres_sync_volunteer_engagement_status(
     connection: Any,
     volunteer_id: str,
+    volunteer: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    volunteer = _postgres_get_hot_item_by_id(connection, "volunteers", volunteer_id)
+    volunteer = volunteer or _postgres_get_hot_item_by_id(
+        connection,
+        "volunteers",
+        volunteer_id,
+    )
     if volunteer is None:
         return None
 
@@ -4361,14 +4582,27 @@ def _postgres_sync_volunteer_engagement_status(
         volunteer_identifiers.add(volunteer_user_id)
     join_records = [
         record
-        for record in get_postgres_hot_storage_collection(connection, "volunteerProjectJoins")
+        for record in (_get_cached_collection(
+            connection,
+            "volunteerProjectJoins",
+            include_images=False,
+        ) or [])
         if str(record.get("volunteerId") or "").strip() in volunteer_identifiers
         or str(record.get("volunteerUserId") or "").strip() in volunteer_identifiers
     ]
 
     has_active_participation = any(
         (record.get("participationStatus") or "Active") == "Active"
-        and bool((_postgres_get_project_like_item_by_id(connection, str(record.get("projectId") or ""))[0] or {}).get("isEvent"))
+        and bool(
+            (
+                _postgres_get_project_like_item_by_id(
+                    connection,
+                    str(record.get("projectId") or ""),
+                    include_media=False,
+                )[0]
+                or {}
+            ).get("isEvent")
+        )
         for record in join_records
     )
 
@@ -4892,6 +5126,13 @@ def _ensure_core_programs_exist() -> None:
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
+    global _realtime_event_loop
+    try:
+        _realtime_event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _realtime_event_loop = asyncio.get_event_loop()
+    start_realtime_bus(_queue_cross_worker_realtime_event)
+
     # Keep startup non-blocking. Supabase schema maintenance can occasionally
     # take longer than the browser request timeout, so do it after Uvicorn is
     # already listening.
@@ -5023,9 +5264,9 @@ def startup() -> None:
 
                 items: dict[str, Any] = {}
                 with ThreadPoolExecutor(
-                    # The project snapshot above still owns the warm-up
-                    # connection, so leave one pool slot available.
-                    max_workers=min(len(_ADMIN_DASHBOARD_KEYS), 9)
+                    # Leave pool headroom for health checks and real users
+                    # while the worker warms its dashboard cache.
+                    max_workers=min(len(_ADMIN_DASHBOARD_KEYS), 4)
                 ) as executor:
                     futures = {
                         executor.submit(_warm_dashboard_key, key): key
@@ -7306,6 +7547,7 @@ def get_volunteer_by_user(request: FastAPIRequest, user_id: str) -> dict[str, An
             volunteer = _postgres_sync_volunteer_engagement_status(
                 connection,
                 str(volunteer.get("id") or "").strip(),
+                volunteer,
             ) or volunteer
             connection.commit()
     return {"volunteer": volunteer}
@@ -7334,7 +7576,11 @@ def get_volunteer_recognition_status(request: FastAPIRequest, volunteer_id: str)
 
 @app.get("/volunteers/{volunteer_id}/time-logs")
 # API endpoint that returns a volunteer's time logs.
-def get_volunteer_logs(request: FastAPIRequest, volunteer_id: str) -> dict[str, Any]:
+def get_volunteer_logs(
+    request: FastAPIRequest,
+    volunteer_id: str,
+    include_images: bool = True,
+) -> dict[str, Any]:
     session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
@@ -7344,7 +7590,11 @@ def get_volunteer_logs(request: FastAPIRequest, volunteer_id: str) -> dict[str, 
         owner_user_id = str(volunteer.get("userId") or "").strip()
         if session.get("role") != "admin" and owner_user_id != str(session.get("sub") or ""):
             raise HTTPException(status_code=403, detail="You are not allowed to access these attendance logs.")
-        logs = _postgres_reset_stale_daily_time_logs(connection, volunteer_id)
+        logs = _postgres_reset_stale_daily_time_logs(
+            connection,
+            volunteer_id,
+            include_media=include_images,
+        )
         if session.get("role") == "volunteer":
             _, joined_event_ids = _get_volunteer_joined_event_scope(
                 connection,
@@ -10201,36 +10451,44 @@ def get_admin_dashboard_snapshot(request: FastAPIRequest) -> dict[str, Any]:
         if cached is not None:
             return cached
 
-        items: dict[str, Any] = {}
+        # Prevent several browser tabs (or four API workers) from starting a
+        # connection-heavy dashboard build at the same time. The second
+        # request rechecks the cache after waiting and returns immediately.
+        with _admin_dashboard_build_lock:
+            cached = _admin_dashboard_cache.get(_ADMIN_DASHBOARD_CACHE_KEY)
+            if cached is not None:
+                return cached
 
-        def _fetch_admin_key(key: str) -> tuple[str, Any]:
-            try:
-                with get_connection() as connection:
-                    return key, _get_admin_dashboard_collection(
-                        connection,
-                        key,
-                        include_images=False,
-                    )
-            except Exception as e:
-                print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
-                return key, []
+            items: dict[str, Any] = {}
 
-        # The pool supports ten connections; fetching the dashboard in up to
-        # ten parallel reads avoids the multi-wave delay on a cold start.
-        max_workers = min(len(_ADMIN_DASHBOARD_KEYS), 10)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_admin_key, key): key for key in _ADMIN_DASHBOARD_KEYS}
-            for future in as_completed(futures):
+            def _fetch_admin_key(key: str) -> tuple[str, Any]:
                 try:
-                    key, value = future.result()
-                    items[key] = value
+                    with get_connection() as connection:
+                        return key, _get_admin_dashboard_collection(
+                            connection,
+                            key,
+                            include_images=False,
+                        )
                 except Exception as e:
-                    key = futures[future]
-                    items[key] = []
+                    print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
+                    return key, []
 
-        result = {"items": items}
-        _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, result)
-        return result
+            # Keep headroom in the ten-connection pool for user actions while
+            # still parallelizing the cold dashboard build.
+            max_workers = min(len(_ADMIN_DASHBOARD_KEYS), 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_fetch_admin_key, key): key for key in _ADMIN_DASHBOARD_KEYS}
+                for future in as_completed(futures):
+                    try:
+                        key, value = future.result()
+                        items[key] = value
+                    except Exception:
+                        key = futures[future]
+                        items[key] = []
+
+            result = {"items": items}
+            _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, result)
+            return result
     except Exception as error:
         print(f"[ERROR] Admin dashboard snapshot failed: {type(error).__name__}: {error}")
         return {"items": {k: [] for k in _ADMIN_DASHBOARD_KEYS}}
@@ -10349,6 +10607,7 @@ def get_storage_item_by_id(
     request: FastAPIRequest,
     key: str,
     item_id: str,
+    include_images: bool = True,
 ) -> dict[str, Any]:
     """Read one full relational record for an explicit detail/preview view."""
     _require_postgres()
@@ -10362,7 +10621,12 @@ def get_storage_item_by_id(
 
     try:
         with get_connection() as connection:
-            item = _postgres_get_hot_item_by_id(connection, key, normalized_item_id)
+            item = _postgres_get_hot_item_by_id(
+                connection,
+                key,
+                normalized_item_id,
+                include_media=include_images,
+            )
             if item is not None:
                 scoped_items = _scope_storage_collection(connection, key, [item], session)
             else:

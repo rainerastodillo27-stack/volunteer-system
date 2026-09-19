@@ -4997,9 +4997,16 @@ export async function saveVolunteerTimeLog(log: VolunteerTimeLog): Promise<void>
 }
 
 // Returns all time log entries for one volunteer profile.
-export async function getVolunteerTimeLogs(volunteerId: string): Promise<VolunteerTimeLog[]> {
+export async function getVolunteerTimeLogs(
+  volunteerId: string,
+  options?: { includeImages?: boolean },
+): Promise<VolunteerTimeLog[]> {
+  // Profile and list screens only need attendance state and timestamps. Keep
+  // photos available through the API's explicit include_images=true option,
+  // but do not download base64 media during every profile refresh.
+  const includeImages = options?.includeImages === true;
   const payload = await requestApiJson<{ logs?: VolunteerTimeLog[] }>(
-    `/volunteers/${encodeURIComponent(volunteerId)}/time-logs`
+    `/volunteers/${encodeURIComponent(volunteerId)}/time-logs?include_images=${includeImages ? 'true' : 'false'}`
   );
   return payload.logs || [];
 }
