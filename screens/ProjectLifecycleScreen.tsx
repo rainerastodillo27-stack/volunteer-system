@@ -172,6 +172,7 @@ import { format } from 'date-fns';
 
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
+import type { PdfTable } from '../utils/pdfDownload';
 import DownloadPreviewModal from '../components/DownloadPreviewModal';
 
 import {
@@ -3436,6 +3437,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     title: string;
     subtitle: string;
     rows: Array<Record<string, string>>;
+    previewTables: PdfTable[];
+    documentTitle: string;
+    documentSubtitle: string;
   } | null>(null);
 
   const [previewAttendanceLog, setPreviewAttendanceLog] = useState<VolunteerTimeLog | null>(null);
@@ -5743,17 +5747,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     if (targetVolunteer && volunteerId) {
       const assignedTask = updatedTasks.find(t => t.id === taskId);
       if (assignedTask) {
-        try {
-          await notifyVolunteerAboutTaskUpdate({
-            event: eventProject,
-            task: assignedTask,
-            volunteer: targetVolunteer,
-            actorUserId: user?.id,
-            action: 'assigned',
-          });
-        } catch (notifErr) {
+        void notifyVolunteerAboutTaskUpdate({
+          event: eventProject,
+          task: assignedTask,
+          volunteer: targetVolunteer,
+          actorUserId: user?.id,
+          action: 'assigned',
+        }).catch(notifErr => {
           console.warn('[TASK] Failed to notify volunteer about task assignment:', notifErr);
-        }
+        });
       }
     }
   };
@@ -5878,16 +5880,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     });
 
     if (targetVolunteer && originalTask) {
-      try {
-        await notifyVolunteerAboutTaskUnassignment({
-          event: eventProject,
-          task: originalTask,
-          volunteer: targetVolunteer,
-          actorUserId: user?.id,
-        });
-      } catch (notifErr) {
+      void notifyVolunteerAboutTaskUnassignment({
+        event: eventProject,
+        task: originalTask,
+        volunteer: targetVolunteer,
+        actorUserId: user?.id,
+      }).catch(notifErr => {
         console.warn('[TASK] Failed to notify volunteer about task unassignment:', notifErr);
-      }
+      });
     }
   };
 
@@ -9474,16 +9474,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           const targetVol = targetVolunteer;
           if (targetVol) {
-            try {
-              await notifyVolunteerAboutTaskUnassignment({
-                event: currentSelectedProject,
-                task,
-                volunteer: targetVol,
-                actorUserId: user?.id,
-              });
-            } catch (err) {
+            void notifyVolunteerAboutTaskUnassignment({
+              event: currentSelectedProject,
+              task,
+              volunteer: targetVol,
+              actorUserId: user?.id,
+            }).catch(err => {
               console.warn('[TASK] Failed to notify volunteer about unassignment:', err);
-            }
+            });
           }
 
           if (nextIds.length === 0) {
@@ -9543,16 +9541,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           for (const vid of existingIds) {
             const targetVol = volunteers.find(v => v.id === vid || v.userId === vid);
             if (targetVol) {
-              try {
-                await notifyVolunteerAboutTaskUnassignment({
-                  event: currentSelectedProject,
-                  task,
-                  volunteer: targetVol,
-                  actorUserId: user?.id,
-                });
-              } catch (err) {
+              void notifyVolunteerAboutTaskUnassignment({
+                event: currentSelectedProject,
+                task,
+                volunteer: targetVol,
+                actorUserId: user?.id,
+              }).catch(err => {
                 console.warn('[TASK] Failed to notify volunteer about unassignment:', err);
-              }
+              });
             }
           }
 
@@ -19199,32 +19195,38 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         .toLowerCase()
         .replace(/[^a-z0-9]+/gi, '-')
         .replace(/^-|-$/g, '')}-${exportDateKey}`;
-      const pdf = buildTablePdf(`Attendance Report - ${activeSelectedProject.title}`, {
-        subtitle: `Attendance date: ${exportDateKey} • ${rows.length} volunteer${rows.length === 1 ? '' : 's'}`,
+      const documentTitle = `Attendance Report - ${activeSelectedProject.title}`;
+      const documentSubtitle = `Attendance date: ${exportDateKey} • ${rows.length} volunteer${rows.length === 1 ? '' : 's'}`;
+      const previewTables: PdfTable[] = [
+        {
+          title: 'Daily Attendance',
+          columns: [
+            { key: 'volunteer', label: 'Volunteer', width: 1.3 },
+            { key: 'email', label: 'Email', width: 1.35 },
+            { key: 'attendance', label: 'Attendance', width: 0.8 },
+            { key: 'marked', label: 'Marked', width: 0.8 },
+            { key: 'time', label: 'Time', width: 0.75 },
+            { key: 'assignedTasks', label: 'Assigned Tasks', width: 1.55 },
+            { key: 'completedTask', label: 'Task Completed', width: 1.35 },
+            { key: 'photo', label: 'Photo', width: 0.55 },
+          ],
+          rows,
+          emptyMessage: 'No volunteers are assigned to this event.',
+        },
+      ];
+      const pdf = buildTablePdf(documentTitle, {
+        subtitle: documentSubtitle,
         orientation: 'landscape',
-        tables: [
-          {
-            title: 'Daily Attendance',
-            columns: [
-              { key: 'volunteer', label: 'Volunteer', width: 1.3 },
-              { key: 'email', label: 'Email', width: 1.35 },
-              { key: 'attendance', label: 'Attendance', width: 0.8 },
-              { key: 'marked', label: 'Marked', width: 0.8 },
-              { key: 'time', label: 'Time', width: 0.75 },
-              { key: 'assignedTasks', label: 'Assigned Tasks', width: 1.55 },
-              { key: 'completedTask', label: 'Task Completed', width: 1.35 },
-              { key: 'photo', label: 'Photo', width: 0.55 },
-            ],
-            rows,
-            emptyMessage: 'No volunteers are assigned to this event.',
-          },
-        ],
+        tables: previewTables,
       });
       setAttendanceDownloadPreview({
         fileName: `${fileTitle}.pdf`,
         pdf,
         title: `Preview: Attendance Report`,
-        subtitle: `${exportDateKey} • ${rows.length} volunteer${rows.length === 1 ? '' : 's'}`,
+        subtitle: documentSubtitle,
+        documentTitle,
+        documentSubtitle,
+        previewTables,
         rows: rows.map(row => ({
           Volunteer: row.volunteer,
           Attendance: row.attendance,
@@ -24089,6 +24091,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         totalRows={attendanceDownloadPreview?.rows.length || 0}
         previewRows={attendanceDownloadPreview?.rows || []}
         columns={['Volunteer', 'Attendance', 'Marked', 'Time', 'Assigned Tasks', 'Task Completed', 'Photo']}
+        previewTables={attendanceDownloadPreview?.previewTables}
+        documentTitle={attendanceDownloadPreview?.documentTitle}
+        documentSubtitle={attendanceDownloadPreview?.documentSubtitle}
         stats={attendanceDownloadPreview ? [
           { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
           { label: 'Included volunteers', value: String(attendanceDownloadPreview.rows.length), icon: 'groups' },

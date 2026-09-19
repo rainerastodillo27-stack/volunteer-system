@@ -101,6 +101,8 @@ import {
 
   saveProject,
 
+  REALTIME_STORAGE_CHANGE_OPTIONS,
+
   subscribeToStorageChanges,
 
   submitPartnerProgramProposal,
@@ -2104,7 +2106,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         if (!messagesChanged) {
           void loadData(true);
         }
-      }
+      },
+      REALTIME_STORAGE_CHANGE_OPTIONS
     );
 
   }, [loadData, loadMessageAccounts, messageUserId]));

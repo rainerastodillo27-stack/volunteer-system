@@ -305,6 +305,178 @@ export async function downloadAttachmentUri(uri: string, filename?: string): Pro
   await Linking.openURL(localUri);
 }
 
+export type PhotoBatchDownloadItem = {
+  uri: string;
+  filename: string;
+};
+
+const ZIP_LOCAL_FILE_SIGNATURE = [0x50, 0x4b, 0x03, 0x04];
+const ZIP_CENTRAL_FILE_SIGNATURE = [0x50, 0x4b, 0x01, 0x02];
+const ZIP_END_SIGNATURE = [0x50, 0x4b, 0x05, 0x06];
+
+function createCrc32Table(): number[] {
+  return Array.from({ length: 256 }, (_, index) => {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    return value >>> 0;
+  });
+}
+
+const CRC32_TABLE = createCrc32Table();
+
+function crc32(bytes: Uint8Array): number {
+  let value = 0xffffffff;
+  bytes.forEach(byte => {
+    value = CRC32_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  });
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16(value: number): Uint8Array {
+  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff]);
+}
+
+function writeUint32(value: number): Uint8Array {
+  return new Uint8Array([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const output = new Uint8Array(parts.reduce((length, part) => length + part.length, 0));
+  let offset = 0;
+  parts.forEach(part => {
+    output.set(part, offset);
+    offset += part.length;
+  });
+  return output;
+}
+
+function sanitizeZipFilename(filename: string, index: number): string {
+  const safeName = String(filename || `attendance-photo-${index + 1}.jpg`)
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return safeName || `attendance-photo-${index + 1}.jpg`;
+}
+
+async function readPhotoBytes(uri: string): Promise<Uint8Array> {
+  const response = await fetch(uri);
+  if (!response.ok) {
+    throw new Error(`Unable to download photo (${response.status}).`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function buildStoredZip(files: Array<{ name: string; bytes: Uint8Array }>): Uint8Array {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+
+  files.forEach(file => {
+    const nameBytes = encoder.encode(file.name);
+    const checksum = crc32(file.bytes);
+    const localHeader = concatBytes(
+      new Uint8Array(ZIP_LOCAL_FILE_SIGNATURE),
+      writeUint16(20), // version needed to extract
+      writeUint16(0x800), // UTF-8 filenames
+      writeUint16(0), // stored (no compression)
+      writeUint16(0), // last modification time
+      writeUint16(0), // last modification date
+      writeUint32(checksum),
+      writeUint32(file.bytes.length),
+      writeUint32(file.bytes.length),
+      writeUint16(nameBytes.length),
+      writeUint16(0),
+      nameBytes,
+      file.bytes,
+    );
+    localParts.push(localHeader);
+
+    centralParts.push(concatBytes(
+      new Uint8Array(ZIP_CENTRAL_FILE_SIGNATURE),
+      writeUint16(20), // version made by
+      writeUint16(20), // version needed to extract
+      writeUint16(0x800), // UTF-8 filenames
+      writeUint16(0), // stored (no compression)
+      writeUint16(0),
+      writeUint16(0),
+      writeUint32(checksum),
+      writeUint32(file.bytes.length),
+      writeUint32(file.bytes.length),
+      writeUint16(nameBytes.length),
+      writeUint16(0), // extra length
+      writeUint16(0), // comment length
+      writeUint16(0), // disk number
+      writeUint16(0), // internal attributes
+      writeUint32(0), // external attributes
+      writeUint32(offset),
+      nameBytes,
+    ));
+
+    offset += localHeader.length;
+  });
+
+  const centralDirectory = concatBytes(...centralParts);
+  const endRecord = concatBytes(
+    new Uint8Array(ZIP_END_SIGNATURE),
+    writeUint16(0), // disk number
+    writeUint16(0), // central directory disk
+    writeUint16(files.length),
+    writeUint16(files.length),
+    writeUint32(centralDirectory.length),
+    writeUint32(offset),
+    writeUint16(0), // archive comment length
+  );
+
+  return concatBytes(...localParts, centralDirectory, endRecord);
+}
+
+/** Downloads attendance photos as one ZIP archive in the browser. */
+export async function downloadPhotoBatch(
+  items: PhotoBatchDownloadItem[],
+  archiveFilename = 'attendance-photos.zip',
+): Promise<void> {
+  if (!items.length) {
+    throw new Error('There are no photos available to download.');
+  }
+
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    const files = await Promise.all(
+      items.map(async (item, index) => ({
+        name: sanitizeZipFilename(item.filename, index),
+        bytes: await readPhotoBytes(item.uri),
+      }))
+    );
+    const zipBytes = buildStoredZip(files);
+    const zipBuffer = new ArrayBuffer(zipBytes.byteLength);
+    new Uint8Array(zipBuffer).set(zipBytes);
+    const blob = new Blob([zipBuffer], { type: 'application/zip' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = archiveFilename.toLowerCase().endsWith('.zip')
+      ? archiveFilename
+      : `${archiveFilename}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    return;
+  }
+
+  // Native screens do not have a browser archive download. Preserve the
+  // existing share/save behavior for the first selected photo instead of
+  // silently failing on platforms where this admin gallery is not hosted.
+  await downloadAttachmentUri(items[0].uri, items[0].filename);
+}
+
 // Returns the best available image/media URI from a primary field plus attachments.
 export function getPrimaryReportMediaUri(
   mediaFile?: string | null,

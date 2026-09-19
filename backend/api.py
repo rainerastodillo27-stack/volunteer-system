@@ -541,6 +541,12 @@ class VolunteerMatchReviewPayload(BaseModel):
     reviewedBy: str
 
 
+# Request payload for an administrator assigning a volunteer directly to an event.
+class VolunteerMatchAssignmentPayload(BaseModel):
+    projectId: str
+    volunteerId: str
+
+
 # Request payload for direct chat messages.
 class MessagePayload(BaseModel):
     id: str
@@ -5337,7 +5343,7 @@ async def _create_proposal_submission_message(
     try:
         message_data = await asyncio.to_thread(persist_message)
         _invalidate_collection_cache(["messages"])
-        await connection_manager.broadcast_message_event(message_data)
+        asyncio.create_task(connection_manager.broadcast_message_event(message_data))
     except Exception as error:
         print(f"[ERROR] Error creating proposal message: {error}")
 
@@ -8119,18 +8125,12 @@ async def review_partner_project_application(
         _invalidate_collection_cache(broadcast_keys)
         _projects_snapshot_cache.clear()
 
-    # Deliver the card itself first. A storage notification is only a backup
-    # for surrounding lists; the direct-message event renders the result now.
+    # The API response is already the source of truth for the reviewer. Do not
+    # wait on a websocket delivery (or an old disconnected tab) before
+    # completing the action; connected clients will receive the event in the
+    # background and reconnecting clients will refresh from storage.
     if review_message_data is not None:
-        try:
-            await asyncio.wait_for(
-                connection_manager.broadcast_message_event(review_message_data),
-                timeout=1,
-            )
-        except asyncio.TimeoutError:
-            # Do not let an unresponsive old tab slow the review action. The
-            # reconnecting client will receive the event on the retry path.
-            asyncio.create_task(connection_manager.broadcast_message_event(review_message_data))
+        asyncio.create_task(connection_manager.broadcast_message_event(review_message_data))
 
     asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
     response: dict[str, Any] = {"application": updated_application}
@@ -8139,6 +8139,127 @@ async def review_partner_project_application(
     if review_message_data is not None:
         response["reviewMessage"] = review_message_data
     return response
+
+
+# API endpoint that assigns a volunteer directly to an event.
+@app.post("/volunteer-matches/assign")
+async def assign_volunteer_match(
+    request: FastAPIRequest,
+    payload: VolunteerMatchAssignmentPayload,
+) -> dict[str, Any]:
+    session = _require_admin_session(request)
+    _require_postgres()
+
+    volunteer_lookup_id = str(payload.volunteerId or "").strip()
+    if not volunteer_lookup_id:
+        raise HTTPException(status_code=400, detail="A volunteer id is required.")
+
+    reviewed_by = str(session.get("sub") or "").strip()
+    if not reviewed_by:
+        raise HTTPException(status_code=400, detail="An administrator id is required.")
+
+    with get_connection() as connection:
+        project, project_storage_key = _postgres_get_project_like_item_by_id(
+            connection,
+            str(payload.projectId or "").strip(),
+        )
+        if project is None or project_storage_key is None or not bool(project.get("isEvent")):
+            raise HTTPException(status_code=404, detail="Event not found.")
+
+        volunteer = _postgres_get_hot_item_by_id(
+            connection,
+            "volunteers",
+            volunteer_lookup_id,
+            include_media=False,
+        )
+        if volunteer is None:
+            volunteer = _postgres_get_volunteer_by_user_id(connection, volunteer_lookup_id, include_media=False)
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+
+        volunteer_id = str(volunteer.get("id") or "").strip()
+        existing_matches = _postgres_get_hot_items_by_field(
+            connection,
+            "volunteerMatches",
+            "volunteerId",
+            volunteer_id,
+            include_media=False,
+        )
+        existing_match = next(
+            (match for match in existing_matches if str(match.get("projectId") or "").strip() == str(project.get("id") or "").strip()),
+            None,
+        )
+        existing_status = str((existing_match or {}).get("status") or "").strip()
+        if existing_status == "Matched":
+            raise HTTPException(status_code=409, detail="Volunteer is already assigned to this event.")
+        if existing_status == "Completed":
+            raise HTTPException(status_code=409, detail="Volunteer already completed this event.")
+
+        try:
+            capacity = int(project.get("volunteersNeeded") or 0)
+        except (TypeError, ValueError):
+            capacity = 0
+        already_joined = volunteer_id in (project.get("volunteers") or []) or (
+            str(volunteer.get("userId") or "").strip() in (project.get("joinedUserIds") or [])
+        )
+        if capacity > 0 and not already_joined:
+            active_volunteer_count = len(
+                _get_active_event_volunteer_keys(
+                    project,
+                    get_postgres_hot_storage_collection(connection, "volunteerProjectJoins", include_images=False),
+                    get_postgres_hot_storage_collection(connection, "volunteerMatches", include_images=False),
+                    get_postgres_hot_storage_collection(connection, "volunteers", include_images=False),
+                )
+            )
+            if active_volunteer_count >= capacity:
+                raise HTTPException(status_code=400, detail="This event has reached its maximum volunteer capacity and is already full.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        assigned_match = {
+            **(existing_match or {}),
+            "id": str((existing_match or {}).get("id") or f"match-{int(datetime.now(timezone.utc).timestamp() * 1000)}"),
+            "volunteerId": volunteer_id,
+            "projectId": project.get("id"),
+            "status": "Matched",
+            "requestedAt": (existing_match or {}).get("requestedAt"),
+            "matchedAt": now_iso,
+            "reviewedAt": now_iso,
+            "reviewedBy": reviewed_by,
+            "hoursContributed": (existing_match or {}).get("hoursContributed") or 0,
+        }
+        saved_match = _postgres_upsert_hot_item(connection, "volunteerMatches", assigned_match)
+
+        joined_user_ids = list(project.get("joinedUserIds") or [])
+        volunteer_user_id = str(volunteer.get("userId") or "").strip()
+        if volunteer_user_id and volunteer_user_id not in joined_user_ids:
+            joined_user_ids.append(volunteer_user_id)
+        volunteer_ids = list(project.get("volunteers") or [])
+        if volunteer_id not in volunteer_ids:
+            volunteer_ids.append(volunteer_id)
+        updated_project = _postgres_upsert_hot_item(
+            connection,
+            project_storage_key,
+            {
+                **project,
+                "joinedUserIds": joined_user_ids,
+                "volunteers": volunteer_ids,
+                "updatedAt": now_iso,
+            },
+        )
+        _postgres_ensure_volunteer_project_join_record(connection, str(project.get("id") or ""), volunteer, "AdminMatch")
+        updated_volunteer = _postgres_sync_volunteer_engagement_status(connection, volunteer_id) or volunteer
+        connection.commit()
+
+    changed_keys = ["volunteerMatches", project_storage_key, "volunteerProjectJoins", "volunteers"]
+    _invalidate_collection_cache(changed_keys)
+    _projects_snapshot_cache.clear()
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    return {
+        "match": saved_match,
+        "event": updated_project,
+        "eventStorageKey": project_storage_key,
+        "volunteer": updated_volunteer,
+    }
 
 
 # API endpoint that creates a volunteer join request for admin review.
@@ -8615,7 +8736,9 @@ async def remove_volunteer_from_project(
     ]
     _invalidate_collection_cache(changed_keys)
     _projects_snapshot_cache.clear()
-    await connection_manager.broadcast_storage_event(changed_keys)
+    # Storage invalidation is best effort and must not hold the delete/leave
+    # response open for a slow websocket client.
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
     return {"success": True, "project": updated_project, "volunteerProfile": updated_volunteer}
 
 
@@ -9018,12 +9141,12 @@ async def delete_conversation(
 
     if deleted_ids:
         _invalidate_collection_cache(["messages"])
-        await connection_manager.broadcast_message_deleted_event(
+        asyncio.create_task(connection_manager.broadcast_message_deleted_event(
             deleted_ids,
             user1,
             user2,
-        )
-        await connection_manager.broadcast_storage_event(["messages"])
+        ))
+        asyncio.create_task(connection_manager.broadcast_storage_event(["messages"]))
 
     return {"deletedCount": len(deleted_ids), "deletedIds": deleted_ids}
 
@@ -9242,12 +9365,12 @@ async def delete_message(
 
     _invalidate_collection_cache(["messages"])
     deleted_message = serialize_message_row(deleted_row)
-    await connection_manager.broadcast_message_deleted_event(
+    asyncio.create_task(connection_manager.broadcast_message_deleted_event(
         [str(deleted_message["id"])],
         str(deleted_message["senderId"]),
         str(deleted_message["recipientId"]),
-    )
-    await connection_manager.broadcast_storage_event(["messages"])
+    ))
+    asyncio.create_task(connection_manager.broadcast_storage_event(["messages"]))
     return {"deleted": deleted_message}
 
 
@@ -9399,11 +9522,11 @@ async def delete_project_group_messages(
         connection.commit()
 
     _invalidate_collection_cache(["projectGroupMessages"])
-    await connection_manager.broadcast_project_group_message_deleted_event(
+    asyncio.create_task(connection_manager.broadcast_project_group_message_deleted_event(
         project_id,
         deleted_ids,
-    )
-    await connection_manager.broadcast_storage_event(["projectGroupMessages", "projects", "events"])
+    ))
+    asyncio.create_task(connection_manager.broadcast_storage_event(["projectGroupMessages", "projects", "events"]))
     return {"deletedCount": len(deleted_ids), "deletedIds": deleted_ids}
 
 
@@ -9455,11 +9578,11 @@ async def delete_project_group_message(
 
     _invalidate_collection_cache(["projectGroupMessages"])
     deleted_message = serialize_project_group_message_row(deleted_row)
-    await connection_manager.broadcast_project_group_message_deleted_event(
+    asyncio.create_task(connection_manager.broadcast_project_group_message_deleted_event(
         project_id,
         [str(deleted_message["id"])],
-    )
-    await connection_manager.broadcast_storage_event(["projectGroupMessages"])
+    ))
+    asyncio.create_task(connection_manager.broadcast_storage_event(["projectGroupMessages"]))
     return {"deleted": deleted_message}
 
 
@@ -9498,7 +9621,7 @@ async def mark_message_read(request: FastAPIRequest, message_id: str) -> dict[st
 
     _invalidate_collection_cache(["messages"])
     message = serialize_message_row(row)
-    await connection_manager.broadcast_message_event(message)
+    asyncio.create_task(connection_manager.broadcast_message_event(message))
     return message
 
 
@@ -10345,7 +10468,7 @@ async def _put_storage_item_once(
         
         _invalidate_collection_cache(changed_keys)
         _projects_snapshot_cache.clear()
-        await connection_manager.broadcast_storage_event(changed_keys)
+        asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
         with get_connection() as connection:
@@ -10354,7 +10477,7 @@ async def _put_storage_item_once(
         
         _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
-        await connection_manager.broadcast_storage_event([key])
+        asyncio.create_task(connection_manager.broadcast_storage_event([key]))
         return {"status": "ok"}
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
@@ -10675,7 +10798,9 @@ async def submit_report(request: FastAPIRequest, payload: ReportSubmitPayload) -
 
             saved_report = _postgres_upsert_hot_item(connection, "partnerReports", report)
             connection.commit()
-        await connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+        asyncio.create_task(
+            connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+        )
         return {"report": saved_report}
     except HTTPException:
         raise
@@ -10699,7 +10824,7 @@ async def delete_storage_item(request: FastAPIRequest, key: str) -> dict[str, st
         
         _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
-        await connection_manager.broadcast_storage_event([key])
+        asyncio.create_task(connection_manager.broadcast_storage_event([key]))
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
         with get_connection() as connection:
@@ -10708,7 +10833,7 @@ async def delete_storage_item(request: FastAPIRequest, key: str) -> dict[str, st
         
         _invalidate_collection_cache([key])
         _projects_snapshot_cache.clear()
-        await connection_manager.broadcast_storage_event([key])
+        asyncio.create_task(connection_manager.broadcast_storage_event([key]))
         return {"status": "ok"}
     raise HTTPException(status_code=400, detail=f"Unsupported storage key '{key}'.")
 
@@ -10726,7 +10851,7 @@ async def clear_storage(request: FastAPIRequest) -> dict[str, str]:
 
     _invalidate_collection_cache()
     _projects_snapshot_cache.clear()
-    await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS))
+    asyncio.create_task(connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS)))
     return {"status": "ok"}
 
 
@@ -10736,7 +10861,7 @@ async def clear_all_caches() -> dict[str, Any]:
     _invalidate_collection_cache()
     _projects_snapshot_cache.clear()
     _storage_collection_cache.clear()
-    await connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS))
+    asyncio.create_task(connection_manager.broadcast_storage_event(list(HOT_STORAGE_TABLES.keys()) + list(SPECIAL_STORAGE_KEYS)))
     return {"status": "ok", "message": "All caches cleared successfully"}
 
 

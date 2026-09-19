@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, Platform, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, Platform, Alert, Modal, useWindowDimensions } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project, VolunteerTimeLog, Volunteer } from '../models/types';
-import { isImageMediaUri } from '../utils/media';
+import { downloadPhotoBatch, getAttachmentUris, isImageMediaUri, type PhotoBatchDownloadItem } from '../utils/media';
 import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
+import type { PdfTable } from '../utils/pdfDownload';
 import { getAttendanceReportMetrics } from '../utils/attendanceReportMetrics';
 import DownloadPreviewModal from './DownloadPreviewModal';
 
@@ -75,8 +76,12 @@ type ReportDownloadPreview = {
   recordCount?: number;
   previewRows: Array<Record<string, string>>;
   columns: string[];
+  previewTables?: PdfTable[];
+  documentTitle?: string;
+  documentSubtitle?: string;
   fileName: string;
-  pdf: string;
+  pdf?: string;
+  photoItems?: PhotoBatchDownloadItem[];
   errorMessage: string;
 };
 
@@ -89,14 +94,48 @@ function reportAttachments(report: SubmittedReport) {
   );
 }
 
+function getReportPhotoUris(report: SubmittedReport): string[] {
+  return getAttachmentUris([
+    report.mediaFile || '',
+    ...(report.attachments || []),
+  ]).filter(isImageMediaUri);
+}
+
+function safePhotoFilenamePart(value: string | undefined, fallback: string): string {
+  return String(value || fallback)
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 70) || fallback;
+}
+
+function getPhotoExtension(uri: string): string {
+  const dataMime = uri.match(/^data:image\/([a-z0-9.+-]+)/i)?.[1];
+  if (dataMime) {
+    const normalized = dataMime.toLowerCase();
+    return normalized === 'jpeg' ? 'jpg' : normalized.split('+')[0];
+  }
+  const extension = uri.split(/[?#]/)[0].split('.').pop()?.toLowerCase();
+  const supportedExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif']);
+  return extension && supportedExtensions.has(extension) ? extension : 'jpg';
+}
+
+function buildPhotoDownloadItem(report: SubmittedReport, uri: string, photoIndex: number): PhotoBatchDownloadItem {
+  const submittedDate = new Date(report.submittedAt || '');
+  const dateKey = Number.isNaN(submittedDate.getTime())
+    ? 'undated'
+    : submittedDate.toISOString().slice(0, 10);
+  const volunteer = safePhotoFilenamePart(report.submitterName, 'volunteer');
+  const event = safePhotoFilenamePart(report.projectTitle, 'event');
+  const extension = getPhotoExtension(uri);
+  return {
+    uri,
+    filename: `${volunteer}-${event}-${dateKey}-${photoIndex + 1}.${extension}`,
+  };
+}
+
 function reportHasPhoto(report: SubmittedReport): boolean {
-  return Boolean(
-    isImageMediaUri(report.mediaFile || '') ||
-      reportAttachments(report).some(
-        attachment => attachment.type === 'image' ||
-          (attachment.type === 'media' && isImageMediaUri(attachment.url))
-      )
-  );
+  return getReportPhotoUris(report).length > 0;
 }
 
 function reportHasVideo(report: SubmittedReport): boolean {
@@ -165,6 +204,17 @@ function buildSingleReportPdf(
   report: SubmittedReport,
   projectById: Map<string, Project>,
 ): string {
+  return buildTablePdf(report.title || 'Report', {
+    subtitle: `Generated report export - ${formatReportDateTime(report.submittedAt)}`,
+    orientation: 'portrait',
+    tables: buildSingleReportTables(report, projectById),
+  });
+}
+
+function buildSingleReportTables(
+  report: SubmittedReport,
+  projectById: Map<string, Project>,
+): PdfTable[] {
   const metricRows = Object.entries(report.metrics || {})
     .filter(([metric]) => (
       metric !== 'volunteerHours'
@@ -176,10 +226,7 @@ function buildSingleReportPdf(
       value,
     }));
 
-  return buildTablePdf(report.title || 'Report', {
-    subtitle: `Generated report export - ${formatReportDateTime(report.submittedAt)}`,
-    orientation: 'portrait',
-    tables: [
+  return [
       {
         title: 'Report Details',
         columns: [
@@ -209,15 +256,13 @@ function buildSingleReportPdf(
         rows: metricRows,
         emptyMessage: 'No metrics captured for this report.',
       },
-    ],
-  });
+  ];
 }
 
-function buildBatchReportPdf(
+function buildBatchReportTables(
   reports: SubmittedReport[],
   projectById: Map<string, Project>,
-  title: string,
-): string {
+): PdfTable[] {
   const summaryRows = reports.map((report, index) => ({
     number: index + 1,
     title: report.title || 'Untitled report',
@@ -232,58 +277,76 @@ function buildBatchReportPdf(
     report: report.title || 'Untitled report',
     description: report.description || 'No description provided.',
   }));
-  const metricRows = reports.flatMap((report, index) =>
-    Object.entries(report.metrics || {})
-      .filter(([metric]) => (
-        metric !== 'volunteerHours'
-        && metric !== 'beneficiariesServed'
-        && metric !== 'attendanceHours'
-      ))
-      .map(([metric, value]) => ({
+  const metricKeys = Array.from(
+    new Set(
+      reports.flatMap(report =>
+        Object.entries(report.metrics || {})
+          .filter(([, value]) => value !== undefined && value !== null)
+          .map(([metric]) => metric)
+      )
+    )
+  );
+  const metricRows = reports.map((report, index) => {
+    const row: Record<string, unknown> = {
       number: index + 1,
       report: report.title || 'Untitled report',
-      metric: formatMetricLabel(metric),
-      value,
-      }))
-  );
+      submitter: report.submitterName || 'Unknown user',
+    };
+    metricKeys.forEach(metric => {
+      row[`metric_${metric}`] = report.metrics?.[metric] ?? '-';
+    });
+    return row;
+  });
 
+  return [
+    {
+      title: 'Report Index',
+      columns: [
+        { key: 'number', label: '#', width: 0.35 },
+        { key: 'title', label: 'Report', width: 1.35 },
+        { key: 'activity', label: 'Event / Project', width: 1.35 },
+        { key: 'submitter', label: 'Submitted By', width: 1.05 },
+        { key: 'status', label: 'Status', width: 0.7 },
+        { key: 'submitted', label: 'Submitted', width: 1.05 },
+        { key: 'attachments', label: 'Attachments', width: 0.85 },
+      ],
+      rows: summaryRows,
+    },
+    {
+      title: 'Report Narratives',
+      columns: [
+        { key: 'number', label: '#', width: 0.35 },
+        { key: 'report', label: 'Report', width: 1.15 },
+        { key: 'description', label: 'Description', width: 3.5, maxLines: 30 },
+      ],
+      rows: descriptionRows,
+    },
+    {
+      title: 'Reported Metrics',
+      columns: [
+        { key: 'number', label: '#', width: 0.35 },
+        { key: 'report', label: 'Report', width: 1.8 },
+        { key: 'submitter', label: 'Submitted By', width: 1.1 },
+        ...metricKeys.map(metric => ({
+          key: `metric_${metric}`,
+          label: formatMetricLabel(metric),
+          width: 1,
+        })),
+      ],
+      rows: metricRows,
+      emptyMessage: 'No metrics were captured in this batch.',
+    },
+  ];
+}
+
+function buildBatchReportPdf(
+  reports: SubmittedReport[],
+  projectById: Map<string, Project>,
+  title: string,
+): string {
   return buildTablePdf(title, {
     subtitle: `${reports.length} report${reports.length === 1 ? '' : 's'} - Generated ${new Date().toLocaleString()}`,
-    tables: [
-      {
-        title: 'Report Index',
-        columns: [
-          { key: 'number', label: '#', width: 0.35 },
-          { key: 'title', label: 'Report', width: 1.35 },
-          { key: 'activity', label: 'Event / Project', width: 1.35 },
-          { key: 'submitter', label: 'Submitted By', width: 1.05 },
-          { key: 'status', label: 'Status', width: 0.7 },
-          { key: 'submitted', label: 'Submitted', width: 1.05 },
-          { key: 'attachments', label: 'Attachments', width: 0.85 },
-        ],
-        rows: summaryRows,
-      },
-      {
-        title: 'Report Narratives',
-        columns: [
-          { key: 'number', label: '#', width: 0.35 },
-          { key: 'report', label: 'Report', width: 1.15 },
-          { key: 'description', label: 'Description', width: 3.5, maxLines: 12 },
-        ],
-        rows: descriptionRows,
-      },
-      {
-        title: 'Reported Metrics',
-        columns: [
-          { key: 'number', label: '#', width: 0.35 },
-          { key: 'report', label: 'Report', width: 1.4 },
-          { key: 'metric', label: 'Metric', width: 1.4 },
-          { key: 'value', label: 'Value', width: 0.8 },
-        ],
-        rows: metricRows,
-        emptyMessage: 'No metrics were captured in this batch.',
-      },
-    ],
+    tables: buildBatchReportTables(reports, projectById),
   });
 }
 
@@ -296,7 +359,23 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
   const [attachmentFilter, setAttachmentFilter] = useState<AttachmentFilter>('all');
   const [selectedEventFolderKey, setSelectedEventFolderKey] = useState<string | null>(null);
   const [selectedPhotoFolderKey, setSelectedPhotoFolderKey] = useState<string | null>(null);
+  const [showAllPhotos, setShowAllPhotos] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState({
+    tasks: false,
+    attendance: false,
+    photos: false,
+  });
+
+  const toggleSection = (section: keyof typeof collapsedSections) => {
+    setCollapsedSections(current => ({ ...current, [section]: !current[section] }));
+  };
   const [downloadPreview, setDownloadPreview] = useState<ReportDownloadPreview | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<{
+    uri: string;
+    volunteerName: string;
+    eventTitle: string;
+    filename: string;
+  } | null>(null);
 
   const projectById = useMemo(() => {
     const m = new Map<string, Project>();
@@ -437,7 +516,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
   );
   const eventReports = useMemo(() => taskReports.filter(r => (r as any).projectKind === 'event'), [taskReports]);
   const photoReports = useMemo(
-    () => searchFiltered.filter(report => reportHasPhoto(report) && (isAttendanceReport(report) || report.submitterRole === 'volunteer')),
+    () => searchFiltered.filter(report => reportHasPhoto(report) && isAttendanceReport(report)),
     [searchFiltered],
   );
 
@@ -475,7 +554,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       const title = proj?.title || rep.projectTitle || 'Photos';
       if (!map.has(key)) map.set(key, { key, title, count: 0, updatedAt: rep.submittedAt });
       const f = map.get(key)!;
-      f.count += 1;
+      f.count += getReportPhotoUris(rep).length;
       if (new Date(rep.submittedAt).getTime() > new Date(f.updatedAt).getTime()) f.updatedAt = rep.submittedAt;
     });
     if (map.size === 0 && activeFilter !== 'Events') {
@@ -522,6 +601,17 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     ? photoReports.filter(report => photoFolderKey(report) === selectedPhotoFolderKey)
     : photoReports;
   const selectedPhotoFolder = photoFolders.find(folder => folder.key === selectedPhotoFolderKey);
+  const photoItems = photoTableReports.flatMap(report =>
+    getReportPhotoUris(report).map((uri, photoIndex) => {
+      const photoFile = buildPhotoDownloadItem(report, uri, photoIndex);
+      return {
+        ...photoFile,
+        report,
+        volunteerName: report.submitterName || 'Volunteer',
+        eventTitle: getReportActivityTitle(report, projectById),
+      };
+    })
+  );
   const attachmentFilterLabel =
     attachmentFilter === 'photos'
       ? 'Has Photos'
@@ -547,11 +637,15 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
 
     const dateKey = new Date().toISOString().slice(0, 10);
     const pdf = buildBatchReportPdf(items, projectById, title);
+    const documentSubtitle = `${items.length} report${items.length === 1 ? '' : 's'} - Generated ${new Date().toLocaleString()}`;
     setDownloadPreview({
       title: `Preview: ${title}`,
       subtitle: `${items.length} report${items.length === 1 ? '' : 's'} ready to download`,
       totalRows: items.length,
       columns: ['#', 'Report', 'Event / Project', 'Submitted By', 'Status', 'Submitted'],
+      previewTables: buildBatchReportTables(items, projectById),
+      documentTitle: title,
+      documentSubtitle,
       previewRows: items.slice(0, 5).map((report, index) => ({
         '#': String(index + 1),
         Report: report.title || 'Untitled report',
@@ -566,6 +660,33 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     });
   };
 
+  const handlePhotoBatchDownload = () => {
+    if (!photoItems.length) {
+      Alert.alert('No Photos', 'There are no attendance photos available to download.');
+      return;
+    }
+
+    const dateKey = new Date().toISOString().slice(0, 10);
+    const archiveTitle = selectedPhotoFolder
+      ? `${selectedPhotoFolder.title} Attendance Photos`
+      : 'Attendance Photos';
+    setDownloadPreview({
+      title: `Preview: ${archiveTitle}`,
+      subtitle: `${photoItems.length} photo${photoItems.length === 1 ? '' : 's'} from ${new Set(photoItems.map(item => item.volunteerName)).size} volunteer${new Set(photoItems.map(item => item.volunteerName)).size === 1 ? '' : 's'} ready to download as a ZIP archive`,
+      totalRows: photoItems.length,
+      recordCount: photoItems.length,
+      previewRows: photoItems.slice(0, 5).map(item => ({
+        Volunteer: item.volunteerName,
+        Event: item.eventTitle,
+        Photo: item.filename,
+      })),
+      columns: ['Volunteer', 'Event', 'Photo'],
+      fileName: `attendance-photos-${dateKey}`,
+      photoItems,
+      errorMessage: 'Unable to download the attendance photos on this device.',
+    });
+  };
+
   const handleReportDownload = (report: SubmittedReport) => {
     const submittedDate = new Date(report.submittedAt || '');
     const dateKey = (Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate)
@@ -573,6 +694,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       .slice(0, 10);
     const pdf = buildSingleReportPdf(report, projectById);
     const previewRows = buildSingleReportPreviewRows(report, projectById);
+    const documentSubtitle = `Generated report export - ${formatReportDateTime(report.submittedAt)}`;
     setDownloadPreview({
       title: `Preview: ${report.title || 'Report'}`,
       subtitle: 'Review the report fields before downloading the PDF',
@@ -580,6 +702,9 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
       recordCount: 1,
       columns: ['Field', 'Value'],
       previewRows,
+      previewTables: buildSingleReportTables(report, projectById),
+      documentTitle: report.title || 'Report',
+      documentSubtitle,
       fileName: `${report.title || 'report'}-${dateKey}`,
       pdf,
       errorMessage: 'Unable to save this report on this device.',
@@ -591,6 +716,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     setShowFilter(false);
     setSelectedEventFolderKey(null);
     setSelectedPhotoFolderKey(null);
+    setShowAllPhotos(false);
   };
 
   const renderReportRows = (items: SubmittedReport[]) => items.map(rep => {
@@ -612,7 +738,15 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
               <Text style={[styles.fileIconText, { color: ic.color }]}>W</Text>
             )}
           </View>
-          <Text style={styles.reportName} numberOfLines={1}>{rep.title}</Text>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            onPress={() => onViewReport(rep)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`View ${rep.title || 'report'}`}
+          >
+            <Text style={styles.reportName} numberOfLines={1}>{rep.title}</Text>
+          </TouchableOpacity>
         </View>
         <View style={[styles.td, { flex: 1.4 }]}>
           <Text style={styles.eventName} numberOfLines={1}>{eventTitle}</Text>
@@ -638,9 +772,6 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
             accessibilityLabel={`Download ${rep.title || 'report'} as a table PDF`}
           >
             <MaterialIcons name="file-download" size={20} color="#64748b" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => onViewReport(rep)} activeOpacity={0.7}>
-            <MaterialIcons name="more-vert" size={20} color="#64748b" />
           </TouchableOpacity>
         </View>
       </View>
@@ -772,10 +903,23 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   <Text style={styles.clearFolderButtonText}>Clear</Text>
                 </TouchableOpacity>
               ) : null}
-              <MaterialIcons name="keyboard-arrow-up" size={20} color="#5B564C" />
+              <TouchableOpacity
+                style={styles.sectionToggleButton}
+                onPress={() => toggleSection('tasks')}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel={`${collapsedSections.tasks ? 'Expand' : 'Collapse'} task and field reports`}
+              >
+                <MaterialIcons
+                  name={collapsedSections.tasks ? 'keyboard-arrow-down' : 'keyboard-arrow-up'}
+                  size={20}
+                  color="#5B564C"
+                />
+              </TouchableOpacity>
             </View>
           </View>
 
+          <View style={collapsedSections.tasks && styles.sectionContentCollapsed}>
         {folders.length === 0 ? (
           <View style={styles.emptyFolderBox}>
             <Text style={styles.emptyFolderText}>No folders yet</Text>
@@ -797,9 +941,6 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   <View style={styles.folderTopRow}>
                     <View style={styles.folderIcon}>
                       <MaterialIcons name="folder" size={28} color="#EAB308" />
-                    </View>
-                    <View style={styles.folderMenu}>
-                      <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
                     </View>
                   </View>
                   <Text style={styles.folderTitle} numberOfLines={1}>{folder.title}</Text>
@@ -831,6 +972,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           renderReportRows(tableReports)
         )}
         </View>
+          </View>
       )}
 
       {/* Attendance is kept separate and is sourced from volunteer time logs. */}
@@ -872,10 +1014,23 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   <Text style={styles.clearFolderButtonText}>Clear</Text>
                 </TouchableOpacity>
               ) : null}
-              <MaterialIcons name="keyboard-arrow-up" size={20} color="#5B564C" />
+              <TouchableOpacity
+                style={styles.sectionToggleButton}
+                onPress={() => toggleSection('attendance')}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel={`${collapsedSections.attendance ? 'Expand' : 'Collapse'} attendance reports`}
+              >
+                <MaterialIcons
+                  name={collapsedSections.attendance ? 'keyboard-arrow-down' : 'keyboard-arrow-up'}
+                  size={20}
+                  color="#5B564C"
+                />
+              </TouchableOpacity>
             </View>
           </View>
 
+          <View style={collapsedSections.attendance && styles.sectionContentCollapsed}>
           <View style={styles.tableHeader}>
             <Text style={[styles.th, { flex: 2.2 }]}>Attendance <Text style={styles.thSort}>↕</Text></Text>
             <Text style={[styles.th, { flex: 1.4 }]}>Event <Text style={styles.thSort}>↕</Text></Text>
@@ -891,10 +1046,11 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           ) : (
             renderReportRows(visibleAttendanceReports)
           )}
+          </View>
         </View>
       )}
 
-      {/* Photos Reports Section (collapsed preview like image) */}
+      {/* Photos Reports Section: attendance-photo gallery */}
       {(activeFilter === 'All' || activeFilter === 'Photos') && (
       <View style={[styles.sectionCard, { marginTop: 16 }]}>
         <View style={styles.sectionHeader}>
@@ -904,27 +1060,82 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
             </View>
             <View>
               <Text style={styles.sectionTitle}>Photos Reports</Text>
-              <Text style={styles.sectionSubtitle}>All folders and reports related to photos and documentation.</Text>
+              <Text style={styles.sectionSubtitle}>Attendance photos submitted by volunteers who timed in.</Text>
             </View>
           </View>
           <View style={styles.sectionHeaderRight}>
             <Text style={styles.sectionMeta}>
               {selectedPhotoFolder
-                ? `${selectedPhotoFolder.title} • ${photoTableReports.length} photo${photoTableReports.length === 1 ? '' : 's'}`
-                : `${photoFolders.length} folder${photoFolders.length === 1 ? '' : 's'} • ${photoReports.length} reports`}
+                ? `${selectedPhotoFolder.title} • ${photoItems.length} photo${photoItems.length === 1 ? '' : 's'}`
+                : showAllPhotos
+                ? `All folders • ${photoItems.length} photo${photoItems.length === 1 ? '' : 's'}`
+                : `${photoFolders.length} folder${photoFolders.length === 1 ? '' : 's'} • ${photoItems.length} photo${photoItems.length === 1 ? '' : 's'}`}
             </Text>
+            {Platform.OS === 'web' ? (
+              <TouchableOpacity
+                style={[styles.batchDownloadButton, !photoItems.length && styles.batchDownloadButtonDisabled]}
+                onPress={handlePhotoBatchDownload}
+                disabled={!photoItems.length}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Batch download attendance photos"
+              >
+                <MaterialIcons name="file-download" size={15} color="#fff" />
+                <Text style={styles.batchDownloadButtonText}>Batch Download</Text>
+              </TouchableOpacity>
+            ) : null}
+            {!showAllPhotos && photoItems.length > 0 ? (
+              <TouchableOpacity
+                style={styles.viewAllPhotosButton}
+                onPress={() => {
+                  setSelectedPhotoFolderKey(null);
+                  setShowAllPhotos(true);
+                }}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="View all photos"
+              >
+                <MaterialIcons name="photo-library" size={15} color="#166534" />
+                <Text style={styles.viewAllPhotosButtonText}>View All Photos</Text>
+              </TouchableOpacity>
+            ) : null}
             {selectedPhotoFolder ? (
               <TouchableOpacity
                 style={styles.clearFolderButton}
-                onPress={() => setSelectedPhotoFolderKey(null)}
+                onPress={() => {
+                  setSelectedPhotoFolderKey(null);
+                  setShowAllPhotos(false);
+                }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.clearFolderButtonText}>Clear</Text>
+                <Text style={styles.clearFolderButtonText}>Hide Photos</Text>
               </TouchableOpacity>
             ) : null}
-            <MaterialIcons name={activeFilter==='Photos' ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={20} color="#5B564C" />
+            {showAllPhotos ? (
+              <TouchableOpacity
+                style={styles.clearFolderButton}
+                onPress={() => setShowAllPhotos(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.clearFolderButtonText}>Hide Photos</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.sectionToggleButton}
+              onPress={() => toggleSection('photos')}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={`${collapsedSections.photos ? 'Expand' : 'Collapse'} photo reports`}
+            >
+              <MaterialIcons
+                name={collapsedSections.photos ? 'keyboard-arrow-down' : 'keyboard-arrow-up'}
+                size={20}
+                color="#5B564C"
+              />
+            </TouchableOpacity>
           </View>
         </View>
+        <View style={collapsedSections.photos && styles.sectionContentCollapsed}>
         {photoFolders.length > 0 ? (
           <View style={styles.folderGrid}>
             {photoFolders.map(f => {
@@ -934,7 +1145,10 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 <TouchableOpacity
                   key={f.key}
                   style={[styles.folderCard, isNarrow && styles.folderCardNarrow, isSelected && styles.folderCardSelected]}
-                  onPress={() => setSelectedPhotoFolderKey(isSelected ? null : f.key)}
+                  onPress={() => {
+                    setSelectedPhotoFolderKey(isSelected ? null : f.key);
+                    setShowAllPhotos(false);
+                  }}
                   activeOpacity={0.82}
                   accessibilityRole="button"
                   accessibilityLabel={`Filter photos for ${f.title}`}
@@ -942,9 +1156,6 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   <View style={styles.folderTopRow}>
                     <View style={styles.folderIcon}>
                       <MaterialIcons name="folder" size={28} color="#EAB308" />
-                    </View>
-                    <View style={styles.folderMenu}>
-                      <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
                     </View>
                   </View>
                   <Text style={styles.folderTitle} numberOfLines={1}>{f.title}</Text>
@@ -959,6 +1170,38 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           </View>
         ) : null}
 
+        {photoFolders.length === 0 ? (
+          <View style={styles.emptyTable}>
+            <Text style={styles.emptyTableText}>No attendance photos found</Text>
+          </View>
+        ) : selectedPhotoFolder || showAllPhotos ? (
+          photoItems.length > 0 ? (
+          <View style={styles.photoGrid}>
+            {photoItems.map(item => (
+              <TouchableOpacity
+                key={`${item.report.id}-${item.uri}`}
+                style={styles.photoTile}
+                onPress={() => setPhotoPreview(item)}
+                activeOpacity={0.88}
+                accessibilityRole="button"
+                accessibilityLabel={`View attendance photo from ${item.volunteerName}`}
+              >
+                <Image source={{ uri: item.uri }} style={styles.photoTileImage} resizeMode="cover" />
+                <View style={styles.photoTileCaption}>
+                  <Text style={styles.photoTileVolunteer} numberOfLines={1}>{item.volunteerName}</Text>
+                  <Text style={styles.photoTileEvent} numberOfLines={1}>{item.eventTitle}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+          ) : (
+            <View style={styles.emptyTable}>
+              <Text style={styles.emptyTableText}>No attendance photos found</Text>
+            </View>
+          )
+        ) : null}
+
+        <View style={styles.hiddenPhotoReportDetails}>
         {/* Table header */}
         <View style={styles.tableHeader}>
           <Text style={[styles.th, { flex: 2.2 }]}>Report name <Text style={styles.thSort}>↕</Text></Text>
@@ -1019,14 +1262,13 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                   >
                     <MaterialIcons name="file-download" size={20} color="#64748b" />
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => onViewReport(rep)} activeOpacity={0.7}>
-                    <MaterialIcons name="more-vert" size={20} color="#64748b" />
-                  </TouchableOpacity>
                 </View>
               </View>
             );
           })
         )}
+        </View>
+        </View>
       </View>
       )}
 
@@ -1047,6 +1289,38 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           </TouchableOpacity>
         </View>
       ) : null}
+      <Modal
+        visible={Boolean(photoPreview)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPhotoPreview(null)}
+      >
+        <View style={styles.photoViewerBackdrop}>
+          <View style={styles.photoViewerCard}>
+            <View style={styles.photoViewerHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.photoViewerTitle}>Attendance photo</Text>
+                <Text style={styles.photoViewerSubtitle} numberOfLines={1}>
+                  {photoPreview?.volunteerName || 'Volunteer'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setPhotoPreview(null)}
+                style={styles.photoViewerClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close photo preview"
+              >
+                <MaterialIcons name="close" size={24} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <Image
+              source={{ uri: photoPreview?.uri || '' }}
+              style={styles.photoViewerImage}
+              resizeMode="contain"
+            />
+          </View>
+        </View>
+      </Modal>
       <DownloadPreviewModal
         visible={Boolean(downloadPreview)}
         title={downloadPreview?.title || 'Download preview'}
@@ -1054,18 +1328,28 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         totalRows={downloadPreview?.totalRows || 0}
         previewRows={downloadPreview?.previewRows || []}
         columns={downloadPreview?.columns || []}
+        previewTables={downloadPreview?.previewTables}
+        documentTitle={downloadPreview?.documentTitle}
+        documentSubtitle={downloadPreview?.documentSubtitle}
         stats={downloadPreview ? [
-          { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
+          { label: 'File format', value: downloadPreview.photoItems ? 'ZIP archive' : 'PDF', icon: downloadPreview.photoItems ? 'photo-library' : 'picture-as-pdf' },
           { label: 'Included records', value: String(downloadPreview.recordCount ?? downloadPreview.totalRows), icon: 'description' },
         ] : undefined}
         onConfirm={() => {
           if (!downloadPreview) return;
           const pending = downloadPreview;
           setDownloadPreview(null);
-          void downloadPdfFile(pending.fileName, pending.pdf, pending.errorMessage);
+          if (pending.photoItems) {
+            void downloadPhotoBatch(pending.photoItems, pending.fileName).catch(error => {
+              console.error('Unable to download attendance photos:', error);
+              Alert.alert('Download failed', pending.errorMessage);
+            });
+          } else if (pending.pdf) {
+            void downloadPdfFile(pending.fileName, pending.pdf, pending.errorMessage);
+          }
         }}
         onCancel={() => setDownloadPreview(null)}
-        confirmText="Download PDF"
+        confirmText={downloadPreview?.photoItems ? 'Download ZIP' : 'Download PDF'}
         confirmColor="#166534"
       />
     </View>
@@ -1261,6 +1545,16 @@ const styles = StyleSheet.create({
   sectionSubtitle: { fontSize: 11, color: '#6B7280', marginTop: 2 },
   sectionHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1 },
   sectionMeta: { fontSize: 11, color: '#6B7280', fontWeight: '600' },
+  sectionToggleButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+  },
+  sectionContentCollapsed: {
+    display: 'none',
+  },
   batchDownloadButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1285,8 +1579,75 @@ const styles = StyleSheet.create({
     backgroundColor: '#ECFDF5',
   },
   clearFolderButtonText: { fontSize: 10, color: '#166534', fontWeight: '800' },
+  viewAllPhotosButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#86B89A',
+    backgroundColor: '#F0FDF4',
+  },
+  viewAllPhotosButtonText: { fontSize: 11, color: '#166534', fontWeight: '800' },
+  hiddenPhotoReportDetails: { display: 'none' },
   emptyFolderBox: { padding: 24, alignItems: 'center' },
   emptyFolderText: { color: '#9CA3AF', fontSize: 13 },
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+    padding: 14,
+  },
+  photoTile: {
+    width: 220,
+    minWidth: 170,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E7E5E4',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  photoTileImage: {
+    width: '100%',
+    height: 170,
+    backgroundColor: '#E2E8F0',
+  },
+  photoTileCaption: {
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 3,
+  },
+  photoTileVolunteer: { fontSize: 12, fontWeight: '800', color: '#1F2937' },
+  photoTileEvent: { fontSize: 10, color: '#6B7280' },
+  photoViewerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  photoViewerCard: {
+    width: '100%',
+    maxWidth: 980,
+    height: '88%',
+    backgroundColor: '#0F172A',
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  photoViewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  photoViewerTitle: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  photoViewerSubtitle: { color: '#CBD5E1', fontSize: 11, marginTop: 2 },
+  photoViewerClose: { padding: 4, marginLeft: 12 },
+  photoViewerImage: { flex: 1, width: '100%', backgroundColor: '#0F172A' },
   folderGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

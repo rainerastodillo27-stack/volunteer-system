@@ -20,6 +20,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getProjectsScreenSnapshot,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
   getAllAdminPlanningCalendars,
   requestVolunteerProjectJoin,
@@ -249,7 +250,8 @@ export default function VolunteerEventsScreen() {
       void loadData();
       return subscribeToStorageChanges(
         ['projects', 'events', 'volunteerMatches', 'volunteerProjectJoins', 'adminPlanningCalendars'],
-        loadData
+        loadData,
+        REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
   );

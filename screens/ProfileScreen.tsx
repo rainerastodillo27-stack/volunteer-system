@@ -34,6 +34,7 @@ import {
   savePartner,
   saveUser,
   saveVolunteer,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
@@ -273,7 +274,8 @@ export default function ProfileScreen() {
           void loadVolunteerProfile();
           void loadPartnerProfiles();
           void loadProjectTitles();
-        }
+        },
+        REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadPartnerProfiles, loadProjectTitles, loadVolunteerProfile])
   );
@@ -662,10 +664,13 @@ export default function ProfileScreen() {
       }
 
       const loginIdentifier = normalizedEmail || normalizedPhone;
-      await waitForCredentialSync(
-        loginIdentifier,
-        user.id
-      );
+      const credentialsChanged =
+        normalizedEmail !== (user.email || '').trim().toLowerCase() ||
+        normalizedPhone !== (user.phone || '').trim() ||
+        Boolean(newPasswordDraft.trim());
+      if (credentialsChanged) {
+        await waitForCredentialSync(loginIdentifier, user.id);
+      }
 
       closeEditModal(false);
       

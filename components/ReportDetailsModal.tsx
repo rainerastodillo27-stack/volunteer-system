@@ -20,6 +20,7 @@ import {
   openAttachmentUri,
 } from '../utils/media';
 import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
+import type { PdfTable } from '../utils/pdfDownload';
 import DownloadPreviewModal from './DownloadPreviewModal';
 
 interface ReportDetailsModalProps {
@@ -40,6 +41,9 @@ export default function ReportDetailsModal({
     fileName: string;
     pdf: string;
     previewRows: Array<Record<string, string>>;
+    previewTables: PdfTable[];
+    documentTitle: string;
+    documentSubtitle: string;
   } | null>(null);
   const { width } = useWindowDimensions();
 
@@ -75,10 +79,15 @@ export default function ReportDetailsModal({
   };
   const closeAttachmentPreview = () => setPreviewAttachmentUri(null);
   const handleDownloadReport = () => {
+    const documentTitle = report.title || 'Report';
+    const documentSubtitle = `Submitted ${formatDisplayDateTime(report.submittedAt, 'Unknown date')}`;
     setDownloadPreview({
       fileName: `${report.title}-${formatDateForFilename(report.submittedAt)}.pdf`,
       pdf: buildReportDownloadPdf(report),
       previewRows: buildReportDownloadPreviewRows(report),
+      previewTables: buildReportDownloadTables(report),
+      documentTitle,
+      documentSubtitle,
     });
   };
 
@@ -316,6 +325,9 @@ export default function ReportDetailsModal({
         recordCount={1}
         previewRows={downloadPreview?.previewRows || []}
         columns={['Field', 'Value']}
+        previewTables={downloadPreview?.previewTables}
+        documentTitle={downloadPreview?.documentTitle}
+        documentSubtitle={downloadPreview?.documentSubtitle}
         stats={[
           { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
           { label: 'Included records', value: '1', icon: 'description' },
@@ -335,6 +347,14 @@ export default function ReportDetailsModal({
 }
 
 function buildReportDownloadPdf(report: SubmittedReport): string {
+  return buildTablePdf(report.title || 'Report', {
+    subtitle: `Submitted ${formatDisplayDateTime(report.submittedAt, 'Unknown date')}`,
+    orientation: 'portrait',
+    tables: buildReportDownloadTables(report),
+  });
+}
+
+function buildReportDownloadTables(report: SubmittedReport): PdfTable[] {
   const metricRows = Object.entries(report.metrics)
     .filter(([key, value]) => {
       // Keep legacy beneficiary data stored, but omit it from the downloaded
@@ -344,10 +364,7 @@ function buildReportDownloadPdf(report: SubmittedReport): string {
     })
     .map(([key, value]) => ({ metric: formatMetricKey(key), value }));
 
-  return buildTablePdf(report.title || 'Report', {
-    subtitle: `Submitted ${formatDisplayDateTime(report.submittedAt, 'Unknown date')}`,
-    orientation: 'portrait',
-    tables: [
+  return [
       {
         title: 'Report Details',
         columns: [
@@ -380,8 +397,7 @@ function buildReportDownloadPdf(report: SubmittedReport): string {
         rows: metricRows,
         emptyMessage: 'No metrics captured.',
       },
-    ],
-  });
+  ];
 }
 
 function buildReportDownloadPreviewRows(report: SubmittedReport): Array<Record<string, string>> {

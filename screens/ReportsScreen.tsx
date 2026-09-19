@@ -14,6 +14,7 @@ import {
   submitFieldReport,
   getImpactHubReportsByUser,
   submitImpactHubReport,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
   savePartnerReport,
 } from '../models/storage';
@@ -720,7 +721,8 @@ export default function ReportsScreen({ navigation, route }: any) {
       ['partnerReports', 'projects', 'events', 'programs', 'partnerProjectApplications', 'volunteerTimeLogs', 'volunteerProjectJoins'],
       async () => {
         await loadReportsCoalesced();
-      }
+      },
+      REALTIME_STORAGE_CHANGE_OPTIONS
     );
   }, [loadReportsCoalesced]);
 

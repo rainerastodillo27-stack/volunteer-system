@@ -151,10 +151,12 @@ const CONVERSATION_CACHE_TTL_MS = 30000;
 // The directory changes much less often than messages. Reusing it avoids a
 // full user/profile read every time Messages regains focus on web or mobile.
 const MESSAGE_USERS_CACHE_TTL_MS = 60000;
-// WebSocket notifications are the primary path. This is a fast fallback for
-// hosted/mobile sessions where a proxy or network temporarily blocks WS.
-const STORAGE_CHANGE_POLL_INTERVAL_MS = 2000;
-const STORAGE_CHANGE_DEBOUNCE_MS = 200;
+// WebSocket notifications are the primary path. Keep the fallback and
+// notification debounce short so lightweight record changes reach an open
+// screen as close to real time as the network allows.
+const STORAGE_CHANGE_POLL_INTERVAL_MS = 1000;
+const STORAGE_CHANGE_RECONNECT_DELAY_MS = 500;
+const STORAGE_CHANGE_DEBOUNCE_MS = 50;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 0;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER, STORAGE_KEYS.APP_SETTINGS]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
@@ -626,7 +628,10 @@ async function connectSharedStorageSocket() {
     clearSharedStorageSocketResources(false);
     sharedStorageSocket = null;
     if (hasStorageChangeSubscribers()) {
-      sharedStorageReconnectTimer = setTimeout(connectSharedStorageSocket, 1500);
+      sharedStorageReconnectTimer = setTimeout(
+        connectSharedStorageSocket,
+        STORAGE_CHANGE_RECONNECT_DELAY_MS
+      );
     }
   };
 
@@ -5650,68 +5655,9 @@ export async function requestVolunteerProjectJoin(
   projectId: string,
   userId: string
 ): Promise<VolunteerProjectMatch> {
-  const [project, volunteer] = await Promise.all([
-    getProject(projectId),
-    getVolunteerByUserId(userId),
-  ]);
-
-  if (!project) {
-    throw new Error('Project not found.');
-  }
-
-  if (!isVolunteerJoinableEvent(project)) {
-    throw new Error('Volunteers can only join events. Open an event inside this program to continue.');
-  }
-
-  if (!volunteer) {
-    throw new Error('Volunteer profile not found.');
-  }
-
-  const existingMatches = await getVolunteerProjectMatches(volunteer.id);
-  const existingMatch = existingMatches.find(match => match.projectId === projectId) || null;
-
-  if (existingMatch?.status === 'Matched') {
-    throw new Error('You are already approved for this program.');
-  }
-
-  if (existingMatch?.status === 'Requested') {
-    throw new Error('Your join request is already pending admin approval.');
-  }
-
-  if (existingMatch?.status === 'Completed') {
-    throw new Error('You have already completed this program.');
-  }
-
-  const volunteersNeeded = Number(project.volunteersNeeded || 0);
-  if (volunteersNeeded > 0) {
-    const [joinRecords, allMatches] = await Promise.all([
-      getVolunteerProjectJoinRecords(projectId),
-      getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
-    ]);
-    const activeVolunteerCount = getActiveProjectJoinCount(
-      project,
-      joinRecords || [],
-      allMatches || [],
-      [volunteer]
-    );
-
-    if (activeVolunteerCount >= volunteersNeeded) {
-      throw new Error('This event has reached its maximum volunteer capacity and is already full.');
-    }
-  }
-
-  const requestedMatch: VolunteerProjectMatch = {
-    id: existingMatch?.id || `match-${Date.now()}`,
-    volunteerId: volunteer.id,
-    projectId,
-    status: 'Requested',
-    requestedAt: existingMatch?.requestedAt || new Date().toISOString(),
-    matchedAt: new Date().toISOString(),
-    reviewedAt: undefined,
-    reviewedBy: undefined,
-    hoursContributed: existingMatch?.hoursContributed || 0,
-  };
-
+  // The API already performs the event, volunteer, duplicate-request, and
+  // capacity checks atomically. Avoid the old client-side preflight reads so
+  // a join uses one mutation request instead of several storage requests.
   const requestPayload = await requestApiJson<{ match?: VolunteerProjectMatch | null }>(
     '/volunteer-matches/request',
     {
@@ -5725,11 +5671,20 @@ export async function requestVolunteerProjectJoin(
       }),
     },
   );
-  const savedMatch = requestPayload.match || requestedMatch;
+  const savedMatch = requestPayload.match;
+  if (!savedMatch) {
+    throw new Error('Volunteer join request did not complete.');
+  }
 
-  void notifyAdminAboutVolunteerProjectJoinRequest(projectId, volunteer).catch(error => {
-    console.error('Error notifying admin about volunteer join request:', error);
-  });
+  // Notification delivery is best effort and must not extend the join action.
+  void getVolunteerByUserId(userId)
+    .then(volunteer => {
+      if (!volunteer) {
+        return;
+      }
+      return notifyAdminAboutVolunteerProjectJoinRequest(projectId, volunteer);
+    })
+    .catch(error => console.error('Error notifying admin about volunteer join request:', error));
 
   return savedMatch;
 }
@@ -5813,63 +5768,64 @@ export async function assignVolunteerToProject(
   volunteerId: string,
   assignedBy: string
 ): Promise<VolunteerProjectMatch> {
-  const [project, volunteer, existingMatches] = await Promise.all([
-    getProject(projectId),
-    getVolunteer(volunteerId),
-    getVolunteerProjectMatches(volunteerId),
-  ]);
-
-  if (!project) {
-    throw new Error('Project not found.');
-  }
-
-  if (!isVolunteerJoinableEvent(project)) {
-    throw new Error('Volunteers can only be assigned to events.');
-  }
-
-  if (!volunteer) {
-    throw new Error('Volunteer not found.');
-  }
-
-  const existingMatch = existingMatches.find(match => match.projectId === projectId) || null;
-  if (existingMatch?.status === 'Matched') {
-    throw new Error('Volunteer is already assigned to this program.');
-  }
-
-  if (existingMatch?.status === 'Completed') {
-    throw new Error('Volunteer already completed this program.');
-  }
-
-  const assignedMatch: VolunteerProjectMatch = {
-    id: existingMatch?.id || `match-${Date.now()}`,
-    volunteerId,
-    projectId,
-    status: 'Matched',
-    requestedAt: existingMatch?.requestedAt,
-    matchedAt: new Date().toISOString(),
-    reviewedAt: new Date().toISOString(),
-    reviewedBy: assignedBy,
-    hoursContributed: existingMatch?.hoursContributed || 0,
-  };
-
-  await saveVolunteerProjectMatch(assignedMatch);
-  await Promise.all([
-    attachVolunteerToProject(projectId, volunteerId),
-    ensureVolunteerProjectJoinRecord(projectId, volunteerId, 'AdminMatch'),
-  ]);
-  await syncVolunteerEngagementStatus(volunteerId);
-
-  void notifyVolunteerAboutProjectMatchDecision(
-    projectId,
-    volunteer.userId,
-    assignedBy,
-    'Matched',
-    'assignment'
-  ).catch(error => {
-    console.error('Error notifying volunteer about assignment:', error);
+  // Keep direct assignment atomic on the backend. The previous workflow did
+  // several client-side reads and three separate writes before it returned.
+  const payload = await requestApiJson<{
+    match?: VolunteerProjectMatch | null;
+    event?: Project | null;
+    eventStorageKey?: string;
+    volunteer?: Volunteer | null;
+  }>('/volunteer-matches/assign', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ projectId, volunteerId, assignedBy }),
   });
 
-  return assignedMatch;
+  if (!payload.match) {
+    throw new Error('Volunteer assignment did not complete.');
+  }
+
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_MATCHES, payload.match);
+  if (payload.event) {
+    const eventStorageKey = payload.eventStorageKey === STORAGE_KEYS.PROJECTS
+      ? STORAGE_KEYS.PROJECTS
+      : STORAGE_KEYS.EVENTS;
+    upsertCachedStorageRecord(eventStorageKey, payload.event);
+  }
+  if (payload.volunteer) {
+    upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEERS, payload.volunteer);
+  }
+  invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS]);
+  projectsSnapshotCache.clear();
+  notifyStorageChanged([
+    STORAGE_KEYS.VOLUNTEER_MATCHES,
+    payload.eventStorageKey === STORAGE_KEYS.PROJECTS ? STORAGE_KEYS.PROJECTS : STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    STORAGE_KEYS.VOLUNTEERS,
+  ]);
+
+  // Do not make notification delivery part of the assignment response.
+  void (async () => {
+    try {
+      const volunteer = payload.volunteer || await getVolunteer(volunteerId);
+      if (!volunteer) {
+        return;
+      }
+      await notifyVolunteerAboutProjectMatchDecision(
+        projectId,
+        volunteer.userId,
+        assignedBy,
+        'Matched',
+        'assignment'
+      );
+    } catch (error) {
+      console.error('Error notifying volunteer about assignment:', error);
+    }
+  })();
+
+  return payload.match;
 }
 
 // Persists the record that tracks a volunteer's actual participation in a project.

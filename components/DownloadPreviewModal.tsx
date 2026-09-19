@@ -6,9 +6,9 @@ import {
   Modal,
   TouchableOpacity,
   ScrollView,
-  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import type { PdfTable } from '../utils/pdfDownload';
 
 interface PreviewModalProps {
   visible: boolean;
@@ -18,6 +18,14 @@ interface PreviewModalProps {
   recordCount?: number;
   previewRows: Array<Record<string, string>>;
   columns: string[];
+  /**
+   * The tables used to build the PDF. When supplied, the preview renders a
+   * document-like version of those tables instead of the legacy flat export
+   * summary. Keeping this data in the modal makes the preview match the file.
+   */
+  previewTables?: PdfTable[];
+  documentTitle?: string;
+  documentSubtitle?: string;
   stats?: {
     label: string;
     value: string;
@@ -38,6 +46,9 @@ export default function DownloadPreviewModal({
   recordCount,
   previewRows,
   columns,
+  previewTables,
+  documentTitle,
+  documentSubtitle,
   stats,
   fileSize,
   onConfirm,
@@ -46,6 +57,7 @@ export default function DownloadPreviewModal({
   confirmColor = '#2563eb',
 }: PreviewModalProps) {
   const sampleSize = Math.min(5, previewRows.length);
+  const hasStructuredPreview = Boolean(previewTables?.length);
 
   return (
     <Modal
@@ -91,57 +103,152 @@ export default function DownloadPreviewModal({
 
           {/* Preview Table */}
           <View style={styles.previewSection}>
-            <Text style={styles.previewTitle}>
-              Preview ({sampleSize} of {totalRows} rows)
-            </Text>
+            {hasStructuredPreview ? (
+              <ScrollView
+                style={styles.documentScroll}
+                contentContainerStyle={styles.documentScrollContent}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                <View style={styles.documentPage}>
+                  <Text style={styles.documentTitle}>
+                    {documentTitle || title.replace(/^Preview:\s*/i, '')}
+                  </Text>
+                  <Text style={styles.documentSubtitle}>
+                    {documentSubtitle || subtitle}
+                  </Text>
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.tableWrapper}
-            >
-              <View>
-                {/* Table Header */}
-                <View style={styles.tableHeader}>
-                  {columns.map((col, index) => (
-                    <Text
-                      key={index}
-                      style={[
-                        styles.tableHeaderCell,
-                        index === 0 && styles.firstCell,
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {col}
-                    </Text>
-                  ))}
+                  {previewTables?.map((table, tableIndex) => {
+                    const visibleRows = table.rows.length <= 8
+                      ? table.rows
+                      : table.rows.slice(0, 5);
+                    const totalWeight = table.columns.reduce(
+                      (sum, column) => sum + Math.max(0.1, column.width ?? 1),
+                      0,
+                    );
+                    const tableMinWidth = Math.max(560, table.columns.length * 108);
+
+                    return (
+                      <View key={`${table.title || 'table'}-${tableIndex}`} style={styles.documentSection}>
+                        {table.title ? (
+                          <Text style={styles.documentSectionTitle}>{table.title}</Text>
+                        ) : null}
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          style={styles.documentTableScroll}
+                        >
+                          <View style={[styles.documentTable, { minWidth: tableMinWidth }]}>
+                            <View style={styles.documentTableRow}>
+                              {table.columns.map(column => (
+                                <View
+                                  key={column.key}
+                                  style={[
+                                    styles.documentTableHeaderCell,
+                                    { flex: Math.max(0.1, column.width ?? 1) / totalWeight },
+                                  ]}
+                                >
+                                  <Text style={styles.documentTableHeaderText}>{column.label}</Text>
+                                </View>
+                              ))}
+                            </View>
+
+                            {visibleRows.length ? visibleRows.map((row, rowIndex) => (
+                              <View
+                                key={rowIndex}
+                                style={[
+                                  styles.documentTableRow,
+                                  rowIndex % 2 === 1 && styles.documentTableAlternateRow,
+                                ]}
+                              >
+                                {table.columns.map(column => (
+                                  <View
+                                    key={column.key}
+                                    style={[
+                                      styles.documentTableCell,
+                                      { flex: Math.max(0.1, column.width ?? 1) / totalWeight },
+                                    ]}
+                                  >
+                                    <Text style={styles.documentTableCellText}>
+                                      {formatPreviewValue(row[column.key])}
+                                    </Text>
+                                  </View>
+                                ))}
+                              </View>
+                            )) : (
+                              <View style={styles.documentEmptyRow}>
+                                <Text style={styles.documentEmptyText}>
+                                  {table.emptyMessage || 'No records available.'}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        </ScrollView>
+                        {visibleRows.length < table.rows.length ? (
+                          <Text style={styles.documentMoreText}>
+                            Showing {visibleRows.length} of {table.rows.length} rows
+                          </Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
                 </View>
+              </ScrollView>
+            ) : (
+              <>
+                <Text style={styles.previewTitle}>
+                  Preview ({sampleSize} of {totalRows} rows)
+                </Text>
 
-                {/* Table Rows */}
-                {previewRows.slice(0, sampleSize).map((row, rowIndex) => (
-                  <View
-                    key={rowIndex}
-                    style={[
-                      styles.tableRow,
-                      rowIndex % 2 === 0 && styles.tableRowAlternate,
-                    ]}
-                  >
-                    {columns.map((col, colIndex) => (
-                      <Text
-                        key={colIndex}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.tableWrapper}
+                >
+                  <View>
+                    {/* Table Header */}
+                    <View style={styles.tableHeader}>
+                      {columns.map((col, index) => (
+                        <Text
+                          key={index}
+                          style={[
+                            styles.tableHeaderCell,
+                            index === 0 && styles.firstCell,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {col}
+                        </Text>
+                      ))}
+                    </View>
+
+                    {/* Table Rows */}
+                    {previewRows.slice(0, sampleSize).map((row, rowIndex) => (
+                      <View
+                        key={rowIndex}
                         style={[
-                          styles.tableCell,
-                          colIndex === 0 && styles.firstCell,
+                          styles.tableRow,
+                          rowIndex % 2 === 0 && styles.tableRowAlternate,
                         ]}
-                        numberOfLines={2}
                       >
-                        {row[col] || '-'}
-                      </Text>
+                        {columns.map((col, colIndex) => (
+                          <Text
+                            key={colIndex}
+                            style={[
+                              styles.tableCell,
+                              colIndex === 0 && styles.firstCell,
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {row[col] || '-'}
+                          </Text>
+                        ))}
+                      </View>
                     ))}
                   </View>
-                ))}
-              </View>
-            </ScrollView>
+                </ScrollView>
+              </>
+            )}
           </View>
 
           {/* File Info */}
@@ -259,6 +366,98 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
+  documentScroll: {
+    flex: 1,
+    minHeight: 180,
+    maxHeight: 430,
+  },
+  documentScrollContent: {
+    paddingBottom: 2,
+  },
+  documentPage: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d7dee8',
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+  },
+  documentTitle: {
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '800',
+    color: '#123456',
+  },
+  documentSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 8,
+  },
+  documentSection: {
+    marginTop: 18,
+  },
+  documentSectionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#172b4d',
+    marginBottom: 7,
+  },
+  documentTableScroll: {
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: '#c7d2d9',
+  },
+  documentTable: {
+    backgroundColor: '#fff',
+  },
+  documentTableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#c7d2d9',
+    minHeight: 28,
+  },
+  documentTableHeaderCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 7,
+    backgroundColor: '#126b3b',
+    borderRightWidth: 1,
+    borderRightColor: '#c7d2d9',
+  },
+  documentTableHeaderText: {
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  documentTableCell: {
+    justifyContent: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 7,
+    borderRightWidth: 1,
+    borderRightColor: '#c7d2d9',
+  },
+  documentTableCellText: {
+    fontSize: 10,
+    lineHeight: 13,
+    color: '#17324d',
+  },
+  documentTableAlternateRow: {
+    backgroundColor: '#f3f8f5',
+  },
+  documentEmptyRow: {
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    backgroundColor: '#f3f8f5',
+  },
+  documentEmptyText: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  documentMoreText: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 5,
+  },
   previewTitle: {
     fontSize: 12,
     fontWeight: '700',
@@ -362,3 +561,13 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 });
+
+function formatPreviewValue(value: unknown): string {
+  if (value === undefined || value === null || value === '') {
+    return '-';
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => formatPreviewValue(item)).join(', ');
+  }
+  return String(value).replace(/\s+/g, ' ').trim() || '-';
+}

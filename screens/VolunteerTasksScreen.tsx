@@ -63,6 +63,7 @@ import {
   getAllVolunteers,
   getAllVolunteerTimeLogs,
   getProjectsScreenSnapshot,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
   updateEventTaskAssignments,
   startVolunteerTimeLog,
@@ -297,6 +298,37 @@ function getTaskVolunteerLimit(task: Pick<ProjectInternalTask, 'volunteersNeeded
   return Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1;
 }
 
+// Event membership has existed in both forms over time: some records store
+// the volunteer profile id in `volunteers`, while newer records also expose
+// the linked account id through `joinedUserIds`. Resolve both identifiers so
+// field officers can always see the people who are actually eligible for a
+// task assignment.
+function getProjectVolunteerOptions(project: Project, volunteers: Volunteer[]): Volunteer[] {
+  const volunteerByIdentifier = new Map<string, Volunteer>();
+  volunteers.forEach(volunteer => {
+    [volunteer.id, volunteer.userId]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .forEach(identifier => volunteerByIdentifier.set(identifier, volunteer));
+  });
+
+  const memberIdentifiers = [
+    ...(Array.isArray(project.volunteers) ? project.volunteers : []),
+    ...(Array.isArray(project.joinedUserIds) ? project.joinedUserIds : []),
+  ]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+
+  return Array.from(
+    new Map(
+      memberIdentifiers
+        .map(identifier => volunteerByIdentifier.get(identifier) || null)
+        .filter((volunteer): volunteer is Volunteer => volunteer !== null)
+        .map(volunteer => [volunteer.id, volunteer] as const)
+    ).values()
+  ).sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function isVolunteerAssignedToTask(
   task: ProjectInternalTask,
   volunteerId?: string | null,
@@ -502,6 +534,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
   const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
   const tasksReloadQueuedRef = useRef(false);
+  const tasksReloadForceRef = useRef(false);
   const managementDataLoadInFlightRef = useRef<Promise<void> | null>(null);
   const managementDataLoadedRef = useRef(false);
   const managementDataUserIdRef = useRef<string | null>(null);
@@ -561,7 +594,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     return request;
   }, [user?.id]);
 
-  const loadVolunteerTasks = React.useCallback(async () => {
+  const loadVolunteerTasks = React.useCallback(async (forceRefresh = false) => {
     try {
       if (!user?.id) {
         setTasks([]);
@@ -581,7 +614,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       const snapshot = await getProjectsScreenSnapshot(
         user,
         ['projects', 'volunteerProfile', 'timeLogs', 'volunteerJoinRecords'],
-        false,
+        forceRefresh,
         false,
       );
       const projects = snapshot.projects || [];
@@ -628,15 +661,19 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     }
   }, [user]);
 
-  const loadVolunteerTasksCoalesced = React.useCallback(async () => {
+  const loadVolunteerTasksCoalesced = React.useCallback(async (forceRefresh = false) => {
     if (tasksLoadInFlightRef.current) {
       tasksReloadQueuedRef.current = true;
+      tasksReloadForceRef.current = tasksReloadForceRef.current || forceRefresh;
       return;
     }
 
     do {
+      const shouldForceRefresh = forceRefresh || tasksReloadForceRef.current;
       tasksReloadQueuedRef.current = false;
-      const task = loadVolunteerTasks();
+      tasksReloadForceRef.current = false;
+      forceRefresh = false;
+      const task = loadVolunteerTasks(shouldForceRefresh);
       tasksLoadInFlightRef.current = task;
       try {
         await task;
@@ -645,6 +682,19 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       }
     } while (tasksReloadQueuedRef.current);
   }, [loadVolunteerTasks]);
+
+  const openFieldOfficerAssignmentBoard = React.useCallback(
+    (projectId: string) => {
+      setSelectedManagedEventId(projectId);
+      setShowFieldOfficerBoard(true);
+      // The board must use the latest event record so tasks created by an
+      // administrator appear immediately, even when a realtime update was
+      // missed while this screen was open.
+      void loadVolunteerTasksCoalesced(true);
+      void loadManagementData();
+    },
+    [loadManagementData, loadVolunteerTasksCoalesced]
+  );
 
   useFocusEffect(
     React.useCallback(() => {
@@ -663,7 +713,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
       async () => {
         await loadVolunteerTasksCoalesced();
-      }
+      },
+      REALTIME_STORAGE_CHANGE_OPTIONS
     );
   }, [loadVolunteerTasksCoalesced]);
 
@@ -854,10 +905,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       return [];
     }
 
-    return selectedEventProject.volunteers
-      .map(volunteerId => allVolunteers.find(volunteer => volunteer.id === volunteerId) || null)
-      .filter((volunteer): volunteer is Volunteer => volunteer !== null)
-      .sort((left, right) => left.name.localeCompare(right.name));
+    return getProjectVolunteerOptions(selectedEventProject, allVolunteers);
   }, [allVolunteers, selectedEventProject]);
 
   const managedEventVolunteerOptions = useMemo(() => {
@@ -865,10 +913,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       return [];
     }
 
-    return selectedManagedEvent.volunteers
-      .map(volunteerId => allVolunteers.find(volunteer => volunteer.id === volunteerId) || null)
-      .filter((volunteer): volunteer is Volunteer => volunteer !== null)
-      .sort((left, right) => left.name.localeCompare(right.name));
+    return getProjectVolunteerOptions(selectedManagedEvent, allVolunteers);
   }, [allVolunteers, selectedManagedEvent]);
 
   const managedEventAttendanceDateKeys = useMemo(() => {
@@ -1006,13 +1051,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         return;
       }
 
-      const assignableVolunteers = eventProject.volunteers
-        .map(joinedVolunteerId =>
-          allVolunteers.find(
-            volunteer => volunteer.id === joinedVolunteerId || volunteer.userId === joinedVolunteerId
-          ) || null
-        )
-        .filter((volunteer): volunteer is Volunteer => volunteer !== null);
+      const assignableVolunteers = getProjectVolunteerOptions(eventProject, allVolunteers);
       const assignedVolunteer = volunteerId
         ? assignableVolunteers.find(
             volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId
@@ -1465,9 +1504,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       }
 
       setSelectedTaskSection(null);
-      setSelectedManagedEventId(item.projectId);
-      setShowFieldOfficerBoard(true);
-      void loadManagementData();
+      openFieldOfficerAssignmentBoard(item.projectId);
       return;
     }
 
@@ -2335,9 +2372,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                       <TouchableOpacity
                         style={styles.manageBoardButton}
                         onPress={() => {
-                          setSelectedManagedEventId(selectedEventProject.id);
-                          setShowFieldOfficerBoard(true);
-                          void loadManagementData();
+                          openFieldOfficerAssignmentBoard(selectedEventProject.id);
                         }}
                       >
                         <MaterialIcons name="assignment-ind" size={18} color="#fff" />

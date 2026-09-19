@@ -17,6 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   getProject,
   getVolunteerProjectMatches,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
   getAllPartners,
   getAllProjects,
@@ -154,7 +155,8 @@ export default function VolunteerProjectDetailsScreen({
       loadData();
       return subscribeToStorageChanges(
         ['projects', 'events', 'volunteerMatches', 'volunteerProjectJoins'],
-        loadData
+        loadData,
+        REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
   );

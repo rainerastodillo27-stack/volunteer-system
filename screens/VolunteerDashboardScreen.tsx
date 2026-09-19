@@ -24,14 +24,14 @@ import {
   getDashboardTimelineSnapshot,
   getUnreadMessagesForUser,
   reconcileApprovedVolunteerEventMemberships,
+  REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
   subscribeToMessages,
   requestVolunteerProjectJoin,
-} from '../models/storage';
+  } from '../models/storage';
 import type { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, AdminPlanningItem, ProgramTrack, VolunteerProjectMatch } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
-import { debounce } from '../utils/navigation';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
 import { openAddGoogleCalendarEvent, fetchGoogleCalendarEvents, getStoredCalendarConfig } from '../utils/calendarSync';
 import {
@@ -430,9 +430,10 @@ export default function VolunteerDashboardScreen() {
           'adminPlanningCalendars',
           'programTracks',
         ],
-        debounce(() => {
+        () => {
           void loadDashboardData();
-        }, 250)
+        },
+        REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadDashboardData])
   );
