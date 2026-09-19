@@ -288,7 +288,8 @@ class TTLCache:
 
 # Cache for projects snapshot.
 _projects_snapshot_cache = TTLCache(ttl_seconds=300)
-_projects_snapshot_lock = threading.Lock()
+_projects_snapshot_locks: dict[str, threading.Lock] = {}
+_projects_snapshot_locks_guard = threading.Lock()
 _storage_collection_cache = TTLCache(ttl_seconds=120)
 # Direct-message writes clear this cache and are also pushed over WebSocket, so
 # a longer read TTL removes repeated database work without delaying new data.
@@ -302,6 +303,8 @@ _message_query_locks: dict[str, threading.Lock] = {}
 _message_query_locks_guard = threading.Lock()
 _message_storage_ready = False
 _message_storage_lock = threading.Lock()
+_notification_reads_ready = False
+_notification_reads_lock = threading.Lock()
 NON_CACHEABLE_COLLECTION_KEYS = {"programTracks", "programs"}
 # These fields can contain base64 images or large attachment payloads. They
 # are not needed by collection/list screens and are fetched only by an
@@ -371,6 +374,16 @@ _DEFAULT_SNAPSHOT_FIELDS = {
 }
 
 
+def _get_projects_snapshot_lock(cache_key: str) -> threading.Lock:
+    """Return a per-variant lock so cold requests do not stampede Postgres."""
+    with _projects_snapshot_locks_guard:
+        lock = _projects_snapshot_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _projects_snapshot_locks[cache_key] = lock
+        return lock
+
+
 def _get_message_query_lock(cache_key: str) -> threading.Lock:
     """Return a per-query lock so identical slow reads never pile up."""
     with _message_query_locks_guard:
@@ -404,6 +417,11 @@ class StoragePayload(BaseModel):
 # Request payload for recording an administrator notification as read.
 class NotificationReadPayload(BaseModel):
     notificationId: str
+
+
+# Request payload for recording several administrator notifications as read.
+class NotificationReadsPayload(BaseModel):
+    notificationIds: list[str] = []
 
 
 # Request payload for batch storage reads.
@@ -557,6 +575,11 @@ class MessagePayload(BaseModel):
     timestamp: str
     read: bool = False
     attachments: list[str] | None = None
+
+
+# Request payload for marking several direct messages as read in one request.
+class MessageReadsPayload(BaseModel):
+    messageIds: list[str] = []
 
 
 # Uploads are kept outside message rows. The database and realtime payload only
@@ -2758,24 +2781,33 @@ def _require_postgres() -> None:
 # separate from the general storage mirror because notification reads are
 # user-specific metadata, not application records visible to other users.
 def _ensure_notification_reads_table(connection: Any) -> None:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            create table if not exists public.notification_reads (
-              notification_reads_id text primary key,
-              user_id text not null,
-              notification_id text not null,
-              seen_at timestamptz not null default now(),
-              unique (user_id, notification_id)
+    global _notification_reads_ready
+    if _notification_reads_ready:
+        return
+
+    with _notification_reads_lock:
+        if _notification_reads_ready:
+            return
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                create table if not exists public.notification_reads (
+                  notification_reads_id text primary key,
+                  user_id text not null,
+                  notification_id text not null,
+                  seen_at timestamptz not null default now(),
+                  unique (user_id, notification_id)
+                )
+                """
             )
-            """
-        )
-        cursor.execute(
-            """
-            create index if not exists notification_reads_user_seen_idx
-            on public.notification_reads (user_id, seen_at desc)
-            """
-        )
+            cursor.execute(
+                """
+                create index if not exists notification_reads_user_seen_idx
+                on public.notification_reads (user_id, seen_at desc)
+                """
+            )
+        _notification_reads_ready = True
 
 
 # Sorts dictionaries by an ISO timestamp field in descending order.
@@ -7202,15 +7234,23 @@ def get_projects_snapshot(
         if cached_snapshot is not None:
             snapshot = cached_snapshot
         else:
-            with get_connection() as connection:
-                snapshot = _build_projects_snapshot(
-                    connection,
-                    user_id,
-                    role,
-                    requested_fields,
-                    include_images,
-                )
-            _projects_snapshot_cache.set(cache_key, snapshot)
+            # Multiple role screens can request the same cold snapshot at
+            # startup. Recheck after taking a variant-specific lock so only
+            # the first request performs the database build.
+            with _get_projects_snapshot_lock(cache_key):
+                cached_snapshot = _projects_snapshot_cache.get(cache_key)
+                if cached_snapshot is None:
+                    with get_connection() as connection:
+                        snapshot = _build_projects_snapshot(
+                            connection,
+                            user_id,
+                            role,
+                            requested_fields,
+                            include_images,
+                        )
+                    _projects_snapshot_cache.set(cache_key, snapshot)
+                else:
+                    snapshot = cached_snapshot
 
         # Apply pagination to projects if limit is specified
         all_projects = snapshot.get("projects", [])
@@ -9586,6 +9626,58 @@ async def delete_project_group_message(
     return {"deleted": deleted_message}
 
 
+@app.patch("/messages/read")
+# API endpoint that marks several direct messages as read in one transaction.
+async def mark_messages_read(
+    request: FastAPIRequest,
+    payload: MessageReadsPayload,
+) -> dict[str, list[dict[str, Any]]]:
+    session = _get_session_user(request)
+    ensure_message_storage_once()
+    from psycopg.rows import dict_row
+
+    message_ids = list(dict.fromkeys(
+        str(message_id or "").strip()
+        for message_id in (payload.messageIds or [])
+        if str(message_id or "").strip()
+    ))[:200]
+    if not message_ids:
+        return {"messages": []}
+
+    is_admin = _normalize_role(session) == "admin"
+    with get_connection() as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            if is_admin:
+                cursor.execute(
+                    """
+                    update public.messages
+                    set read = true
+                    where messages_id = any(%s::text[])
+                    returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    """,
+                    (message_ids,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    update public.messages
+                    set read = true
+                    where messages_id = any(%s::text[])
+                      and recipient_id = %s
+                    returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    """,
+                    (message_ids, str(session.get("sub") or "").strip()),
+                )
+            rows = cursor.fetchall()
+        connection.commit()
+
+    if rows:
+        _invalidate_collection_cache(["messages"])
+        for row in rows:
+            asyncio.create_task(connection_manager.broadcast_message_event(serialize_message_row(row)))
+    return {"messages": [serialize_message_row(row) for row in rows]}
+
+
 @app.patch("/messages/{message_id}/read")
 # API endpoint that marks one direct message as read.
 async def mark_message_read(request: FastAPIRequest, message_id: str) -> dict[str, Any]:
@@ -9593,31 +9685,45 @@ async def mark_message_read(request: FastAPIRequest, message_id: str) -> dict[st
     ensure_message_storage_once()
     from psycopg.rows import dict_row
 
+    normalized_message_id = str(message_id or "").strip()
+    is_admin = _normalize_role(session) == "admin"
     with get_connection() as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                """
-                select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                from public.messages
-                where messages_id = %s
-                """,
-                (message_id,),
-            )
+            if is_admin:
+                cursor.execute(
+                    """
+                    update public.messages
+                    set read = true
+                    where messages_id = %s
+                    returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    """,
+                    (normalized_message_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    update public.messages
+                    set read = true
+                    where messages_id = %s
+                      and recipient_id = %s
+                    returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                    """,
+                    (normalized_message_id, str(session.get("sub") or "").strip()),
+                )
             row = cursor.fetchone()
+
             if row is None:
-                raise HTTPException(status_code=404, detail="Message not found.")
-            if _normalize_role(session) != "admin" and str(row["recipient_id"] or "").strip() != str(session.get("sub") or "").strip():
+                # Preserve the existing 404/403 behavior only on the error
+                # path. Successful reads now need one database round trip
+                # instead of a select followed by an update.
+                cursor.execute(
+                    "select recipient_id from public.messages where messages_id = %s",
+                    (normalized_message_id,),
+                )
+                existing = cursor.fetchone()
+                if existing is None:
+                    raise HTTPException(status_code=404, detail="Message not found.")
                 raise HTTPException(status_code=403, detail="Only the recipient can mark this message as read.")
-            cursor.execute(
-                """
-                update public.messages
-                set read = true
-                where messages_id = %s
-                returning messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
-                """,
-                (message_id,),
-            )
-            row = cursor.fetchone()
         connection.commit()
 
     _invalidate_collection_cache(["messages"])
@@ -9745,6 +9851,48 @@ def mark_admin_notification_read(
             )
         connection.commit()
     return {"status": "ok"}
+
+
+@app.post("/notifications/read/batch")
+# Persists several administrator notification read states in one transaction.
+def mark_admin_notifications_read(
+    request: FastAPIRequest,
+    payload: NotificationReadsPayload,
+) -> dict[str, Any]:
+    _require_admin_session(request)
+    _require_postgres()
+    admin_user_id = str(_get_session_user(request).get("sub") or "").strip()
+    notification_ids = list(dict.fromkeys(
+        str(notification_id or "").strip()
+        for notification_id in (payload.notificationIds or [])
+        if str(notification_id or "").strip()
+    ))[:500]
+    if any(len(notification_id) > 512 for notification_id in notification_ids):
+        raise HTTPException(status_code=400, detail="Notification id is too long.")
+    if not notification_ids:
+        return {"status": "ok", "saved": 0}
+
+    with get_connection() as connection:
+        _ensure_notification_reads_table(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into public.notification_reads (
+                  notification_reads_id, user_id, notification_id, seen_at
+                )
+                select
+                  'notification-read-' || md5(random()::text || clock_timestamp()::text || notification_id),
+                  %s,
+                  notification_id,
+                  now()
+                from unnest(%s::text[]) as notification_id
+                on conflict (user_id, notification_id) do update
+                  set seen_at = excluded.seen_at
+                """,
+                (admin_user_id, notification_ids),
+            )
+        connection.commit()
+    return {"status": "ok", "saved": len(notification_ids)}
 
 
 @app.get("/storage/{key}")

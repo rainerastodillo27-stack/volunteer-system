@@ -23,8 +23,10 @@ import {
   subscribeToMessages,
   subscribeToStorageChanges,
   markMessageAsRead,
+  markMessagesAsRead,
   getAdminNotificationReadIds,
   markAdminNotificationRead,
+  markAdminNotificationsRead,
   savePartnerReport,
 } from '../models/storage';
 import { User, PartnerProjectApplication } from '../models/types';
@@ -275,6 +277,10 @@ export default function AdminNavigator() {
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [seenNotificationIds, setSeenNotificationIds] = useState<Set<string>>(() => new Set());
   const [seenNotificationUserId, setSeenNotificationUserId] = useState<string | null>(null);
+  // Read state is mutable while the realtime subscriptions stay mounted.
+  // Keeping it in a ref prevents opening one notification from recreating the
+  // subscriptions and reloading the full dashboard.
+  const seenNotificationIdsRef = React.useRef<Set<string>>(new Set());
 
   const messageUnreadCount = unreadMessages.length;
   const reportNotificationCount = unreadReports.length;
@@ -301,7 +307,9 @@ export default function AdminNavigator() {
 
   useEffect(() => {
     let cancelled = false;
-    setSeenNotificationIds(new Set());
+    const emptySeenIds = new Set<string>();
+    seenNotificationIdsRef.current = emptySeenIds;
+    setSeenNotificationIds(emptySeenIds);
     setSeenNotificationUserId(null);
 
     if (!user?.id) return undefined;
@@ -309,7 +317,9 @@ export default function AdminNavigator() {
     void getAdminNotificationReadIds()
       .then(notificationIds => {
         if (cancelled) return;
-        setSeenNotificationIds(new Set(notificationIds));
+        const nextSeenIds = new Set(notificationIds);
+        seenNotificationIdsRef.current = nextSeenIds;
+        setSeenNotificationIds(nextSeenIds);
         setSeenNotificationUserId(user.id);
       })
       .catch(() => {
@@ -347,8 +357,9 @@ export default function AdminNavigator() {
         );
 
         // Map unread messages and enrich with senderName
+        const seenIds = seenNotificationIdsRef.current;
         const enrichedMsgs = allMsgs
-          .filter(msg => !seenNotificationIds.has(`message-${msg.id}`))
+          .filter(msg => !seenIds.has(`message-${msg.id}`))
           .map(msg => {
           const sender = usersList.find(u => u.id === msg.senderId);
           return {
@@ -360,7 +371,7 @@ export default function AdminNavigator() {
 
         // Map unread reports and enrich with submitterName, projectTitle
         const unreadRpts = reports.filter(
-          r => !r.viewedBy?.includes(user.id) && !seenNotificationIds.has(`report-${r.id}`)
+          r => !r.viewedBy?.includes(user.id) && !seenIds.has(`report-${r.id}`)
         );
         const enrichedReports = unreadRpts.map(r => {
           const project = projects.find(p => p.id === r.projectId);
@@ -373,17 +384,17 @@ export default function AdminNavigator() {
         setUnreadReports(enrichedReports);
 
         // Pending user approvals
-        setPendingUsers(pUsers.filter(pendingUser => !seenNotificationIds.has(`approval-${pendingUser.id}`)));
+        setPendingUsers(pUsers.filter(pendingUser => !seenIds.has(`approval-${pendingUser.id}`)));
 
         // Pending partner applications
         const pendingApps = apps.filter(
-          a => a.status === 'Pending' && !seenNotificationIds.has(`partner-application-${a.id}`)
+          a => a.status === 'Pending' && !seenIds.has(`partner-application-${a.id}`)
         );
         setPendingPartnerApplications(pendingApps);
 
         // Pending volunteer requests
         const pendingMatches = matches.filter(
-          m => m.status === 'Requested' && !seenNotificationIds.has(`volunteer-request-${m.id}`)
+          m => m.status === 'Requested' && !seenIds.has(`volunteer-request-${m.id}`)
         );
         const enrichedMatches = pendingMatches.map(match => {
           const volunteer = volunteers.find(v => v.id === match.volunteerId);
@@ -418,7 +429,6 @@ export default function AdminNavigator() {
       unsubStorage?.();
     };
   }, [
-    seenNotificationIds,
     seenNotificationUserId,
     user?.id,
   ]);
@@ -430,14 +440,13 @@ export default function AdminNavigator() {
     setSeenNotificationIds(current => {
       const next = new Set(current);
       messagesToMark.forEach(message => next.add(`message-${message.id}`));
+      seenNotificationIdsRef.current = next;
       return next;
     });
-    await Promise.all(
-      messagesToMark.flatMap((msg) => [
-        markAdminNotificationRead(`message-${msg.id}`).catch(() => undefined),
-        markMessageAsRead(msg.id).catch(() => undefined),
-      ])
-    );
+    await Promise.all([
+      markAdminNotificationsRead(messagesToMark.map(msg => `message-${msg.id}`)).catch(() => undefined),
+      markMessagesAsRead(messagesToMark.map(msg => msg.id)).catch(() => undefined),
+    ]);
   }, [unreadMessages, user?.id]);
 
   const markReportsSeen = React.useCallback(async () => {
@@ -446,18 +455,17 @@ export default function AdminNavigator() {
     setSeenNotificationIds(current => {
       const next = new Set(current);
       reportsToMark.forEach(report => next.add(`report-${report.id}`));
+      seenNotificationIdsRef.current = next;
       return next;
     });
     setUnreadReports([]);
-    await Promise.all(
-      reportsToMark.flatMap(report => [
-        markAdminNotificationRead(`report-${report.id}`).catch(() => undefined),
-        savePartnerReport({
-          ...report,
-          viewedBy: Array.from(new Set([...(report.viewedBy || []), user.id])),
-        }).catch(() => undefined),
-      ])
-    );
+    await Promise.all([
+      markAdminNotificationsRead(reportsToMark.map(report => `report-${report.id}`)).catch(() => undefined),
+      ...reportsToMark.map(report => savePartnerReport({
+        ...report,
+        viewedBy: Array.from(new Set([...(report.viewedBy || []), user.id])),
+      }).catch(() => undefined)),
+    ]);
   }, [unreadReports, user?.id]);
 
   const markNotificationItemSeen = React.useCallback(
@@ -473,7 +481,11 @@ export default function AdminNavigator() {
       if (!itemId || !notificationType) return;
 
       const notificationId = item.id || `${notificationType}-${itemId}`;
-      setSeenNotificationIds(current => new Set(current).add(notificationId));
+      setSeenNotificationIds(current => {
+        const next = new Set(current).add(notificationId);
+        seenNotificationIdsRef.current = next;
+        return next;
+      });
       void markAdminNotificationRead(notificationId).catch(() => undefined);
 
       if (notificationType === 'message') {
@@ -529,9 +541,10 @@ export default function AdminNavigator() {
         setSeenNotificationIds(current => {
           const next = new Set(current);
           projectNotificationIds.forEach(notificationId => next.add(notificationId));
+          seenNotificationIdsRef.current = next;
           return next;
         });
-        void Promise.all(projectNotificationIds.map(notificationId => markAdminNotificationRead(notificationId).catch(() => undefined)));
+        void markAdminNotificationsRead(projectNotificationIds).catch(() => undefined);
         setPendingVolunteerRequests([]);
         setPendingPartnerApplications([]);
         return;
@@ -542,9 +555,10 @@ export default function AdminNavigator() {
         setSeenNotificationIds(current => {
           const next = new Set(current);
           userNotificationIds.forEach(notificationId => next.add(notificationId));
+          seenNotificationIdsRef.current = next;
           return next;
         });
-        void Promise.all(userNotificationIds.map(notificationId => markAdminNotificationRead(notificationId).catch(() => undefined)));
+        void markAdminNotificationsRead(userNotificationIds).catch(() => undefined);
         setPendingUsers([]);
       }
     },

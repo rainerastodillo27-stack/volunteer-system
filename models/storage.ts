@@ -5410,6 +5410,23 @@ export async function markMessageAsRead(messageId: string): Promise<void> {
   notifyWebMessageUpdate();
 }
 
+// Marks several direct messages as read in one authorized transaction.
+export async function markMessagesAsRead(messageIds: string[]): Promise<void> {
+  const normalizedIds = Array.from(
+    new Set(messageIds.map(messageId => String(messageId || '').trim()).filter(Boolean))
+  );
+  if (normalizedIds.length === 0) return;
+
+  await requestApiJson('/messages/read', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ messageIds: normalizedIds }),
+  });
+  notifyWebMessageUpdate();
+}
+
 // Returns the notification ids that the signed-in administrator has already
 // opened. These ids are stored by the API so web and native clients share the
 // same read state instead of rebuilding the bell from local React state.
@@ -5436,6 +5453,22 @@ export async function markAdminNotificationRead(notificationId: string): Promise
       body: JSON.stringify({ notificationId: normalizedId }),
     }
   );
+}
+
+// Persists several administrator notification read states in one request.
+export async function markAdminNotificationsRead(notificationIds: string[]): Promise<void> {
+  const normalizedIds = Array.from(
+    new Set(notificationIds.map(notificationId => String(notificationId || '').trim()).filter(Boolean))
+  );
+  if (normalizedIds.length === 0) return;
+
+  await requestApiJson('/notifications/read/batch', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ notificationIds: normalizedIds }),
+  });
 }
 
 export type MessageSubscriptionEvent =
