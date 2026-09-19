@@ -23,6 +23,7 @@ export type NotificationMessage = {
 
 type NotificationCenterContextValue = {
   openNotifications: (onItemPress?: () => void) => void;
+  notificationCount: number;
 };
 
 type NotificationCenterProviderProps = {
@@ -74,7 +75,7 @@ export function NotificationCenterProvider({
   }, [closeNotifications, onNotificationClick]);
 
   return (
-    <NotificationCenterContext.Provider value={{ openNotifications }}>
+    <NotificationCenterContext.Provider value={{ openNotifications, notificationCount: notifications.length }}>
       {children}
       <Modal visible={visible} animationType="fade" transparent onRequestClose={closeNotifications}>
         <Pressable style={styles.overlay} onPress={closeNotifications}>

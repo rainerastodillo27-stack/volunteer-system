@@ -33,7 +33,7 @@ export default function PartnerHomeScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<PartnerNavProp>();
   const insets = useSafeAreaInsets();
-  const { openNotifications } = useNotificationCenter();
+  const { openNotifications, notificationCount } = useNotificationCenter();
   const [partner, setPartner] = React.useState<Partner | null>(null);
 
   React.useEffect(() => {
@@ -109,7 +109,16 @@ export default function PartnerHomeScreen() {
             onPress={handleNotificationPress}
             activeOpacity={0.7}
           >
-            <MaterialIcons name="notifications-none" size={20} color="#22201B" />
+            <MaterialIcons
+              name={notificationCount > 0 ? 'notifications-active' : 'notifications-none'}
+              size={20}
+              color="#22201B"
+            />
+            {notificationCount > 0 ? (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>{notificationCount > 99 ? '99+' : notificationCount}</Text>
+              </View>
+            ) : null}
           </TouchableOpacity>
         </View>
 
@@ -363,6 +372,27 @@ const styles = StyleSheet.create({
     borderColor: '#DED2B4',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#F2E9D8',
+  },
+  notificationBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
+    lineHeight: 11,
   },
   hero: {
     marginHorizontal: 20,

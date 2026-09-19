@@ -9598,6 +9598,7 @@ async def mark_message_read(request: FastAPIRequest, message_id: str) -> dict[st
             cursor.execute(
                 """
                 select messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                from public.messages
                 where messages_id = %s
                 """,
                 (message_id,),

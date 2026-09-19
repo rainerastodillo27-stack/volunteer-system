@@ -4319,11 +4319,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       // Split refresh into a lightweight immediate load and deferred heavy loads
 
-      const refreshLight = async () => {
+      const refreshLight = async (forceRefresh = false) => {
 
         // Essential UI data loaded first to render the screen quickly
 
-        await Promise.all([loadProjects(), loadPartners()]);
+        await Promise.all([loadProjects(forceRefresh), loadPartners()]);
 
 
 
@@ -4401,7 +4401,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           // For storage updates, update light data immediately and defer heavy refreshes
 
-          void refreshLight();
+          void refreshLight(true);
 
           if (event.keys.includes('volunteerTimeLogs')) {
 
@@ -4441,14 +4441,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   // Loads all projects and refreshes the currently selected project reference.
 
-  const loadProjects = async () => {
+  const loadProjects = async (forceRefresh = false) => {
 
     try {
 
       const snapshot = await getProjectsScreenSnapshot(
         user,
         ['projects', 'programTracks', 'volunteerJoinRecords'],
-        false,
+        forceRefresh,
         true,
       );
 

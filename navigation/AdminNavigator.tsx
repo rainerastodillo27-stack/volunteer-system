@@ -347,13 +347,15 @@ export default function AdminNavigator() {
         );
 
         // Map unread messages and enrich with senderName
-        const enrichedMsgs = allMsgs.map(msg => {
+        const enrichedMsgs = allMsgs
+          .filter(msg => !seenNotificationIds.has(`message-${msg.id}`))
+          .map(msg => {
           const sender = usersList.find(u => u.id === msg.senderId);
           return {
             ...msg,
             senderName: sender ? sender.name : msg.senderId,
           };
-        });
+          });
         setUnreadMessages(enrichedMsgs);
 
         // Map unread reports and enrich with submitterName, projectTitle
@@ -425,8 +427,16 @@ export default function AdminNavigator() {
     if (!user?.id || unreadMessages.length === 0) return;
     const messagesToMark = unreadMessages;
     setUnreadMessages([]);
+    setSeenNotificationIds(current => {
+      const next = new Set(current);
+      messagesToMark.forEach(message => next.add(`message-${message.id}`));
+      return next;
+    });
     await Promise.all(
-      messagesToMark.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
+      messagesToMark.flatMap((msg) => [
+        markAdminNotificationRead(`message-${msg.id}`).catch(() => undefined),
+        markMessageAsRead(msg.id).catch(() => undefined),
+      ])
     );
   }, [unreadMessages, user?.id]);
 
