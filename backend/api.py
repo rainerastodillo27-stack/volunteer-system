@@ -1732,7 +1732,9 @@ class ConnectionManager:
 
         async def send_to_socket(socket: WebSocket) -> WebSocket | None:
             try:
-                await asyncio.wait_for(socket.send_json(payload), timeout=3)
+                # A disconnected browser/mobile tab must not hold up delivery
+                # to the active tabs or the cross-worker relay.
+                await asyncio.wait_for(socket.send_json(payload), timeout=1)
             except Exception:
                 return socket
             return None
@@ -1797,11 +1799,21 @@ class ConnectionManager:
         *,
         publish: bool = True,
     ) -> None:
+        # A read/unread or new-message event must invalidate every worker's
+        # short-lived inbox cache. Otherwise a client can receive the realtime
+        # event and then immediately read an old unread count from a different
+        # worker for up to the cache TTL.
+        _message_query_cache.clear()
         payload = {"type": "message.changed", "message": message}
         recipients = {message["senderId"], message["recipientId"]}
+        publish_task = (
+            asyncio.create_task(self._publish_message_event(message, "message.changed"))
+            if publish
+            else None
+        )
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
-        if publish:
-            await self._publish_message_event(message, "message.changed")
+        if publish_task:
+            await publish_task
 
     # Broadcasts a direct-message deletion to both participants.
     async def broadcast_message_deleted_event(
@@ -1814,6 +1826,7 @@ class ConnectionManager:
     ) -> None:
         if not message_ids:
             return
+        _message_query_cache.clear()
         payload = {
             "type": "message.deleted",
             "messageIds": message_ids,
@@ -1821,14 +1834,19 @@ class ConnectionManager:
             "recipientId": recipient_id,
         }
         recipients = {sender_id, recipient_id}
-        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
-        if publish:
-            await self._publish_cross_worker({
+        publish_task = (
+            asyncio.create_task(self._publish_cross_worker({
                 "kind": "message.deleted",
                 "messageIds": message_ids,
                 "senderId": sender_id,
                 "recipientId": recipient_id,
-            })
+            }))
+            if publish
+            else None
+        )
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish_task:
+            await publish_task
 
     # Relays a transient typing state without writing it to message storage.
     async def broadcast_typing_event(
@@ -1883,14 +1901,19 @@ class ConnectionManager:
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
         recipients.add(message["senderId"])
-        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
-        if publish:
-            await self._publish_cross_worker({
+        publish_task = (
+            asyncio.create_task(self._publish_cross_worker({
                 "kind": "project-group-message.changed",
                 "message": message,
                 "messageId": message.get("id"),
                 "projectId": project_id,
-            })
+            }))
+            if publish
+            else None
+        )
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish_task:
+            await publish_task
 
     # Broadcasts a project-group message deletion to every eligible participant.
     async def broadcast_project_group_message_deleted_event(
@@ -1909,44 +1932,59 @@ class ConnectionManager:
         }
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
-        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
-        if publish:
-            await self._publish_cross_worker({
+        publish_task = (
+            asyncio.create_task(self._publish_cross_worker({
                 "kind": "project-group-message.deleted",
                 "projectId": project_id,
                 "messageIds": message_ids,
-            })
+            }))
+            if publish
+            else None
+        )
+        await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
+        if publish_task:
+            await publish_task
 
     # Broadcasts a shared-storage change notification to all listeners.
     async def broadcast_storage_event(self, keys: list[str], *, publish: bool = True) -> None:
-        if not keys:
+        normalized_keys = list(dict.fromkeys(str(key).strip() for key in keys if str(key).strip()))
+        if not normalized_keys:
             return
 
-        payload = {"type": "storage.changed", "keys": keys}
+        payload = {"type": "storage.changed", "keys": normalized_keys}
         sockets = list(self._storage_connections)
-        if not sockets:
-            return
+
+        # Publish independently of local sockets. Previously, a worker with
+        # no local storage subscribers returned here and never relayed the
+        # event to the other API workers.
+        publish_task = (
+            asyncio.create_task(self._publish_cross_worker({
+                "kind": "storage.changed",
+                "keys": normalized_keys,
+            }))
+            if publish
+            else None
+        )
 
         async def send_to_socket(socket: WebSocket) -> WebSocket | None:
             try:
-                await asyncio.wait_for(socket.send_json(payload), timeout=3)
+                await asyncio.wait_for(socket.send_json(payload), timeout=1)
             except Exception:
                 return socket
             return None
 
-        stale = [
-            socket
-            for socket in await asyncio.gather(*(send_to_socket(socket) for socket in sockets))
-            if socket is not None
-        ]
+        stale = []
+        if sockets:
+            stale = [
+                socket
+                for socket in await asyncio.gather(*(send_to_socket(socket) for socket in sockets))
+                if socket is not None
+            ]
 
         for socket in stale:
             self.disconnect_storage(socket)
-        if publish:
-            await self._publish_cross_worker({
-                "kind": "storage.changed",
-                "keys": list(dict.fromkeys(keys)),
-            })
+        if publish_task:
+            await publish_task
 
     async def handle_cross_worker_event(self, event: dict[str, Any]) -> None:
         """Deliver a PostgreSQL bus event to this worker's live sockets."""

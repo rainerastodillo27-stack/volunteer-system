@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import { NotificationCenterProvider } from '../components/NotificationCenter';
 import { useAuth } from '../contexts/AuthContext';
-import { getUnreadMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead } from '../models/storage';
+import { getUnreadMessagesForUser, subscribeToMessages, getAllUsers, subscribeToStorageChanges, markMessageAsRead, markMessagesAsRead } from '../models/storage';
 
 export type PartnerTabParamList = {
   Home: undefined;
@@ -113,9 +113,9 @@ export default function PartnerNavigator() {
     const messagesToMark = unreadMessages;
     setUnreadMessages([]);
     setMessageUnreadCount(0);
-    void Promise.all(
-      messagesToMark.map((msg) => markMessageAsRead(msg.id).catch(() => undefined))
-    );
+    // Mark the whole inbox in one transaction so opening Messages does not
+    // create one network round-trip per notification.
+    void markMessagesAsRead(messagesToMark.map((msg) => msg.id)).catch(() => undefined);
   }, [unreadMessages, user?.id]);
 
   return (

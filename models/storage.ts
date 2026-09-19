@@ -156,7 +156,10 @@ const MESSAGE_USERS_CACHE_TTL_MS = 60000;
 // screen as close to real time as the network allows.
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 1000;
 const STORAGE_CHANGE_RECONNECT_DELAY_MS = 500;
-const STORAGE_CHANGE_DEBOUNCE_MS = 50;
+// WebSocket events already arrive after the database commit. A zero-delay
+// queue still coalesces events received in the same JS turn, while avoiding an
+// extra 50ms wait before an affected screen starts its refresh.
+const STORAGE_CHANGE_DEBOUNCE_MS = 0;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 0;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER, STORAGE_KEYS.APP_SETTINGS]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
