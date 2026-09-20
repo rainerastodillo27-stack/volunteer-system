@@ -120,6 +120,8 @@ import {
 
   getProjectMatches,
 
+  getProject,
+
   getProjectsScreenSnapshot,
 
   getStatusUpdatesByProject,
@@ -3387,6 +3389,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const [projects, setProjects] = useState<Project[]>([]);
 
+  const [isProjectsLoading, setIsProjectsLoading] = useState(true);
+
   const [planningCalendars, setPlanningCalendars] = useState<AdminPlanningCalendar[]>([]);
 
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
@@ -4442,6 +4446,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Loads all projects and refreshes the currently selected project reference.
 
   const loadProjects = async (forceRefresh = false) => {
+    const showInitialLoadingState = projects.length === 0;
+    if (showInitialLoadingState) {
+      setIsProjectsLoading(true);
+    }
 
     try {
 
@@ -4449,7 +4457,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         user,
         ['projects', 'programTracks', 'volunteerJoinRecords'],
         forceRefresh,
-        true,
+        false,
       );
 
       const allProjects = snapshot.projects || [];
@@ -4494,6 +4502,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       return [];
 
+    } finally {
+      if (showInitialLoadingState) {
+        setIsProjectsLoading(false);
+      }
     }
 
   };
@@ -5146,6 +5158,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     // Detail collections load in the background so navigation is immediate.
     void Promise.all([
+
+      // The list intentionally omits media for a faster first paint. Load the
+      // complete record, including its image, when the user opens details.
+      getProject(project.id).then(fullProject => {
+        if (!fullProject) {
+          return;
+        }
+        setSelectedProject(current => current?.id === project.id ? fullProject : current);
+      }),
 
       loadStatusUpdates(project.id),
 
@@ -23487,6 +23508,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* Collapsible/Accordion Program Panels */}
 
+                {isProjectsLoading && projects.length === 0 ? (
+
+                  <View style={{ minHeight: 280, alignItems: 'center', justifyContent: 'center', paddingVertical: 48 }}>
+
+                    <ActivityIndicator size="large" color="#166534" />
+
+                    <Text style={{ marginTop: 12, color: '#64748b', fontSize: 14, fontWeight: '700' }}>
+                      Loading projects and events...
+                    </Text>
+
+                  </View>
+
+                ) : (
+
                 <View style={styles.projectsAccordionList}>
 
                   {programSections
@@ -23964,6 +23999,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </View>
 
+                )}
+
               </View>
 
             ) : (
@@ -24042,7 +24079,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         ) : null}
 
-        {!loadError && projects.length === 0 ? (
+        {!loadError && !isProjectsLoading && projects.length === 0 ? (
 
           <View style={styles.emptyState}>
 
