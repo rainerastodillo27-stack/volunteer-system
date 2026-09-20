@@ -4299,7 +4299,16 @@ def _scope_storage_collection(
         if key == "users":
             return [item for item in items if str(item.get("id") or "").strip() in {session_user_id} or str(item.get("role") or "").strip() == "admin"]
         if key == "volunteers":
-            return [item for item in items if str(item.get("userId") or "").strip() == session_user_id]
+            visible_identifiers = _get_field_officer_event_participant_identifiers(
+                connection,
+                session_user_id,
+            )
+            return [
+                item
+                for item in items
+                if str(item.get("id") or "").strip() in visible_identifiers
+                or str(item.get("userId") or "").strip() in visible_identifiers
+            ]
         if key == "partners":
             return []
         return scoped
@@ -4364,6 +4373,76 @@ def _get_volunteer_assignment_identifiers(connection: Any, volunteer_id: str) ->
         user_id = str(volunteer.get("userId") or "").strip()
         identifiers.update(value for value in (profile_id, user_id) if value)
     return identifiers
+
+
+def _get_field_officer_event_participant_identifiers(
+    connection: Any,
+    user_id: str,
+) -> set[str]:
+    """Return participant identifiers for events supervised by this user.
+
+    Volunteer sessions normally receive only their own volunteer profile from
+    the shared ``volunteers`` collection. A field officer needs a narrowly
+    scoped exception so the assignment board can resolve the other joined
+    participants without exposing the entire volunteer directory.
+    """
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return set()
+
+    field_officer_identifiers = _get_volunteer_assignment_identifiers(
+        connection,
+        normalized_user_id,
+    )
+    if not field_officer_identifiers:
+        field_officer_identifiers.add(normalized_user_id)
+
+    events = get_postgres_hot_storage_collection(
+        connection,
+        "events",
+        include_images=False,
+    )
+    join_records = get_postgres_hot_storage_collection(
+        connection,
+        "volunteerProjectJoins",
+        include_images=False,
+    )
+    participant_identifiers: set[str] = set(field_officer_identifiers)
+
+    for event in events:
+        if not isinstance(event, dict) or not bool(event.get("isEvent")):
+            continue
+
+        is_supervised_event = any(
+            isinstance(task, dict)
+            and bool(task.get("isFieldOfficer"))
+            and _task_has_volunteer_assignment(task, field_officer_identifiers)
+            for task in (event.get("internalTasks") or [])
+        )
+        if not is_supervised_event:
+            continue
+
+        participant_identifiers.update(
+            str(value or "").strip()
+            for field in ("volunteers", "joinedUserIds")
+            for value in (event.get(field) or [])
+            if str(value or "").strip()
+        )
+
+        event_id = str(event.get("id") or "").strip()
+        if event_id:
+            participant_identifiers.update(
+                str(value or "").strip()
+                for record in join_records
+                if isinstance(record, dict)
+                and str(record.get("projectId") or "").strip() == event_id
+                and str(record.get("participationStatus") or "Active").strip()
+                in {"Active", "Completed"}
+                for value in (record.get("volunteerId"), record.get("volunteerUserId"))
+                if str(value or "").strip()
+            )
+
+    return participant_identifiers
 
 
 def _task_has_volunteer_assignment(task: dict[str, Any], identifiers: set[str]) -> bool:
@@ -8829,6 +8908,23 @@ async def update_event_task_assignments(
             for value in [*(project.get("volunteers") or []), *(project.get("joinedUserIds") or [])]
             if str(value or "").strip()
         }
+        # Join records are the authoritative membership source for newer
+        # events. Include them here as a fallback for legacy event rows whose
+        # denormalized participant arrays were not updated yet.
+        event_member_identifiers.update(
+            str(value or "").strip()
+            for record in get_postgres_hot_storage_collection(
+                connection,
+                "volunteerProjectJoins",
+                include_images=False,
+            )
+            if isinstance(record, dict)
+            and str(record.get("projectId") or "").strip() == normalized_event_id
+            and str(record.get("participationStatus") or "Active").strip()
+            in {"Active", "Completed"}
+            for value in (record.get("volunteerId"), record.get("volunteerUserId"))
+            if str(value or "").strip()
+        )
         canonical_ids: list[str] = []
         canonical_names: list[str] = []
         for requested_id in requested_volunteer_ids:

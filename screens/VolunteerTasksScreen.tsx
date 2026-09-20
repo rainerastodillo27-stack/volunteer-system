@@ -564,7 +564,10 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     }
 
     const request = Promise.all([
-      getAllVolunteers().catch(error => {
+      // The backend scopes this collection by the field officer's supervised
+      // events. Force a fresh read so an older cache containing only the
+      // signed-in officer cannot hide newly joined participants.
+      getAllVolunteers({ forceRefresh: true }).catch(error => {
         console.warn('[VolunteerTasksScreen] Volunteer list load skipped:', error);
         return [] as Volunteer[];
       }),
