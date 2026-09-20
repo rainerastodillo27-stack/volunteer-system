@@ -3463,6 +3463,50 @@ def _compress_image_data_uri(value: Any) -> Any:
     return f"{prefix}{compressed}" if compressed else value
 
 
+def _compress_project_detail_media(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep project detail responses small enough for a fast hero image load."""
+    updated_item = dict(item)
+    changed = False
+
+    compressed_image = _compress_image_data_uri(updated_item.get("imageUrl"))
+    if compressed_image != updated_item.get("imageUrl"):
+        updated_item["imageUrl"] = compressed_image
+        changed = True
+
+    attachments = updated_item.get("attachments")
+    if isinstance(attachments, list):
+        compressed_attachments: list[Any] = []
+        attachments_changed = False
+        for attachment in attachments:
+            if isinstance(attachment, str):
+                compressed_attachment = _compress_image_data_uri(attachment)
+                compressed_attachments.append(compressed_attachment)
+                attachments_changed = attachments_changed or compressed_attachment != attachment
+                continue
+
+            if not isinstance(attachment, dict):
+                compressed_attachments.append(attachment)
+                continue
+
+            compressed_attachment = dict(attachment)
+            attachment_changed = False
+            for field in ("url", "uri", "data"):
+                if field not in compressed_attachment:
+                    continue
+                compressed_value = _compress_image_data_uri(compressed_attachment.get(field))
+                if compressed_value != compressed_attachment.get(field):
+                    compressed_attachment[field] = compressed_value
+                    attachment_changed = True
+            compressed_attachments.append(compressed_attachment)
+            attachments_changed = attachments_changed or attachment_changed
+
+        if attachments_changed:
+            updated_item["attachments"] = compressed_attachments
+            changed = True
+
+    return updated_item if changed else item
+
+
 def _compress_attendance_photo(value: Any) -> Any:
     """Keep attendance uploads small without re-encoding already-small photos."""
     if not isinstance(value, str) or not value.strip():
@@ -10757,6 +10801,20 @@ def get_project_record_by_id(request: FastAPIRequest, item_id: str) -> dict[str,
 
     with get_connection() as connection:
         item, key = _postgres_get_project_like_item_by_id(connection, normalized_item_id)
+        if item is not None and key in {"projects", "events", "programs"}:
+            item = _compress_project_detail_media(item)
+            if key == "events" and not str(item.get("imageUrl") or "").strip():
+                parent_project_id = str(item.get("parentProjectId") or "").strip()
+                if parent_project_id:
+                    parent_project = _postgres_get_hot_item_by_id(
+                        connection,
+                        "projects",
+                        parent_project_id,
+                        include_media=True,
+                    )
+                    parent_image = _compress_image_data_uri((parent_project or {}).get("imageUrl"))
+                    if parent_image:
+                        item = {**item, "parentProjectImageUrl": parent_image}
     if item is None:
         raise HTTPException(status_code=404, detail="Project record not found.")
     if _normalize_role(session) == "partner":
