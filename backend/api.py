@@ -293,6 +293,17 @@ _projects_snapshot_cache = TTLCache(ttl_seconds=300)
 _projects_snapshot_locks: dict[str, threading.Lock] = {}
 _projects_snapshot_locks_guard = threading.Lock()
 _storage_collection_cache = TTLCache(ttl_seconds=120)
+_PROJECT_SNAPSHOT_CACHE_KEYS = {
+    "projects",
+    "events",
+    "programs",
+    "programTracks",
+    "volunteers",
+    "volunteerMatches",
+    "volunteerProjectJoins",
+    "partnerProjectApplications",
+    "statusUpdates",
+}
 # Direct-message writes clear this cache and are also pushed over WebSocket, so
 # a longer read TTL removes repeated database work without delaying new data.
 _message_query_cache = TTLCache(ttl_seconds=30)
@@ -1991,6 +2002,7 @@ class ConnectionManager:
         kind = str(event.get("kind") or "").strip()
         if kind == "storage.changed":
             keys = [str(key).strip() for key in (event.get("keys") or []) if str(key).strip()]
+            _invalidate_cross_worker_storage_caches(keys)
             await self.broadcast_storage_event(list(dict.fromkeys(keys)), publish=False)
             return
 
@@ -3140,6 +3152,24 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
     # Invalidate admin dashboard cache whenever any of its constituent keys change.
     if any(k in _ADMIN_DASHBOARD_KEYS for k in keys):
         _admin_dashboard_cache.delete(_ADMIN_DASHBOARD_CACHE_KEY)
+
+
+def _invalidate_cross_worker_storage_caches(keys: list[str]) -> None:
+    """Invalidate this worker after another worker commits a storage change.
+
+    The PostgreSQL realtime bus already forwards storage.changed events to
+    every API worker.  The originating worker clears its own caches during the
+    write, but the other workers must clear their process-local caches when
+    they receive the relayed event or they can serve stale project snapshots
+    until their TTL expires.
+    """
+    normalized_keys = list(dict.fromkeys(str(key).strip() for key in keys if str(key).strip()))
+    if not normalized_keys:
+        return
+
+    _invalidate_collection_cache(normalized_keys)
+    if any(key in _PROJECT_SNAPSHOT_CACHE_KEYS for key in normalized_keys):
+        _projects_snapshot_cache.clear()
 
 
 def _get_cached_collection(
