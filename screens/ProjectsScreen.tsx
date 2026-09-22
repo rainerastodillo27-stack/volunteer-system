@@ -43,6 +43,7 @@ import {
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { requestPhotoPrivacyConsent } from '../utils/photoConsent';
 import {
   getStableImageSource,
   mergeProjectRecordsPreservingMedia,
@@ -970,6 +971,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
     try {
       const attendancePhoto = await pickAttendancePhotoFromDevice();
       if (!attendancePhoto) {
+        return;
+      }
+
+      const photoConsentGiven = await requestPhotoPrivacyConsent();
+      if (!photoConsentGiven) {
         return;
       }
 

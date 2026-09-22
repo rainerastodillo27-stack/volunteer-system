@@ -87,6 +87,7 @@
     "expo-location": "~57.0.16",
     "expo-sharing": "~57.0.18",
     "expo-splash-screen": "~57.0.8",
+    "expo-video": "~57.0.4",
     "expo-web-browser": "~57.0.2",
     "firebase": "^12.17.1",
     "qrcode": "^1.5.4",

@@ -16,6 +16,7 @@ import {
 import { format, parseISO } from "date-fns";
 import ModernTheme from "../utils/modernTheme";
 import loginBackgroundImage from "../assets/about-us-2020.jpg";
+import orientationVideo from "../assets/NVC-Introductory-Video.mp4";
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -52,6 +53,7 @@ function getIsWeb(): boolean {
   return true;
 }
 import { MaterialIcons } from '@expo/vector-icons';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { Picker } from "@react-native-picker/picker";
 import {
   createUserAccount,
@@ -307,6 +309,9 @@ function getMobileRoleMismatchMessage(
 // Handles account login and volunteer or partner self-registration.
 export default function LoginScreen() {
   const isWeb = getIsWeb();
+  const orientationPlayer = useVideoPlayer(orientationVideo, player => {
+    player.loop = false;
+  });
   const { width: screenWidth } = useWindowDimensions();
   const isCompactLayout = screenWidth < 480;
   const stackSelectionCards = screenWidth < 600;
@@ -3404,16 +3409,13 @@ export default function LoginScreen() {
 
                           <Text style={styles.modalSectionLabel}>Orientation Video</Text>
                           <View style={styles.briefingVideoCard}>
-                            <View style={styles.briefingVideoPreview}>
-                              <MaterialIcons
-                                name="play-circle-outline"
-                                size={56}
-                                color="#fff"
-                              />
-                              <Text style={styles.briefingVideoPreviewText}>
-                                Watch NVC Introduction Video
-                              </Text>
-                            </View>
+                            <VideoView
+                              player={orientationPlayer}
+                              style={styles.briefingVideoPlayer}
+                              nativeControls
+                              contentFit="contain"
+                              accessibilityLabel="NVC introductory orientation video"
+                            />
                             <Text style={styles.briefingVideoTitle}>
                               About NVC Foundation, Inc.
                             </Text>
@@ -5136,6 +5138,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#1e293b",
     alignItems: "center",
     justifyContent: "center",
+    marginBottom: 12,
+  },
+  briefingVideoPlayer: {
+    width: "100%",
+    height: 210,
+    borderRadius: 12,
+    backgroundColor: "#1e293b",
     marginBottom: 12,
   },
   briefingVideoPreviewText: {

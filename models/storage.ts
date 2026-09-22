@@ -117,6 +117,10 @@ const REMOTE_STORAGE_TIMEOUT_MS = 15000;
 // validation/upsert steps. Give the native client enough time for the
 // authoritative write to finish instead of showing a false timeout at 15–20s.
 const ATTENDANCE_START_TIMEOUT_MS = 60000;
+// Registration may persist a volunteer membership sheet and uploaded ID
+// evidence before the response is returned. Keep the APK from reporting a
+// false timeout while that authoritative write is still finishing.
+const REGISTRATION_REQUEST_TIMEOUT_MS = 60000;
 const API_HEALTH_TIMEOUT_MS = 5000;
 
 // Detect mobile at runtime (not module load time) to avoid errors
@@ -3584,6 +3588,7 @@ export async function createUserAccount(input: {
         volunteerMembershipSheet: input.volunteerMembershipSheet,
       }),
     },
+    REGISTRATION_REQUEST_TIMEOUT_MS,
   );
   if (!payload.user) {
     throw new Error('Account creation did not sync correctly. Please try again.');

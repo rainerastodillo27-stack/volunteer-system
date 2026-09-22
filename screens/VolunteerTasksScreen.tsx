@@ -82,6 +82,7 @@ import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/project
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { isImageMediaUri, pickImageFromDevice, pickAttendancePhotoFromDevice } from '../utils/media';
+import { requestPhotoPrivacyConsent } from '../utils/photoConsent';
 
 type AssignedTask = ProjectInternalTask & {
   projectId: string;
@@ -801,6 +802,11 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     try {
       const attendancePhoto = await pickAttendancePhotoFromDevice();
       if (!attendancePhoto) {
+        return;
+      }
+
+      const photoConsentGiven = await requestPhotoPrivacyConsent();
+      if (!photoConsentGiven) {
         return;
       }
 

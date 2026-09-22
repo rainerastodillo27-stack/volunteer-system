@@ -185,6 +185,7 @@ module.exports = () => {
       },
       plugins: [
         'expo-font',
+        'expo-video',
         'expo-web-browser',
         [
           'expo-image-picker',

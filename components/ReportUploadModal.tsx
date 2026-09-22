@@ -23,6 +23,7 @@ import type { Project, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../m
 import { isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { useAuth } from '../contexts/AuthContext';
 import { getAttendanceWindowKey } from '../utils/attendanceSchedule';
+import PhotoPrivacyConsent from './PhotoPrivacyConsent';
 
 type MaterialIconName = keyof typeof MaterialIcons.glyphMap;
 
@@ -70,6 +71,7 @@ export default function ReportUploadModal({
   const [volunteerPraise, setVolunteerPraise] = useState('');
   const [gratitudeNote, setGratitudeNote] = useState('');
   const [selectedReportPhoto, setSelectedReportPhoto] = useState('');
+  const [photoConsentGiven, setPhotoConsentGiven] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [metrics, setMetrics] = useState({
     volunteerEventJoins: '',
@@ -364,6 +366,7 @@ export default function ReportUploadModal({
     setVolunteerPraise('');
     setGratitudeNote('');
     setSelectedReportPhoto('');
+    setPhotoConsentGiven(false);
     setIsSubmitting(false);
     setSubmissionError(null);
     setMetrics({
@@ -398,6 +401,7 @@ export default function ReportUploadModal({
       const pickedImage = await pickImageFromDevice();
       if (pickedImage) {
         setSelectedReportPhoto(pickedImage);
+        setPhotoConsentGiven(false);
       }
     } catch (error: any) {
       Alert.alert('Photo Access Needed', error?.message || 'Unable to open your photo library.');
@@ -406,6 +410,7 @@ export default function ReportUploadModal({
 
   const handleRemoveReportPhoto = useCallback(() => {
     setSelectedReportPhoto('');
+    setPhotoConsentGiven(false);
   }, []);
 
   const handleSubmit = useCallback(async () => {
@@ -415,6 +420,14 @@ export default function ReportUploadModal({
     setSubmissionError(null);
 
     if (!validateForm()) {
+      return;
+    }
+
+    if (isVolunteer && selectedReportPhoto && !photoConsentGiven) {
+      const errorMsg =
+        'Please read and accept the Child Protection and Privacy Notice before submitting this report photo.';
+      setSubmissionError(errorMsg);
+      Alert.alert('Photo Consent Required', errorMsg);
       return;
     }
 
@@ -586,6 +599,7 @@ export default function ReportUploadModal({
     volunteerMetrics.tasksCompleted,
     volunteerMetrics.volunteerEventJoins,
     selectedReportPhoto,
+    photoConsentGiven,
     volunteerTimeLogs,
     onClose,
   ]);
@@ -884,6 +898,13 @@ export default function ReportUploadModal({
               <Text style={styles.photoRemoveText}>Remove</Text>
             </TouchableOpacity>
           </View>
+          {isVolunteer ? (
+            <PhotoPrivacyConsent
+              checked={photoConsentGiven}
+              onChange={setPhotoConsentGiven}
+              disabled={isSubmitting}
+            />
+          ) : null}
         </View>
       ) : (
         <TouchableOpacity style={styles.photoButton} onPress={handlePickReportPhoto}>

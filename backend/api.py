@@ -6635,6 +6635,15 @@ def _registration_partner_category(advocacy_focus: list[str]) -> str:
     return "Disaster"
 
 
+def _registration_response_user(user: dict[str, Any]) -> dict[str, Any]:
+    """Return a small, safe registration response without credentials/media."""
+    response_user = dict(user)
+    response_user.pop("password", None)
+    response_user.pop("volunteerMembershipSheet", None)
+    response_user["hasPassword"] = True
+    return response_user
+
+
 @app.post("/auth/register")
 def auth_register(
     payload: RegistrationPayload,
@@ -6743,7 +6752,7 @@ def auth_register(
                     ["users", "volunteers"],
                 )
             return {
-                "user": saved_user,
+                "user": _registration_response_user(saved_user),
                 "message": "Registration was already submitted successfully. An administrator must approve the account before login is unlocked.",
             }
         if phone and _is_phone_already_registered(phone, connection):
@@ -6771,7 +6780,12 @@ def auth_register(
             user["volunteerMembershipSheet"] = volunteer_membership
 
         try:
-            saved_user = _postgres_upsert_hot_item(connection, "users", user)
+            # The full membership sheet belongs on the volunteer profile. It
+            # is not part of the users table, so do not scan and serialize the
+            # same potentially large media payload twice during registration.
+            user_storage_record = dict(user)
+            user_storage_record.pop("volunteerMembershipSheet", None)
+            saved_user = _postgres_upsert_hot_item(connection, "users", user_storage_record)
             changed_keys = ["users"]
             if role == "volunteer":
                 if _ensure_volunteer_profile_for_user(connection, user):
@@ -6834,9 +6848,8 @@ def auth_register(
         connection_manager.broadcast_storage_event,
         changed_keys,
     )
-    saved_user["hasPassword"] = True
     return {
-        "user": saved_user,
+        "user": _registration_response_user(saved_user),
         "message": "Registration submitted successfully. An administrator must approve the account before login is unlocked.",
     }
 
