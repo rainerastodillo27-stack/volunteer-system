@@ -10,6 +10,7 @@ import {
   getProjectsScreenSnapshot,
   getAllVolunteers,
   getAllVolunteerTimeLogs,
+  getVolunteerTimeLogsForProjects,
   getAllVolunteerProjectJoinRecords,
   submitFieldReport,
   getImpactHubReportsByUser,
@@ -227,6 +228,63 @@ function shouldDisplayReport(report: SubmittedReport): boolean {
   return report.status !== 'Rejected';
 }
 
+function normalizeProjectId(value: unknown): string {
+  return String(value || '').trim();
+}
+
+// List endpoints intentionally omit large media fields.  Never let those
+// lightweight responses replace a photo already loaded into this screen.
+function mergeReportsPreservingMedia(
+  currentReports: SubmittedReport[],
+  incomingReports: SubmittedReport[],
+): SubmittedReport[] {
+  const currentById = new Map(currentReports.map(report => [report.id, report]));
+  return incomingReports.map(report => {
+    const existing = currentById.get(report.id);
+    if (!existing) return report;
+
+    const attachments = report.attachments?.length
+      ? report.attachments
+      : report.hasAttachments !== false && existing.attachments?.length
+        ? existing.attachments
+        : report.attachments;
+    const mediaFile = report.mediaFile || (
+      report.hasMediaFile !== false ? existing.mediaFile : undefined
+    );
+
+    if (attachments === report.attachments && mediaFile === report.mediaFile) {
+      return report;
+    }
+
+    return {
+      ...report,
+      attachments,
+      mediaFile,
+      hasAttachments: attachments?.length ? true : report.hasAttachments,
+      hasMediaFile: mediaFile ? true : report.hasMediaFile,
+    };
+  });
+}
+
+function mergeTimeLogsPreservingPhotos(
+  currentLogs: VolunteerTimeLog[],
+  incomingLogs: VolunteerTimeLog[],
+): VolunteerTimeLog[] {
+  const currentById = new Map(currentLogs.map(log => [log.id, log]));
+  return incomingLogs.map(log => {
+    const existing = currentById.get(log.id);
+    if (!existing) return log;
+
+    const attendancePhoto = log.attendancePhoto || existing.attendancePhoto;
+    const completionPhoto = log.completionPhoto || existing.completionPhoto;
+    if (attendancePhoto === log.attendancePhoto && completionPhoto === log.completionPhoto) {
+      return log;
+    }
+
+    return { ...log, attendancePhoto, completionPhoto };
+  });
+}
+
 function isVolunteerAssignedToTask(
   task: { assignedVolunteerId?: string; assignedVolunteerIds?: string[] },
   volunteerId?: string | null
@@ -297,8 +355,9 @@ function buildPartnerProjectSummaries(
   return projects
     .filter(project => {
       if (project.isEvent) return false;
+      const projectId = normalizeProjectId(project.id);
       // Match by direct project ID (normal case after approval)
-      if (approvedProjectIds.has(project.id)) return true;
+      if (approvedProjectIds.has(projectId)) return true;
       // Match by programModule (fallback when cache has stale program: IDs)
       if (project.programModule && approvedProgramModules.has(project.programModule)) return true;
       // Match proposal-created projects by ID prefix
@@ -311,15 +370,15 @@ function buildPartnerProjectSummaries(
           candidate.isEvent &&
           String(candidate.parentProjectId || '').trim() === String(project.id || '').trim()
       );
-      const linkedEventIds = new Set(linkedEvents.map(event => event.id));
-      const relatedProjectIds = new Set([project.id, ...linkedEventIds]);
+      const linkedEventIds = new Set(linkedEvents.map(event => normalizeProjectId(event.id)));
+      const relatedProjectIds = new Set([project.id, ...linkedEventIds].map(normalizeProjectId));
       const partnerReports = reports
         .filter(
           report =>
             shouldDisplayReport(report) &&
             report.submitterRole === 'partner' &&
             (!partnerUserId || report.submittedBy === partnerUserId) &&
-            relatedProjectIds.has(String(report.projectId || '').trim())
+            relatedProjectIds.has(normalizeProjectId(report.projectId))
         )
         .sort(
           (left, right) =>
@@ -327,20 +386,20 @@ function buildPartnerProjectSummaries(
         );
       const volunteerReports = reports
         .filter(
-          report =>
-            shouldDisplayReport(report) &&
-            report.submitterRole === 'volunteer' &&
-            relatedProjectIds.has(String(report.projectId || ''))
+            report =>
+              shouldDisplayReport(report) &&
+              report.submitterRole === 'volunteer' &&
+              linkedEventIds.has(normalizeProjectId(report.projectId))
         )
         .sort(
           (left, right) =>
             new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
         );
       const relatedCheckedAttendanceLogs = volunteerTimeLogs.filter(
-        log => linkedEventIds.has(log.projectId) && Boolean(log.attendanceCheckedAt)
+        log => linkedEventIds.has(normalizeProjectId(log.projectId)) && Boolean(log.attendanceCheckedAt)
       );
       const relatedEventJoinRecords = volunteerJoinRecords.filter(record =>
-        linkedEventIds.has(record.projectId)
+        linkedEventIds.has(normalizeProjectId(record.projectId))
       );
 
       const volunteerAccountsMap = new Map<string, PartnerVolunteerAccountSummary>();
@@ -475,9 +534,16 @@ export default function ReportsScreen({ navigation, route }: any) {
   const [volunteerTimedInProjectIds, setVolunteerTimedInProjectIds] = useState<string[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [photoLogsRefreshVersion, setPhotoLogsRefreshVersion] = useState(0);
+  const reportMediaRequestedRef = useRef<Set<string>>(new Set());
+  const attendanceMediaRequestedRef = useRef(false);
   const [selectedReportType, setSelectedReportType] = useState<'all' | 'volunteer' | 'partner' | null>(null);
   const [showFilteredReports, setShowFilteredReports] = useState(false);
-  const [activeTopTab, setActiveTopTab] = useState<'all' | 'volunteer' | 'partner'>('all');
+  const [activeTopTab, setActiveTopTab] = useState<'all' | 'volunteer' | 'partner'>(() => {
+    if (user?.role === 'volunteer') return 'volunteer';
+    if (user?.role === 'partner') return 'partner';
+    return 'all';
+  });
   const reportsLoadInFlightRef = useRef<Promise<void> | null>(null);
   const reportsReloadQueuedRef = useRef(false);
   const hasLoadedReportsRef = useRef(false);
@@ -520,7 +586,7 @@ export default function ReportsScreen({ navigation, route }: any) {
       setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications([]);
       setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
-      setVolunteerTimeLogs(snapshot.timeLogs);
+      setVolunteerTimeLogs(current => mergeTimeLogsPreservingPhotos(current, snapshot.timeLogs));
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords || []);
       setVolunteerTimedInProjectIds(
         Array.from(
@@ -544,7 +610,7 @@ export default function ReportsScreen({ navigation, route }: any) {
       )
         .then(mediaSnapshot => {
           setProjects(mediaSnapshot.projects || []);
-          setVolunteerTimeLogs(mediaSnapshot.timeLogs || []);
+          setVolunteerTimeLogs(current => mergeTimeLogsPreservingPhotos(current, mediaSnapshot.timeLogs || []));
           setVolunteerJoinRecords(mediaSnapshot.volunteerJoinRecords || []);
           setVolunteerTimedInProjectIds(
             Array.from(
@@ -630,6 +696,10 @@ export default function ReportsScreen({ navigation, route }: any) {
 
     try {
       const allProjects = await loadProjects();
+      // Keep the web report list lightweight because desktop users can fetch
+      // the selected record on demand. Native report screens need the media
+      // available after a fresh login as well, so retain the full report
+      // payload there instead of relying on a browser-only detail fetch.
       const includeReportImages = Platform.OS !== 'web';
       const rawReports =
         user.role === 'admin' || user.role === 'partner'
@@ -640,7 +710,12 @@ export default function ReportsScreen({ navigation, route }: any) {
         rawReports
           .map(report => normalizeImpactHubReport(report, allProjects))
           .filter(shouldDisplayReport);
-      setReports(normalizedReports);
+      // A realtime storage update means previously requested media may have
+      // changed. Let the Photos view request the new full records again.
+      reportMediaRequestedRef.current.clear();
+      attendanceMediaRequestedRef.current = false;
+      setReports(currentReports => mergeReportsPreservingMedia(currentReports, normalizedReports));
+      setPhotoLogsRefreshVersion(version => version + 1);
       hasLoadedReportsRef.current = true;
 
       // Attendance logs include uploaded photos and can be much larger than
@@ -651,16 +726,8 @@ export default function ReportsScreen({ navigation, route }: any) {
           getAllVolunteerProjectJoinRecords(),
         ])
           .then(([allTimeLogs, allJoinRecords]) => {
-            setVolunteerTimeLogs(allTimeLogs || []);
+            setVolunteerTimeLogs(currentLogs => mergeTimeLogsPreservingPhotos(currentLogs, allTimeLogs || []));
             setVolunteerJoinRecords(allJoinRecords || []);
-
-            // Keep attendance photos available for the existing attendance
-            // report/photo views, but transfer them after the list is usable.
-            if (Platform.OS === 'web') {
-              void getAllVolunteerTimeLogs({ includeImages: true })
-                .then(mediaTimeLogs => setVolunteerTimeLogs(mediaTimeLogs || []))
-                .catch(error => console.warn('[ReportsScreen] Attendance photos skipped:', error));
-            }
           })
           .catch(error => {
             console.warn('[ReportsScreen] Attendance metrics load skipped:', error);
@@ -803,12 +870,12 @@ export default function ReportsScreen({ navigation, route }: any) {
   }, [partnerProjectSummaries]);
 
   const partnerAcceptedProjectIds = useMemo(
-    () => new Set(partnerAcceptedProjects.map(project => project.id)),
+    () => new Set(partnerAcceptedProjects.map(project => normalizeProjectId(project.id))),
     [partnerAcceptedProjects]
   );
 
   const partnerAcceptedEventIds = useMemo(
-    () => new Set(partnerAcceptedEventProjects.map(event => event.id)),
+    () => new Set(partnerAcceptedEventProjects.map(event => normalizeProjectId(event.id))),
     [partnerAcceptedEventProjects]
   );
 
@@ -833,20 +900,22 @@ export default function ReportsScreen({ navigation, route }: any) {
         // Partners can see volunteer reports from their approved project
         // events and their own reports attached to the approved project or
         // one of its events. Admins can review every related report.
-        return user?.role === 'admin'
-          ? true
-          : report.submitterRole === 'volunteer' || report.submittedBy === user?.id;
+        if (report.submitterRole === 'volunteer') {
+          return partnerAcceptedEventIds.has(projectId);
+        }
+
+        return user?.role === 'admin' || report.submittedBy === user?.id;
       }),
-    [partnerReportProjectIds, reports, user?.id, user?.role]
+    [partnerAcceptedEventIds, partnerReportProjectIds, reports, user?.id, user?.role]
   );
 
   const partnerVolunteerTimeLogs = useMemo(
-    () => volunteerTimeLogs.filter(log => partnerAcceptedEventIds.has(log.projectId)),
+    () => volunteerTimeLogs.filter(log => partnerAcceptedEventIds.has(normalizeProjectId(log.projectId))),
     [partnerAcceptedEventIds, volunteerTimeLogs]
   );
 
   const partnerVolunteerJoinRecords = useMemo(
-    () => volunteerJoinRecords.filter(record => partnerAcceptedEventIds.has(record.projectId)),
+    () => volunteerJoinRecords.filter(record => partnerAcceptedEventIds.has(normalizeProjectId(record.projectId))),
     [partnerAcceptedEventIds, volunteerJoinRecords]
   );
 
@@ -873,6 +942,137 @@ export default function ReportsScreen({ navigation, route }: any) {
     user?.role,
     volunteers,
   ]);
+
+  // Fetch attendance photos after the lightweight report data has rendered.
+  // Partners stay scoped to their approved connected events; admins can see
+  // attendance evidence for every event in the admin report gallery.
+  useEffect(() => {
+    if (user?.role !== 'partner' && user?.role !== 'admin') {
+      return;
+    }
+
+    if (user.role === 'admin') return;
+
+    const mediaProjectIds = Array.from(partnerAcceptedEventIds);
+    if (mediaProjectIds.length === 0) return;
+
+    let cancelled = false;
+    const mediaRequest = getVolunteerTimeLogsForProjects(mediaProjectIds, { includeImages: true });
+    void mediaRequest
+      .then(mediaTimeLogs => {
+        if (cancelled) return;
+        setVolunteerTimeLogs(currentLogs => {
+          const mergedById = new Map(currentLogs.map(log => [log.id, log]));
+          mediaTimeLogs.forEach(log => mergedById.set(log.id, log));
+          return Array.from(mergedById.values()).sort(
+            (left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime()
+          );
+        });
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.warn('[ReportsScreen] Connected event photos skipped:', error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [partnerAcceptedEventIds, photoLogsRefreshVersion, user?.role]);
+
+  const handleRequestAdminAttendanceMedia = useCallback(() => {
+    if (user?.role !== 'admin' || attendanceMediaRequestedRef.current) {
+      return;
+    }
+
+    attendanceMediaRequestedRef.current = true;
+    void getAllVolunteerTimeLogs({ includeImages: true })
+      .then(mediaTimeLogs => {
+        setVolunteerTimeLogs(currentLogs => {
+          const mergedById = new Map(currentLogs.map(log => [log.id, log]));
+          mediaTimeLogs.forEach(log => mergedById.set(log.id, log));
+          return Array.from(mergedById.values()).sort(
+            (left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime()
+          );
+        });
+      })
+      .catch(error => {
+        attendanceMediaRequestedRef.current = false;
+        console.warn('[ReportsScreen] Attendance photo gallery skipped:', error);
+      });
+  }, [user?.role]);
+
+  // Report media is fetched only when the partner dashboard identifies
+  // volunteer reports in the currently selected connected-event quarter.
+  const handleRequestPartnerReportMedia = useCallback(
+    (reportIds: string[]) => {
+      if (user?.role !== 'partner' && user?.role !== 'admin') {
+        return;
+      }
+
+      const requestedIds = new Set(reportIds.map(reportId => String(reportId || '').trim()).filter(Boolean));
+      // A report can arrive from the project-summary endpoint before it is
+      // present in the lightweight report collection. Use both sources so a
+      // connected event can still resolve its full volunteer report media.
+      const mediaSourceById = new Map<string, SubmittedReport>();
+      [
+        ...reports,
+        ...partnerProjectSummaries.flatMap(summary => [
+          ...summary.partnerReports,
+          ...summary.volunteerAccounts.flatMap(account => account.reports),
+        ]),
+      ].forEach(report => {
+        if (report?.id) mediaSourceById.set(report.id, report);
+      });
+      const pendingReports = Array.from(requestedIds)
+        .map(reportId => mediaSourceById.get(reportId))
+        .filter((report): report is SubmittedReport => Boolean(report))
+        .filter(report => !reportMediaRequestedRef.current.has(report.id));
+      if (pendingReports.length === 0) {
+        return;
+      }
+
+      pendingReports.forEach(report => reportMediaRequestedRef.current.add(report.id));
+      void Promise.all(
+        pendingReports.map(async report => {
+          try {
+            return await getPartnerReportById(report.id);
+          } catch (error) {
+            reportMediaRequestedRef.current.delete(report.id);
+            throw error;
+          }
+        })
+      )
+        .then(fullReports => {
+          const fullReportById = new Map(
+            fullReports
+              .filter((report): report is PartnerReport => Boolean(report))
+              .map(report => [report.id, report])
+          );
+          if (fullReportById.size === 0) return;
+          setReports(currentReports => {
+            const normalizedFullReports = Array.from(fullReportById.values()).map(report =>
+              normalizeImpactHubReport(report, projects)
+            );
+            const normalizedById = new Map(
+              normalizedFullReports.map(report => [report.id, report])
+            );
+            const merged = currentReports.map(report => normalizedById.get(report.id) || report);
+            const existingIds = new Set(merged.map(report => report.id));
+            normalizedFullReports.forEach(report => {
+              if (!existingIds.has(report.id)) {
+                merged.push(report);
+              }
+            });
+            return merged;
+          });
+        })
+        .catch(error => {
+          console.warn('[ReportsScreen] Volunteer report photos skipped:', error);
+        });
+    },
+    [partnerProjectSummaries, partnerVisibleReports, projects, reports, user?.role]
+  );
 
   const handleUploadReport = useCallback(
     async (
@@ -930,8 +1130,9 @@ export default function ReportsScreen({ navigation, route }: any) {
           }
         }
 
+        let savedReport: PartnerReport;
         if (reportType === 'field_report') {
-          await submitFieldReport({
+          savedReport = await submitFieldReport({
             projectId: targetProjectId,
             submitterUserId: user.id,
             submitterName: user.name,
@@ -943,7 +1144,7 @@ export default function ReportsScreen({ navigation, route }: any) {
             mediaFile: reportData.mediaFile,
           });
         } else {
-          await submitImpactHubReport({
+          savedReport = await submitImpactHubReport({
             projectId: targetProjectId,
             submitterUserId: user.id,
             submitterName: user.name,
@@ -959,6 +1160,20 @@ export default function ReportsScreen({ navigation, route }: any) {
             gratitudeNote: reportData.gratitudeNote,
           });
         }
+
+        // Keep the canonical response (including its persisted photo) in the
+        // screen immediately. A later lightweight list refresh must not make
+        // the just-submitted photo disappear.
+        const normalizedSavedReport = normalizeImpactHubReport(savedReport, projects);
+        setReports(currentReports => {
+          const nextReports = [
+            normalizedSavedReport,
+            ...currentReports.filter(report => report.id !== normalizedSavedReport.id),
+          ];
+          return nextReports.sort(
+            (left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+          );
+        });
 
         setShowUploadModal(false);
         const successMessage = user.role === 'volunteer'
@@ -995,9 +1210,10 @@ export default function ReportsScreen({ navigation, route }: any) {
 
     let fullReport: PartnerReport | null = null;
 
-    // Web report rows are intentionally lightweight. Fetch the complete
-    // record only when the user opens it so its photo/attachments still work.
-    if (Platform.OS === 'web' && !report.id.startsWith('timelog-')) {
+    // Report lists may be lightweight on web and can also come from a stale
+    // native cache. Always resolve the authoritative record when a report is
+    // opened so its photo/attachments survive relogin on every platform.
+    if (!report.id.startsWith('timelog-')) {
       try {
         fullReport = await getPartnerReportById(report.id);
         if (fullReport) {
@@ -1129,6 +1345,9 @@ export default function ReportsScreen({ navigation, route }: any) {
           }
           volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
           onViewReport={handleViewReport}
+          onRequestReportMedia={user?.role === 'admin' ? handleRequestPartnerReportMedia : undefined}
+          onRequestAttendanceMedia={user?.role === 'admin' ? handleRequestAdminAttendanceMedia : undefined}
+          mediaRefreshVersion={photoLogsRefreshVersion}
           onUploadReport={user?.role === 'partner' ? undefined : handleOpenUploadModal}
           reportType="all"
         />
@@ -1185,6 +1404,9 @@ export default function ReportsScreen({ navigation, route }: any) {
         volunteerJoinRecords={user?.role === 'partner' ? partnerVolunteerJoinRecords : volunteerJoinRecords}
         onUploadReport={user?.role === 'partner' ? undefined : handleOpenUploadModal}
         onViewReport={handleViewReport}
+        onRequestReportMedia={handleRequestPartnerReportMedia}
+        onRequestAttendanceMedia={user?.role === 'admin' ? handleRequestAdminAttendanceMedia : undefined}
+        mediaRefreshVersion={photoLogsRefreshVersion}
         loading={loading}
         onRefresh={onRefresh}
         refreshing={refreshing}
@@ -1198,9 +1420,9 @@ export default function ReportsScreen({ navigation, route }: any) {
   const renderTopTabs = () => (
     <View style={styles.topTabs}>
       {(user?.role === 'volunteer'
-        ? (['all', 'volunteer'] as const)
+        ? (['volunteer'] as const)
         : user?.role === 'partner'
-        ? (['all', 'partner'] as const)
+        ? (['partner'] as const)
         : (['all', 'volunteer', 'partner'] as const)
       ).map(tab => {
         const label = tab === 'all'

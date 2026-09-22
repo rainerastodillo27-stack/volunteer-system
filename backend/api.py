@@ -4328,12 +4328,29 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
         for partner in partner_records
         if str(partner.get("ownerUserId") or partner.get("owner_user_id") or "").strip() == normalized_user_id
     }
+
+    scoped_projects: list[dict[str, Any]] = []
     for key in ("projects", "events"):
-        for project in get_postgres_hot_storage_collection(connection, key, include_images=False):
-            if str(project.get("partnerId") or "").strip() in partner_ids:
+        records = get_postgres_hot_storage_collection(connection, key, include_images=False)
+        scoped_projects.extend(record for record in records if isinstance(record, dict))
+        for project in records:
+            if str(project.get("partnerId") or project.get("partner_id") or "").strip() in partner_ids:
                 project_id = str(project.get("id") or "").strip()
                 if project_id:
                     project_ids.add(project_id)
+
+    # Events are children of the approved project through parentProjectId. Some
+    # older event records do not carry the partner ownership field, so include
+    # descendants of the approved project explicitly for report/photo access.
+    changed = True
+    while changed:
+        changed = False
+        for project in scoped_projects:
+            project_id = str(project.get("id") or "").strip()
+            parent_project_id = str(project.get("parentProjectId") or project.get("parent_project_id") or "").strip()
+            if project_id and parent_project_id in project_ids and project_id not in project_ids:
+                project_ids.add(project_id)
+                changed = True
 
     return project_ids
 
@@ -7817,6 +7834,83 @@ def get_volunteer_logs(
                 for log in logs
                 if str(log.get("projectId") or "").strip() in joined_event_ids
             ]
+    return {"logs": logs}
+
+
+@app.get("/partner/volunteer-time-logs/media")
+# API endpoint that returns attendance media only for approved partner events.
+def get_partner_volunteer_time_log_media(
+    request: FastAPIRequest,
+    project_ids: str = "",
+    include_images: bool = True,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if session.get("role") not in {"admin", "partner"}:
+        raise HTTPException(status_code=403, detail="Only partners and admins can access partner report media.")
+
+    requested_project_ids = list(
+        dict.fromkeys(
+            value.strip()
+            for value in str(project_ids or "").split(",")
+            if value.strip()
+        )
+    )
+    if not requested_project_ids:
+        return {"logs": []}
+
+    _require_postgres()
+    with get_connection() as connection:
+        allowed_project_ids = set(requested_project_ids)
+        if session.get("role") == "partner":
+            allowed_project_ids &= _get_partner_project_scope(
+                connection,
+                str(session.get("sub") or "").strip(),
+            )
+        if not allowed_project_ids:
+            return {"logs": []}
+
+        from psycopg.rows import dict_row
+
+        pk_column = _primary_key_column("volunteerTimeLogs")
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select {pk_column} as id, volunteer_id, project_id, time_in, time_out, note,
+                       {"attendance_photo" if include_images else "null::text"} as attendance_photo,
+                       attendance_confirmed_at, attendance_checked_at,
+                       attendance_checked_by, attendance_checked_by_name,
+                       {"completion_photo" if include_images else "null::text"} as completion_photo,
+                       completion_report
+                from volunteer_time_logs
+                where project_id = any(%s)
+                order by time_in desc
+                """,
+                [list(allowed_project_ids)],
+            )
+            logs = [
+                {
+                    "id": row["id"],
+                    "volunteerId": row["volunteer_id"],
+                    "projectId": row["project_id"],
+                    "timeIn": row["time_in"],
+                    "timeOut": row["time_out"],
+                    "note": row["note"],
+                    "attendancePhoto": row["attendance_photo"],
+                    "attendanceConfirmedAt": row["attendance_confirmed_at"],
+                    "attendanceCheckedAt": row["attendance_checked_at"],
+                    "attendanceCheckedBy": row["attendance_checked_by"],
+                    "attendanceCheckedByName": row["attendance_checked_by_name"],
+                    "completionPhoto": row["completion_photo"],
+                    "completionReport": row["completion_report"],
+                }
+                for row in cursor.fetchall()
+            ]
+
+        if include_images:
+            for log in logs:
+                log["attendancePhoto"] = _compress_image_data_uri(log.get("attendancePhoto"))
+                log["completionPhoto"] = _compress_image_data_uri(log.get("completionPhoto"))
+
     return {"logs": logs}
 
 

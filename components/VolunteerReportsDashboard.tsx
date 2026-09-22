@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   View,
@@ -23,8 +23,9 @@ import type {
   SubmittedReport,
 } from '../screens/ReportsScreen';
 import type { Project, VolunteerTimeLog, VolunteerProjectJoinRecord, Volunteer } from '../models/types';
-import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
-import { getAttachmentUris, isImageMediaUri } from '../utils/media';
+import { buildTablePdf, downloadPdfFile, type PdfTable } from '../utils/pdfDownload';
+import { downloadAttachmentUri, getAttachmentUris, isImageMediaUri } from '../utils/media';
+import DownloadPreviewModal from './DownloadPreviewModal';
 
 function initialsPartner(name: string) {
   const parts = (name || 'U').trim().split(/\s+/).filter(Boolean);
@@ -46,6 +47,10 @@ function fileIconForPartner(report: any) {
   if (hasDoc) return { bg: '#DBEAFE', color: '#1D4ED8', label: 'W' };
   if (hasImg) return { bg: '#DCFCE7', color: '#16A34A', label: 'Img' };
   return { bg: '#FEE2E2', color: '#DC2626', label: 'Pdf' };
+}
+
+function normalizePartnerReportProjectId(value: unknown): string {
+  return String(value || '').trim();
 }
 
 type VolunteerReportPhotoProps = {
@@ -138,6 +143,9 @@ interface VolunteerReportsDashboardProps {
   volunteerJoinRecords?: VolunteerProjectJoinRecord[];
   onUploadReport?: () => void;
   onViewReport: (report: SubmittedReport) => void;
+  onRequestReportMedia?: (reportIds: string[]) => void;
+  onRequestAttendanceMedia?: () => void;
+  mediaRefreshVersion?: number;
   loading: boolean;
   onRefresh: () => void;
   refreshing: boolean;
@@ -655,8 +663,19 @@ export function VolunteerReportsDashboard({
                           <View style={styles.volunteerMobilePhotosContent}>
                             <View style={styles.volunteerMobilePhotoStrip}>{renderVolunteerPhotoStrip(row)}</View>
                             <Text style={styles.photoCountText}>{row.photos.length} photo{row.photos.length===1?'':'s'}</Text>
-                            <TouchableOpacity accessibilityRole="button" accessibilityLabel={`More actions for ${row.name}`}>
-                              <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
+                            <TouchableOpacity
+                              accessibilityRole="button"
+                              accessibilityLabel={`Open submitted photos for ${row.name}`}
+                              accessibilityState={{ disabled: row.photos.length === 0 }}
+                              disabled={row.photos.length === 0}
+                              onPress={() => {
+                                const firstPhoto = row.photos[0];
+                                if (firstPhoto) {
+                                  setSelectedEventPhoto({ uri: firstPhoto, name: row.name, date: row.submittedDate });
+                                }
+                              }}
+                            >
+                              <MaterialIcons name="photo-library" size={18} color={row.photos.length ? '#64748b' : '#cbd5e1'} />
                             </TouchableOpacity>
                           </View>
                         </View>
@@ -671,8 +690,19 @@ export function VolunteerReportsDashboard({
                         </View>
                         <View style={[styles.volunteerTd, { flex: 1.2, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }]}>
                           <Text style={styles.photoCountText}>{row.photos.length} photo{row.photos.length===1?'':'s'}</Text>
-                          <TouchableOpacity accessibilityRole="button" accessibilityLabel={`More actions for ${row.name}`}>
-                            <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
+                          <TouchableOpacity
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open submitted photos for ${row.name}`}
+                            accessibilityState={{ disabled: row.photos.length === 0 }}
+                            disabled={row.photos.length === 0}
+                            onPress={() => {
+                              const firstPhoto = row.photos[0];
+                              if (firstPhoto) {
+                                setSelectedEventPhoto({ uri: firstPhoto, name: row.name, date: row.submittedDate });
+                              }
+                            }}
+                          >
+                            <MaterialIcons name="photo-library" size={18} color={row.photos.length ? '#64748b' : '#cbd5e1'} />
                           </TouchableOpacity>
                         </View>
                       </>
@@ -832,6 +862,9 @@ export function PartnerReportsDashboard({
   projectSummaries = [],
   onUploadReport,
   onViewReport,
+  onRequestReportMedia,
+  onRequestAttendanceMedia,
+  mediaRefreshVersion = 0,
   loading,
   onRefresh,
   refreshing,
@@ -840,8 +873,21 @@ export function PartnerReportsDashboard({
 }: VolunteerReportsDashboardProps) {
   const [showFullDetailsModal, setShowFullDetailsModal] = useState(false);
   const [showAllPhotosModal, setShowAllPhotosModal] = useState(false);
-  const [showAllDocsModal, setShowAllDocsModal] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [selectedPhotoFolderId, setSelectedPhotoFolderId] = useState<string | null>(null);
+  const [downloadPreview, setDownloadPreview] = useState<{
+    title: string;
+    subtitle: string;
+    totalRows: number;
+    recordCount: number;
+    previewRows: Array<Record<string, string>>;
+    columns: string[];
+    previewTables: PdfTable[];
+    documentTitle: string;
+    documentSubtitle: string;
+    fileName: string;
+    pdf: string;
+  } | null>(null);
 
   const { user } = useAuth();
   const { width: viewportWidth } = useWindowDimensions();
@@ -947,58 +993,139 @@ export function PartnerReportsDashboard({
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
   }, [currentQuarter, reports]);
 
-  const [selectedReportFolderId, setSelectedReportFolderId] = useState<string | null>(null);
-
-  const reportFolders = useMemo(() => {
-    const folders = new Map<
-      string,
-      {
-        key: string;
-        project?: Project;
-        title: string;
-        reports: SubmittedReport[];
-      }
-    >();
-
-    quarterReports.forEach(report => {
-      const projectId = String(report.projectId || '').trim();
-      const project = projects.find(item => String(item.id || '').trim() === projectId);
-      const key = projectId || `title:${report.projectTitle || 'unlinked-event'}`;
-      const existing = folders.get(key);
-
-      if (existing) {
-        existing.reports.push(report);
+  // Keep the generated quarterly document complete even when a report was
+  // first received through a project summary instead of the report-list
+  // request. IDs deduplicate the two sources while preserving volunteer and
+  // partner reports from the selected quarter for both partner and admin views.
+  const quarterlyReportRecords = useMemo(() => {
+    const recordsById = new Map<string, SubmittedReport>();
+    const addReport = (report: SubmittedReport) => {
+      if (!report || report.status === 'Rejected') return;
+      const submittedAt = new Date(report.submittedAt).getTime();
+      if (
+        !Number.isFinite(submittedAt) ||
+        submittedAt < currentQuarter.startDate.getTime() ||
+        submittedAt > currentQuarter.endDate.getTime()
+      ) {
         return;
       }
+      recordsById.set(report.id, report);
+    };
 
-      folders.set(key, {
-        key,
-        project,
-        title: project?.title || report.projectTitle || 'Unlinked Event',
-        reports: [report],
+    quarterReports.forEach(addReport);
+    projectSummaries.forEach(summary => {
+      summary.partnerReports.forEach(addReport);
+      summary.volunteerAccounts.forEach(account => account.reports.forEach(addReport));
+    });
+
+    return Array.from(recordsById.values()).sort(
+      (left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+    );
+  }, [currentQuarter, projectSummaries, quarterReports]);
+
+  const [selectedReportFolderId, setSelectedReportFolderId] = useState<string | null>(null);
+
+  // Event folders are derived from the approved partner proposal summaries,
+  // not from whichever reports happen to exist. This keeps connected events
+  // visible even when they have zero reports and prevents unrelated report
+  // records from creating folders.
+  const connectedEventProjects = useMemo(() => {
+    const canonicalProjects = new Map(
+      projects.map(project => [normalizePartnerReportProjectId(project.id), project])
+    );
+    const eventsById = new Map<string, Project>();
+
+    projectSummaries.forEach(summary => {
+      summary.linkedEvents.forEach(event => {
+        if (!event.isEvent) return;
+        const eventId = normalizePartnerReportProjectId(event.id);
+        if (!eventId) return;
+        eventsById.set(eventId, canonicalProjects.get(eventId) || event);
       });
     });
 
-    return Array.from(folders.values()).sort((left, right) => {
-      const leftDate = new Date(left.project?.startDate || left.reports[0]?.submittedAt || 0).getTime();
-      const rightDate = new Date(right.project?.startDate || right.reports[0]?.submittedAt || 0).getTime();
-      return rightDate - leftDate;
+    return Array.from(eventsById.values()).sort((left, right) => {
+      const leftDate = new Date(left.startDate || left.createdAt || 0).getTime();
+      const rightDate = new Date(right.startDate || right.createdAt || 0).getTime();
+      return rightDate - leftDate || left.title.localeCompare(right.title);
     });
-  }, [projects, quarterReports]);
+  }, [projectSummaries, projects]);
+
+  const connectedEventIds = useMemo(
+    () => new Set(connectedEventProjects.map(event => normalizePartnerReportProjectId(event.id))),
+    [connectedEventProjects]
+  );
+
+  const connectedEventReports = useMemo(
+    () =>
+      quarterlyReportRecords.filter(report =>
+        connectedEventIds.has(normalizePartnerReportProjectId(report.projectId))
+      ),
+    [connectedEventIds, quarterlyReportRecords]
+  );
+
+  // Ask the parent for report attachments only for volunteer reports in the
+  // selected connected-event quarter. The initial report list stays lightweight
+  // and changing quarters fetches only the newly visible media.
+  useEffect(() => {
+    if (!onRequestReportMedia) return;
+    const reportIds = connectedEventReports
+      .filter(report => report.submitterRole === 'volunteer')
+      .map(report => report.id);
+    if (reportIds.length > 0) {
+      onRequestReportMedia(Array.from(new Set(reportIds)));
+    }
+  }, [connectedEventReports, onRequestReportMedia]);
+
+  // The admin report list is intentionally loaded without image bytes first.
+  // Request the full attendance records when this dashboard is opened so the
+  // connected-event photo section can render attendance and completion photos.
+  useEffect(() => {
+    if (!onRequestAttendanceMedia) return;
+    onRequestAttendanceMedia();
+  }, [mediaRefreshVersion, onRequestAttendanceMedia]);
+
+  const reportFolders = useMemo(() => {
+    return connectedEventProjects.map(event => {
+      const eventId = normalizePartnerReportProjectId(event.id);
+      return {
+        key: eventId,
+        project: event,
+        title: event.title || 'Untitled Event',
+        reports: connectedEventReports.filter(
+          report => normalizePartnerReportProjectId(report.projectId) === eventId
+        ),
+      };
+    });
+  }, [connectedEventProjects, connectedEventReports]);
 
   const selectedReportFolder = useMemo(
     () => reportFolders.find(folder => folder.key === selectedReportFolderId) || null,
     [reportFolders, selectedReportFolderId]
   );
 
-  const hasQuarterReport = quarterReports.length > 0;
-  const activeReport = quarterReports.find(report => report.submitterRole === 'partner') || quarterReports[0] || null;
+  useEffect(() => {
+    if (selectedReportFolderId && !selectedReportFolder) {
+      setSelectedReportFolderId(null);
+    }
+  }, [selectedReportFolder, selectedReportFolderId]);
+
+  const hasQuarterReport = quarterlyReportRecords.length > 0;
+  const activeReport =
+    quarterlyReportRecords.find(report => report.submitterRole === 'partner') ||
+    quarterlyReportRecords[0] ||
+    null;
   const activeSummary = useMemo(() => {
     if (!activeReport) return null;
     return (
       projectSummaries.find(summary =>
-        summary.project.id === activeReport.projectId ||
-        summary.linkedEvents.some(event => event.id === activeReport.projectId)
+        normalizePartnerReportProjectId(summary.project.id) ===
+          normalizePartnerReportProjectId(activeReport.projectId) ||
+        summary.linkedEvents.some(
+          event =>
+            normalizePartnerReportProjectId(event.id) ===
+            normalizePartnerReportProjectId(activeReport.projectId)
+        )
       ) ||
       projectSummaries[0] ||
       null
@@ -1042,35 +1169,33 @@ export function PartnerReportsDashboard({
 
   const eventsConductedCount = useMemo(() => {
     if (!hasQuarterReport) return 0;
-    const quarterReportProjectIds = new Set(quarterReports.map(report => report.projectId).filter(Boolean));
-    const quarterEvents = projects.filter(project =>
-      project.isEvent &&
-      (quarterReportProjectIds.has(project.id) || (
-        project.startDate &&
-        new Date(project.startDate) >= currentQuarter.startDate &&
-        new Date(project.startDate) <= currentQuarter.endDate
-      ))
+    const quarterReportProjectIds = new Set(
+      connectedEventReports.map(report => normalizePartnerReportProjectId(report.projectId))
+    );
+    const quarterEvents = connectedEventProjects.filter(event =>
+      quarterReportProjectIds.has(normalizePartnerReportProjectId(event.id)) || (
+        event.startDate &&
+        new Date(event.startDate) >= currentQuarter.startDate &&
+        new Date(event.startDate) <= currentQuarter.endDate
+      )
     );
     return new Set(quarterEvents.map(event => event.id)).size;
-  }, [currentQuarter, hasQuarterReport, projects, quarterReports]);
+  }, [connectedEventProjects, connectedEventReports, currentQuarter, hasQuarterReport]);
   const eventsTrend = '—';
 
   const volunteersCount = useMemo(() => {
     if (!hasQuarterReport) return 0;
     const identifiers = new Set<string>();
-    quarterReports
+    connectedEventReports
       .filter(report => report.submitterRole === 'volunteer')
       .forEach(report => identifiers.add(report.submittedBy || report.submitterName));
     volunteerJoinRecords.forEach(record => {
-      if (
-        record.projectId &&
-        projects.some(project => project.id === record.projectId && project.isEvent)
-      ) {
+      if (connectedEventIds.has(normalizePartnerReportProjectId(record.projectId))) {
         identifiers.add(record.volunteerId || record.volunteerUserId || record.volunteerName);
       }
     });
     return identifiers.size;
-  }, [hasQuarterReport, projects, quarterReports, volunteerJoinRecords]);
+  }, [connectedEventIds, connectedEventReports, hasQuarterReport, volunteerJoinRecords]);
   const volunteerTrend = '—';
 
   // Sectors partner dynamic data - empty neutral state when no report
@@ -1133,38 +1258,75 @@ export function PartnerReportsDashboard({
     [currentQuarter, activeReport, hasQuarterReport]
   );
 
-  const handleDownloadDocument = (document: PartnerQuarterlyDocument) => {
-    // Every report download is generated from the current canonical report
-    // data, so attached uploads and generated summaries share the same
-    // printable table structure.
-    void downloadPdfFile(
-      `${document.id}-${currentQuarter.label.replace(/\s+/g, '-')}.pdf`,
-      buildPartnerQuarterlyReportPdf({
-        title: document.title,
-        quarterLabel: currentQuarter.label,
-        reportingPeriod: currentQuarter.periodLabel,
-        organization: orgName,
-        program: programTitle,
-        status: reportStatus,
-        submittedOn,
-        report: activeReport,
-        summary: activeSummary,
-        reports: quarterReports,
-      })
-    );
+  const buildQuarterlyReportInput = () => ({
+    title: generatedDocuments[0]?.title || `${currentQuarter.label} Quarterly Report.pdf`,
+    quarterLabel: currentQuarter.label,
+    reportingPeriod: currentQuarter.periodLabel,
+    organization: orgName,
+    program: programTitle,
+    status: reportStatus,
+    submittedOn,
+    report: activeReport,
+    summary: activeSummary,
+    reports: quarterlyReportRecords,
+  });
+
+  const handlePreviewDocument = (document: PartnerQuarterlyDocument) => {
+    const input = buildQuarterlyReportInput();
+    const previewTables = buildPartnerQuarterlyReportTables(input);
+    const overviewRows = previewTables[0]?.rows || [];
+
+    setDownloadPreview({
+      title: `Preview: ${document.title}`,
+      subtitle: 'Review the quarterly report before downloading the PDF',
+      totalRows: overviewRows.length,
+      recordCount: quarterlyReportRecords.length,
+      previewRows: overviewRows.map(row => ({
+        Field: String(row.field ?? ''),
+        Value: String(row.value ?? ''),
+      })),
+      columns: ['Field', 'Value'],
+      previewTables,
+      documentTitle: document.title,
+      documentSubtitle: `${currentQuarter.label} - ${currentQuarter.periodLabel}`,
+      fileName: `${document.id}-${currentQuarter.label.replace(/\s+/g, '-')}`,
+      pdf: buildPartnerQuarterlyReportPdf(input),
+    });
   };
 
-  // Volunteer photos
-  const volunteerPhotos = useMemo(() => {
-    const list: Array<{ id: string; uri: string; date: string; name: string; photosCount: number }> = [];
+  // Volunteer photos. The photo browser has its own event-folder selection so
+  // it remains usable even when the report folder above is closed or empty.
+  const allVolunteerPhotos = useMemo(() => {
+    const list: Array<{
+      id: string;
+      uri: string;
+      date: string;
+      name: string;
+      eventId: string;
+      eventTitle: string;
+      sourceLabel: string;
+      photosCount: number;
+    }> = [];
     const seenUris = new Set<string>();
     const volunteerById = new Map(volunteers.map(v => [v.id, v]));
     const volunteerByUserId = new Map(volunteers.map(v => [v.userId, v]));
+    const eventById = new Map(
+      connectedEventProjects.map(event => [normalizePartnerReportProjectId(event.id), event])
+    );
 
-    const addPhoto = (id: string, uri: string, date: string, name: string, photosCount: number) => {
+    const addPhoto = (
+      id: string,
+      uri: string,
+      date: string,
+      name: string,
+      eventId: string,
+      eventTitle: string,
+      sourceLabel: string,
+      photosCount: number,
+    ) => {
       if (!uri || !isImageMediaUri(uri) || seenUris.has(uri)) return;
       seenUris.add(uri);
-      list.push({ id, uri, date, name, photosCount });
+      list.push({ id, uri, date, name, eventId, eventTitle, sourceLabel, photosCount });
     };
 
     const isWithinQuarter = (value?: string) => {
@@ -1177,27 +1339,86 @@ export function PartnerReportsDashboard({
 
     volunteerTimeLogs.forEach(log => {
       if (!isWithinQuarter(log.timeIn)) return;
+      const event = eventById.get(normalizePartnerReportProjectId(log.projectId));
+      if (!event) return;
       const v = volunteerById.get((log as any).volunteerId) || volunteerByUserId.get((log as any).volunteerId);
       const name = v?.name || (log as any).volunteerName || 'Volunteer';
       const date = log.timeIn
         ? new Date(log.timeIn).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
         : 'Date unavailable';
-      addPhoto(`${log.id}-attendance`, (log as any).attendancePhoto, date, name, 1);
-      addPhoto(`${log.id}-completion`, (log as any).completionPhoto, date, name, 1);
+      addPhoto(
+        `${log.id}-attendance`,
+        (log as any).attendancePhoto,
+        date,
+        name,
+        normalizePartnerReportProjectId(log.projectId),
+        event.title,
+        'Attendance photo',
+        1,
+      );
+      addPhoto(
+        `${log.id}-completion`,
+        (log as any).completionPhoto,
+        date,
+        name,
+        normalizePartnerReportProjectId(log.projectId),
+        event.title,
+        'Completion photo',
+        1,
+      );
     });
 
-    reports.forEach(r => {
+    // Use the same connected-event report set that drives the event folders.
+    // Project summaries can arrive before the lightweight report list, and the
+    // parent fills in their media asynchronously with getPartnerReportById.
+    connectedEventReports.forEach(r => {
       if (!isWithinQuarter(r.submittedAt)) return;
+      if (r.submitterRole !== 'volunteer') return;
+      const event = eventById.get(normalizePartnerReportProjectId(r.projectId));
+      if (!event) return;
       const date = new Date(r.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       const name = r.submitterName || 'Volunteer';
-      addPhoto(`${r.id}-media`, r.mediaFile || '', date, name, 1);
-      (r.attachments || []).forEach((att, idx) => {
-        if (att.type === 'image') addPhoto(`${r.id}-${idx}`, att.url, date, name, 1);
+      const eventId = normalizePartnerReportProjectId(r.projectId);
+      addPhoto(`${r.id}-media`, r.mediaFile || '', date, name, eventId, event.title, 'Report photo', 1);
+      getAttachmentUris(r.attachments).forEach((uri, idx) => {
+        addPhoto(`${r.id}-${idx}`, uri, date, name, eventId, event.title, 'Report photo', 1);
       });
     });
 
     return list;
-  }, [volunteerTimeLogs, reports, volunteers, currentQuarter]);
+  }, [connectedEventProjects, connectedEventReports, volunteerTimeLogs, volunteers, currentQuarter]);
+
+  const photoFolders = useMemo(
+    () => connectedEventProjects.map(event => {
+      const eventId = normalizePartnerReportProjectId(event.id);
+      const photos = allVolunteerPhotos.filter(photo => photo.eventId === eventId);
+      return {
+        key: eventId,
+        title: event.title || 'Untitled Event',
+        project: event,
+        photos,
+      };
+    }),
+    [allVolunteerPhotos, connectedEventProjects]
+  );
+
+  const selectedPhotoFolder = useMemo(
+    () => photoFolders.find(folder => folder.key === selectedPhotoFolderId) || null,
+    [photoFolders, selectedPhotoFolderId]
+  );
+
+  useEffect(() => {
+    if (selectedPhotoFolderId && !selectedPhotoFolder) {
+      setSelectedPhotoFolderId(null);
+    }
+  }, [selectedPhotoFolder, selectedPhotoFolderId]);
+
+  const volunteerPhotos = useMemo(
+    () => selectedPhotoFolderId
+      ? allVolunteerPhotos.filter(photo => photo.eventId === selectedPhotoFolderId)
+      : [],
+    [allVolunteerPhotos, selectedPhotoFolderId]
+  );
 
   const selectedVolunteerPhoto = useMemo(() => {
     const index = selectedPhotoIndex ?? 0;
@@ -1206,7 +1427,16 @@ export function PartnerReportsDashboard({
 
   const handleDownloadReport = () => {
     const reportDocument = generatedDocuments[0];
-    handleDownloadDocument(reportDocument);
+    handlePreviewDocument(reportDocument);
+  };
+
+  const handleDownloadPhoto = async (photo: (typeof volunteerPhotos)[number]) => {
+    try {
+      await downloadAttachmentUri(photo.uri, `volunteer-photo-${photo.id}`);
+    } catch (error) {
+      console.error('Unable to download volunteer photo:', error);
+      Alert.alert('Download failed', 'Unable to download this volunteer photo on this device.');
+    }
   };
 
   if (loading) {
@@ -1366,18 +1596,6 @@ export function PartnerReportsDashboard({
               <View>
                 <Text style={{ fontSize: 11, fontWeight: '600', color: '#94a3b8' }}>Reporting Period</Text>
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#1e293b' }}>{reportingPeriod}</Text>
-              </View>
-            </View>
-
-            {/* Divider */}
-            <View style={{ width: isCompactLayout ? '100%' : 1, height: isCompactLayout ? 1 : 32, backgroundColor: '#e2e8f0' }} />
-
-            {/* Submitted On */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: isCompactLayout ? '100%' : undefined }}>
-              <MaterialIcons name="schedule" size={20} color="#64748b" />
-              <View>
-                <Text style={{ fontSize: 11, fontWeight: '600', color: '#94a3b8' }}>Submitted On</Text>
-                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1e293b' }}>{submittedOn}</Text>
               </View>
             </View>
 
@@ -1624,97 +1842,7 @@ export function PartnerReportsDashboard({
           </View>
         </View>}
 
-        {/* 4. Middle Section: Report Documents */}
-        <View style={{ flexDirection: isCompactLayout ? 'column' : 'row', gap: 16, flexWrap: 'wrap' }}>
-
-          {/* Right Card: Report Documents */}
-          <View
-            style={{
-              flex: 1,
-              minWidth: 0,
-              width: isCompactLayout ? '100%' : undefined,
-              backgroundColor: '#ffffff',
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: '#e2e8f0',
-              padding: 20,
-              justifyContent: 'space-between',
-              gap: 16,
-            }}
-          >
-            <View style={{ gap: 14 }}>
-              <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a' }}>Report Documents</Text>
-              <View style={{ gap: 10 }}>
-                {generatedDocuments.map(doc => (
-                  <View
-                    key={doc.id}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      paddingVertical: 4,
-                    }}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                      <View
-                        style={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 6,
-                          backgroundColor: doc.type === 'pdf' ? '#FEE2E2' : '#DCFCE7',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderWidth: 1,
-                          borderColor: doc.type === 'pdf' ? '#FECACA' : '#BBF7D0',
-                        }}
-                      >
-                        <Text
-                          style={{
-                            fontSize: 10,
-                            fontWeight: '900',
-                            color: doc.type === 'pdf' ? '#DC2626' : '#16A34A',
-                          }}
-                        >
-                          {doc.type === 'pdf' ? 'Abc' : 'Xl'}
-                        </Text>
-                      </View>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }} numberOfLines={2}>
-                          {doc.title}
-                        </Text>
-                        <Text style={{ fontSize: 11, color: '#64748b' }}>{doc.size}</Text>
-                      </View>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => handleDownloadDocument(doc)}
-                      activeOpacity={0.7}
-                      style={{ padding: 4 }}
-                    >
-                      <MaterialIcons name="file-download" size={20} color="#64748b" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            </View>
-            <TouchableOpacity
-              style={{
-                alignSelf: 'flex-start',
-                backgroundColor: '#F1F5F9',
-                paddingHorizontal: 14,
-                paddingVertical: 8,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: '#E2E8F0',
-              }}
-              activeOpacity={0.7}
-              onPress={() => setShowAllDocsModal(true)}
-            >
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#334155' }}>View All Documents</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* 5. Reports grouped inside their event folders */}
+        {/* Reports grouped inside their event folders */}
         <View
           style={{
             backgroundColor: '#ffffff',
@@ -1748,9 +1876,16 @@ export function PartnerReportsDashboard({
                 : `${reportFolders.length} event${reportFolders.length === 1 ? '' : 's'}`}
             </Text>
           </View>
-          {quarterReports.length === 0 ? (
-            <Text style={{ fontSize: 12, color: '#64748b' }}>No reports were submitted for {currentQuarter.label}.</Text>
+          {connectedEventProjects.length === 0 ? (
+            <Text style={{ fontSize: 12, color: '#64748b' }}>
+              No connected events were found for this approved project.
+            </Text>
           ) : selectedReportFolder ? (
+            selectedReportFolder.reports.length === 0 ? (
+              <Text style={{ fontSize: 12, color: '#64748b' }}>
+                No reports were submitted for {selectedReportFolder.title} in {currentQuarter.label}.
+              </Text>
+            ) : (
             <View style={{ gap: 8 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <MaterialIcons name="folder-open" size={17} color="#EAB308" />
@@ -1784,13 +1919,17 @@ export function PartnerReportsDashboard({
                 </TouchableOpacity>
               ))}
             </View>
+            )
           ) : (
             <View style={{ gap: 8 }}>
               <Text style={{ fontSize: 11, color: '#64748b' }}>Select an event folder to view its reports.</Text>
               {reportFolders.map(folder => (
                 <TouchableOpacity
                   key={folder.key}
-                  onPress={() => setSelectedReportFolderId(folder.key)}
+                  onPress={() => {
+                    setSelectedPhotoIndex(null);
+                    setSelectedReportFolderId(folder.key);
+                  }}
                   activeOpacity={0.75}
                   style={{
                     borderWidth: 1,
@@ -1836,67 +1975,165 @@ export function PartnerReportsDashboard({
             gap: 16,
           }}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a' }}>Photos from Volunteers Report</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+              {selectedPhotoFolder ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    setSelectedPhotoFolderId(null);
+                    setSelectedPhotoIndex(null);
+                  }}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to photo event folders"
+                  style={{ padding: 2 }}
+                >
+                  <MaterialIcons name="arrow-back" size={19} color="#166534" />
+                </TouchableOpacity>
+              ) : null}
+              <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a', flex: 1 }} numberOfLines={2}>
+                {selectedPhotoFolder
+                  ? `Photos from Volunteers Report - ${selectedPhotoFolder.title}`
+                  : 'Photos from Volunteers Report'}
+              </Text>
+            </View>
+            {selectedPhotoFolder ? (
+              <Text style={{ fontSize: 12, fontWeight: '700', color: '#64748b' }}>
+                {volunteerPhotos.length} photo{volunteerPhotos.length === 1 ? '' : 's'}
+              </Text>
+            ) : null}
           </View>
 
           {/* Photos Cards Row */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
-            {volunteerPhotos.length === 0 ? (
-              <Text style={{ fontSize: 12, color: '#64748b' }}>
-                No volunteer photos for {currentQuarter.label}.
-              </Text>
-            ) : volunteerPhotos.slice(0, 5).map((item, idx) => (
-              <TouchableOpacity
-                key={item.id || idx}
-                style={{
-                  width: 210,
-                  height: 130,
-                  borderRadius: 10,
-                  overflow: 'hidden',
-                  backgroundColor: '#e2e8f0',
-                  position: 'relative',
-                }}
-                activeOpacity={0.85}
-                onPress={() => setSelectedPhotoIndex(idx)}
-              >
-                <StableVolunteerReportPhoto uri={item.uri} variant="thumbnail" />
-                {/* Bottom dark overlay banner */}
+            {selectedPhotoFolder ? (
+              volunteerPhotos.length === 0 ? (
+                <Text style={{ fontSize: 12, color: '#64748b' }}>
+                  No volunteer photos for {selectedPhotoFolder.title} in {currentQuarter.label}.
+                </Text>
+              ) : volunteerPhotos.slice(0, 5).map((item, idx) => (
                 <View
+                  key={item.id || idx}
                   style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
+                    width: 210,
+                    height: 130,
+                    borderRadius: 10,
+                    overflow: 'hidden',
+                    backgroundColor: '#e2e8f0',
+                    position: 'relative',
                   }}
                 >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 10, color: '#94a3b8', fontWeight: '500' }}>{item.date}</Text>
-                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#ffffff' }} numberOfLines={1}>
-                      {item.name}
+                  <TouchableOpacity
+                    style={{ height: 90, backgroundColor: '#e2e8f0' }}
+                    activeOpacity={0.85}
+                    onPress={() => setSelectedPhotoIndex(idx)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Preview ${item.sourceLabel.toLowerCase()} submitted by ${item.name} for ${item.eventTitle}`}
+                  >
+                    <StableVolunteerReportPhoto uri={item.uri} variant="thumbnail" />
+                  </TouchableOpacity>
+                  <View
+                    style={{
+                      position: 'absolute',
+                      top: 8,
+                      left: 8,
+                      backgroundColor: 'rgba(15, 23, 42, 0.82)',
+                      paddingHorizontal: 7,
+                      paddingVertical: 3,
+                      borderRadius: 5,
+                    }}
+                  >
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#ffffff' }}>
+                      {item.sourceLabel}
                     </Text>
                   </View>
                   <View
                     style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.25)',
-                      paddingHorizontal: 6,
-                      paddingVertical: 2,
-                      borderRadius: 4,
+                      height: 40,
+                      backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
                     }}
                   >
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#ffffff' }}>
-                      {item.photosCount} photos
-                    </Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 10, color: '#94a3b8', fontWeight: '500' }}>{item.date}</Text>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#ffffff' }} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => void handleDownloadPhoto(item)}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Download ${item.sourceLabel.toLowerCase()} submitted by ${item.name} for ${item.eventTitle}`}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 6,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: '#ffffff',
+                        marginLeft: 6,
+                      }}
+                    >
+                      <MaterialIcons name="download" size={16} color="#166534" />
+                    </TouchableOpacity>
+                    <View
+                      style={{
+                        backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                        paddingHorizontal: 6,
+                        paddingVertical: 2,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#ffffff' }}>
+                        {item.photosCount} photo{item.photosCount === 1 ? '' : 's'}
+                      </Text>
+                    </View>
                   </View>
                 </View>
-              </TouchableOpacity>
-            ))}
+              ))
+            ) : photoFolders.length === 0 ? (
+              <Text style={{ fontSize: 12, color: '#64748b' }}>
+                No connected event folders were found for this partner project.
+              </Text>
+            ) : (
+              photoFolders.map(folder => (
+                <TouchableOpacity
+                  key={folder.key}
+                  onPress={() => {
+                    setSelectedPhotoIndex(null);
+                    setSelectedPhotoFolderId(folder.key);
+                  }}
+                  activeOpacity={0.75}
+                  style={{
+                    width: 230,
+                    minHeight: 94,
+                    borderWidth: 1,
+                    borderColor: '#e2e8f0',
+                    borderRadius: 10,
+                    padding: 12,
+                    backgroundColor: '#f8fafc',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <MaterialIcons name="folder" size={29} color="#EAB308" />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ fontSize: 12, fontWeight: '800', color: '#1e293b' }} numberOfLines={2}>
+                        {folder.title}
+                      </Text>
+                      <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
+                        {folder.photos.length} photo{folder.photos.length === 1 ? '' : 's'}
+                      </Text>
+                    </View>
+                    <MaterialIcons name="chevron-right" size={20} color="#64748b" />
+                  </View>
+                </TouchableOpacity>
+              ))
+            )}
           </ScrollView>
         </View>
       </ScrollView>
@@ -2027,99 +2264,75 @@ export function PartnerReportsDashboard({
                 </View>
               )}
             </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ fontSize: 12, color: '#94a3b8' }}>
-                Photo by {selectedVolunteerPhoto?.name || 'Volunteer'} on {selectedVolunteerPhoto?.date || 'Unknown date'}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+              <Text style={{ flex: 1, fontSize: 12, color: '#94a3b8' }}>
+                {selectedVolunteerPhoto?.sourceLabel || 'Volunteer photo'} by {selectedVolunteerPhoto?.name || 'Volunteer'} for {selectedVolunteerPhoto?.eventTitle || 'the connected event'} on {selectedVolunteerPhoto?.date || 'Unknown date'}
               </Text>
-              <TouchableOpacity
-                style={{
-                  backgroundColor: '#334155',
-                  paddingHorizontal: 14,
-                  paddingVertical: 6,
-                  borderRadius: 6,
-                }}
-                onPress={() => {
-                  setShowAllPhotosModal(false);
-                  setSelectedPhotoIndex(null);
-                }}
-              >
-                <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Done</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {selectedVolunteerPhoto ? (
+                  <TouchableOpacity
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 5,
+                      backgroundColor: '#166534',
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: 6,
+                    }}
+                    onPress={() => void handleDownloadPhoto(selectedVolunteerPhoto)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Download selected volunteer photo"
+                  >
+                    <MaterialIcons name="download" size={15} color="#ffffff" />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Download</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#334155',
+                    paddingHorizontal: 14,
+                    paddingVertical: 6,
+                    borderRadius: 6,
+                  }}
+                  onPress={() => {
+                    setShowAllPhotosModal(false);
+                    setSelectedPhotoIndex(null);
+                  }}
+                >
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Done</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </View>
       )}
 
-      {/* All Documents Modal */}
-      {showAllDocsModal && (
-        <View
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 20,
-            zIndex: 9999,
-          }}
-        >
-          <View
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: 16,
-              padding: 24,
-              maxWidth: 480,
-              width: '100%',
-              gap: 16,
-            }}
-          >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a' }}>All Report Documents</Text>
-              <TouchableOpacity onPress={() => setShowAllDocsModal(false)}>
-                <MaterialIcons name="close" size={22} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-            <View style={{ gap: 10 }}>
-              {generatedDocuments.map(doc => (
-                <View
-                  key={doc.id}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    paddingVertical: 8,
-                    borderBottomWidth: 1,
-                    borderBottomColor: '#f1f5f9',
-                  }}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }}>{doc.title}</Text>
-                    <Text style={{ fontSize: 11, color: '#64748b' }}>{doc.size}</Text>
-                  </View>
-                  <TouchableOpacity
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 4,
-                      backgroundColor: '#F1F5F9',
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      borderRadius: 6,
-                    }}
-                    onPress={() => handleDownloadDocument(doc)}
-                  >
-                    <MaterialIcons name="file-download" size={16} color="#334155" />
-                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#334155' }}>Download</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          </View>
-        </View>
-      )}
+      <DownloadPreviewModal
+        visible={Boolean(downloadPreview)}
+        title={downloadPreview?.title || 'Quarterly report preview'}
+        subtitle={downloadPreview?.subtitle || ''}
+        totalRows={downloadPreview?.totalRows || 0}
+        recordCount={downloadPreview?.recordCount || 0}
+        previewRows={downloadPreview?.previewRows || []}
+        columns={downloadPreview?.columns || []}
+        previewTables={downloadPreview?.previewTables}
+        documentTitle={downloadPreview?.documentTitle}
+        documentSubtitle={downloadPreview?.documentSubtitle}
+        stats={downloadPreview ? [
+          { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
+          { label: 'Included reports', value: String(downloadPreview.recordCount), icon: 'description' },
+        ] : undefined}
+        onConfirm={() => {
+          if (!downloadPreview) return;
+          const pending = downloadPreview;
+          setDownloadPreview(null);
+          void downloadPdfFile(pending.fileName, pending.pdf, 'Unable to save this report on this device.');
+        }}
+        onCancel={() => setDownloadPreview(null)}
+        confirmText="Download PDF"
+        confirmColor="#166534"
+      />
     </View>
   );
 }
@@ -2148,7 +2361,7 @@ function formatPdfDate(value?: string): string {
   return date && !Number.isNaN(date.getTime()) ? date.toLocaleString() : 'Unknown date';
 }
 
-function buildPartnerQuarterlyReportPdf(input: {
+function buildPartnerQuarterlyReportTables(input: {
   title: string;
   quarterLabel: string;
   reportingPeriod: string;
@@ -2159,13 +2372,26 @@ function buildPartnerQuarterlyReportPdf(input: {
   report: SubmittedReport | null;
   summary: PartnerProjectReportSummary | null;
   reports?: SubmittedReport[];
-}): string {
+}): PdfTable[] {
   const summary = input.summary;
   const relatedReports = input.reports || (summary ? getVolunteerReportsForSummary(summary) : []);
-  const metricRows = Object.entries(summary?.metrics || {}).map(([metric, value]) => ({
-    metric: formatPdfMetricLabel(metric),
-    value,
-  }));
+  // The quarterly document must report what volunteers actually submitted.
+  // Attendance, active-volunteer, event-count, and beneficiary totals are
+  // dashboard aggregates and must not be presented as volunteer-reported
+  // outcomes (especially when their value is simply zero).
+  const volunteerReports = relatedReports.filter(
+    report => report.submitterRole === 'volunteer' && report.status !== 'Rejected'
+  );
+  const volunteerMetricRows = volunteerReports.flatMap(report =>
+    Object.entries(report.metrics || {})
+      .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+      .map(([metric, value]) => ({
+        volunteer: report.submitterName || 'Volunteer',
+        report: report.title || 'Untitled report',
+        metric: formatPdfMetricLabel(metric),
+        value,
+      }))
+  );
   const linkedEventRows = (summary?.linkedEvents || []).map(event => ({
     event: event.title || 'Untitled event',
     schedule: event.startDate
@@ -2177,9 +2403,6 @@ function buildPartnerQuarterlyReportPdf(input: {
   const volunteerAccountRows = (summary?.volunteerAccounts || []).map(account => ({
     volunteer: account.submitterName || 'Volunteer',
     reports: account.reports.length,
-    joins: account.volunteerEventJoins,
-    verified: account.verifiedAttendance,
-    beneficiaries: account.beneficiariesServed,
   }));
   const reportRows = relatedReports.map(report => ({
     report: report.title || 'Untitled report',
@@ -2190,9 +2413,7 @@ function buildPartnerQuarterlyReportPdf(input: {
     description: report.description || 'No description provided.',
   }));
 
-  return buildTablePdf(input.title, {
-    subtitle: `${input.quarterLabel} - ${input.reportingPeriod}`,
-    tables: [
+  return [
       {
         title: 'Quarterly Report Overview',
         columns: [
@@ -2214,15 +2435,6 @@ function buildPartnerQuarterlyReportPdf(input: {
         ],
       },
       {
-        title: 'Project Metrics',
-        columns: [
-          { key: 'metric', label: 'Metric', width: 1.3 },
-          { key: 'value', label: 'Value', width: 1 },
-        ],
-        rows: metricRows,
-        emptyMessage: 'No project metrics captured for this quarter.',
-      },
-      {
         title: 'Linked Events',
         columns: [
           { key: 'event', label: 'Event', width: 1.5 },
@@ -2234,16 +2446,24 @@ function buildPartnerQuarterlyReportPdf(input: {
         emptyMessage: 'No linked events for this project.',
       },
       {
-        title: 'Volunteer Account Summary',
+        title: 'Volunteer-Reported Metrics',
         columns: [
-          { key: 'volunteer', label: 'Volunteer', width: 1.5 },
-          { key: 'reports', label: 'Reports', width: 0.7 },
-          { key: 'joins', label: 'Joins', width: 0.7 },
-          { key: 'verified', label: 'Verified', width: 0.8 },
-          { key: 'beneficiaries', label: 'Beneficiaries', width: 1 },
+          { key: 'volunteer', label: 'Volunteer', width: 1.2 },
+          { key: 'report', label: 'Report', width: 1.4 },
+          { key: 'metric', label: 'Metric', width: 1.2 },
+          { key: 'value', label: 'Value', width: 0.7 },
+        ],
+        rows: volunteerMetricRows,
+        emptyMessage: 'No volunteer-reported metrics were submitted for this quarter.',
+      },
+      {
+        title: 'Volunteer Report Summary',
+        columns: [
+          { key: 'volunteer', label: 'Volunteer', width: 1.8 },
+          { key: 'reports', label: 'Reports submitted', width: 1 },
         ],
         rows: volunteerAccountRows,
-        emptyMessage: 'No volunteer account activity was recorded.',
+        emptyMessage: 'No volunteer reports were submitted for this quarter.',
       },
       {
         title: 'Project and Event Report Details',
@@ -2258,7 +2478,24 @@ function buildPartnerQuarterlyReportPdf(input: {
         rows: reportRows,
         emptyMessage: 'No reports were submitted for this quarter.',
       },
-    ],
+    ];
+}
+
+function buildPartnerQuarterlyReportPdf(input: {
+  title: string;
+  quarterLabel: string;
+  reportingPeriod: string;
+  organization: string;
+  program: string;
+  status: string;
+  submittedOn: string;
+  report: SubmittedReport | null;
+  summary: PartnerProjectReportSummary | null;
+  reports?: SubmittedReport[];
+}): string {
+  return buildTablePdf(input.title, {
+    subtitle: `${input.quarterLabel} - ${input.reportingPeriod}`,
+    tables: buildPartnerQuarterlyReportTables(input),
   });
 }
 

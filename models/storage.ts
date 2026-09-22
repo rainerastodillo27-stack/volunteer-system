@@ -110,6 +110,87 @@ const MEDIA_STORAGE_KEYS = new Set([
   STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
   STORAGE_KEYS.PARTNER_REPORTS,
 ]);
+
+// Lightweight collection responses deliberately omit image bytes.  Keep media
+// that was already fetched in the local cache when one of those responses
+// arrives later; otherwise a normal background refresh can make an image
+// disappear from the UI even though it is still safely stored on the server.
+const LIGHTWEIGHT_MEDIA_FIELDS_BY_STORAGE_KEY: Record<string, string[]> = {
+  [STORAGE_KEYS.USERS]: ['profilePhoto', 'validIdPhoto', 'certificationsOrTrainings', 'registrationDocuments'],
+  [STORAGE_KEYS.VOLUNTEERS]: ['validIdPhoto', 'certificationsOrTrainings', 'videoBriefingUrl'],
+  [STORAGE_KEYS.PARTNERS]: ['registrationDocuments'],
+  [STORAGE_KEYS.PROJECTS]: ['imageUrl', 'attachments'],
+  [STORAGE_KEYS.PROGRAMS]: ['imageUrl', 'attachments'],
+  [STORAGE_KEYS.EVENTS]: ['imageUrl', 'attachments'],
+  [STORAGE_KEYS.PROGRAM_TRACKS]: ['imageUrl'],
+  [STORAGE_KEYS.VOLUNTEER_TIME_LOGS]: ['attendancePhoto', 'completionPhoto'],
+  [STORAGE_KEYS.PROJECT_GROUP_MESSAGES]: ['attachments'],
+  [STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS]: ['attachments'],
+  [STORAGE_KEYS.PARTNER_REPORTS]: ['attachments', 'mediaFile'],
+};
+
+const LIGHTWEIGHT_MEDIA_PRESENCE_FIELDS: Record<string, Record<string, string>> = {
+  [STORAGE_KEYS.PARTNER_REPORTS]: {
+    attachments: 'hasAttachments',
+    mediaFile: 'hasMediaFile',
+  },
+};
+
+function hasCachedMediaValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'string') return value.trim().length > 0;
+  return value !== null && value !== undefined;
+}
+
+function preserveCachedMediaInLightweightCollection(
+  key: string,
+  incoming: unknown,
+  includeImages: boolean,
+): unknown {
+  if (includeImages || !MEDIA_STORAGE_KEYS.has(key) || !Array.isArray(incoming)) {
+    return incoming;
+  }
+
+  const previous = memoryStorageCache.get(key);
+  const mediaFields = LIGHTWEIGHT_MEDIA_FIELDS_BY_STORAGE_KEY[key] || [];
+  if (!Array.isArray(previous) || mediaFields.length === 0) {
+    return incoming;
+  }
+
+  const previousById = new Map<string, Record<string, unknown>>();
+  previous.forEach(item => {
+    if (!item || typeof item !== 'object') return;
+    const record = item as Record<string, unknown>;
+    const id = String(record.id || '').trim();
+    if (id) previousById.set(id, record);
+  });
+
+  const presenceFields = LIGHTWEIGHT_MEDIA_PRESENCE_FIELDS[key] || {};
+  let changed = false;
+  const merged = incoming.map(item => {
+    if (!item || typeof item !== 'object') return item;
+    const record = item as Record<string, unknown>;
+    const id = String(record.id || '').trim();
+    const previousRecord = id ? previousById.get(id) : undefined;
+    if (!previousRecord) return item;
+
+    let nextRecord: Record<string, unknown> | null = null;
+    mediaFields.forEach(field => {
+      const presenceField = presenceFields[field];
+      // A false presence flag means the server confirms there is no media;
+      // do not retain an obsolete local value in that case.
+      if (presenceField && record[presenceField] === false) return;
+      if (!hasCachedMediaValue(record[field]) && hasCachedMediaValue(previousRecord[field])) {
+        nextRecord = nextRecord || { ...record };
+        nextRecord[field] = previousRecord[field];
+        changed = true;
+      }
+    });
+    return nextRecord || item;
+  });
+
+  return changed ? merged : incoming;
+}
 // Shared reads should fail fast enough to keep the UI responsive when the
 // backend is slow or unavailable.
 const REMOTE_STORAGE_TIMEOUT_MS = 15000;
@@ -1782,6 +1863,7 @@ function setSharedStorageCacheValue<T>(
   value: T | null,
   includeImages = false,
   expectedGeneration?: number,
+  preserveExistingMedia = false,
 ): boolean {
   if (
     expectedGeneration !== undefined &&
@@ -1791,7 +1873,10 @@ function setSharedStorageCacheValue<T>(
   }
 
   invalidatedSharedStorageKeys.delete(key);
-  const safeValue = sanitizeStorageCacheValue(key, value);
+  const cacheValue = preserveExistingMedia
+    ? preserveCachedMediaInLightweightCollection(key, value, includeImages) as T | null
+    : value;
+  const safeValue = sanitizeStorageCacheValue(key, cacheValue);
   memoryStorageCache.set(key, safeValue);
   sharedStorageCacheTimestamps.set(key, Date.now());
   if (MEDIA_STORAGE_KEYS.has(key)) {
@@ -1921,7 +2006,8 @@ function triggerBackgroundStorageRefresh(keys: string[], includeImages = false):
           key,
           value,
           includeImages,
-          requestGenerations.get(key)
+          requestGenerations.get(key),
+          !includeImages,
         );
       }
     } catch {
@@ -2190,7 +2276,7 @@ async function fetchRemoteStorageItemConsistent<T>(
       continue;
     }
 
-    setSharedStorageCacheValue(key, latestValue, includeImages, requestGeneration);
+    setSharedStorageCacheValue(key, latestValue, includeImages, requestGeneration, !includeImages);
     return latestValue;
   }
 
@@ -2268,7 +2354,7 @@ export async function getStorageItems(
           retryKeys.push(key);
           continue;
         }
-        setSharedStorageCacheValue(key, value, false, requestGenerations.get(key));
+        setSharedStorageCacheValue(key, value, false, requestGenerations.get(key), true);
         results[key] = value;
       }
       if (retryKeys.length > 0) {
@@ -2280,7 +2366,7 @@ export async function getStorageItems(
           const value = refreshed[key] ?? null;
           const requestGeneration = retryGenerations.get(key);
           if (requestGeneration === getSharedStorageCacheGeneration(key)) {
-            setSharedStorageCacheValue(key, value, false, requestGeneration);
+            setSharedStorageCacheValue(key, value, false, requestGeneration, true);
             results[key] = value;
           }
         }
@@ -2314,7 +2400,7 @@ export async function getStorageItems(
         retryKeys.push(key);
         continue;
       }
-      setSharedStorageCacheValue(key, value, false, requestGenerations.get(key));
+      setSharedStorageCacheValue(key, value, false, requestGenerations.get(key), true);
       results[key] = value;
     }
     if (retryKeys.length > 0) {
@@ -2326,7 +2412,7 @@ export async function getStorageItems(
         const value = refreshed[key] ?? null;
         const requestGeneration = retryGenerations.get(key);
         if (requestGeneration === getSharedStorageCacheGeneration(key)) {
-          setSharedStorageCacheValue(key, value, false, requestGeneration);
+          setSharedStorageCacheValue(key, value, false, requestGeneration, true);
           results[key] = value;
         }
       }
@@ -5026,6 +5112,33 @@ export async function getAllVolunteerTimeLogs(options?: {
   const includeImages = options?.includeImages !== false;
   const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, includeImages)) || [];
   return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
+}
+
+// Loads media-bearing attendance logs only for the connected event IDs shown
+// on a partner/admin report dashboard. This avoids downloading every
+// historical attendance photo in the system just to render the photo strip.
+export async function getVolunteerTimeLogsForProjects(
+  projectIds: string[],
+  options?: { includeImages?: boolean },
+): Promise<VolunteerTimeLog[]> {
+  const normalizedProjectIds = Array.from(
+    new Set(projectIds.map(projectId => String(projectId || '').trim()).filter(Boolean))
+  );
+  if (normalizedProjectIds.length === 0) {
+    return [];
+  }
+
+  const includeImages = options?.includeImages === true;
+  const params = new URLSearchParams({
+    project_ids: normalizedProjectIds.join(','),
+    include_images: includeImages ? 'true' : 'false',
+  });
+  const payload = await requestApiJson<{ logs?: VolunteerTimeLog[] }>(
+    `/partner/volunteer-time-logs/media?${params.toString()}`
+  );
+  return (payload.logs || []).sort(
+    (a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime()
+  );
 }
 
 export async function setVolunteerAttendanceChecked(

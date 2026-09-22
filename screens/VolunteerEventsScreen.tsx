@@ -641,7 +641,12 @@ export default function VolunteerEventsScreen() {
       >
       {/* TOP BAR */}
       <View style={styles.topbar}>
-        <TouchableOpacity style={styles.menuIcon} onPress={() => {}}>
+        <TouchableOpacity
+          style={styles.menuIcon}
+          onPress={() => navigation.navigate('Dashboard' as never)}
+          accessibilityRole="button"
+          accessibilityLabel="Open volunteer dashboard"
+        >
           <View style={styles.menuLine} />
           <View style={styles.menuLine} />
           <View style={styles.menuLine} />

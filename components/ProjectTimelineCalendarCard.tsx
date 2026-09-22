@@ -892,7 +892,12 @@ export default function ProjectTimelineCalendarCard({
           <View style={styles.upcomingEventsSection}>
             <View style={styles.upcomingHeaderRow}>
               <Text style={styles.upcomingTitle}>Upcoming Events</Text>
-              <TouchableOpacity>
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel="View all upcoming events"
+                accessibilityHint="Switches the calendar to the full event list"
+                onPress={() => setViewMode('List')}
+              >
                 <Text style={styles.viewAllLink}>View all</Text>
               </TouchableOpacity>
             </View>

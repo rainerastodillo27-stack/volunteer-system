@@ -303,8 +303,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 12,
     maxWidth: 800,
-    maxHeight: '90%',
     width: '100%',
+    height: '82%',
+    minHeight: 520,
+    maxHeight: '92%',
     flexDirection: 'column',
     overflow: 'hidden',
   },
@@ -319,6 +321,7 @@ const styles = StyleSheet.create({
   },
   headerContent: {
     flex: 1,
+    paddingRight: 8,
   },
   headerTitle: {
     fontSize: 16,
@@ -363,13 +366,13 @@ const styles = StyleSheet.create({
   },
   previewSection: {
     flex: 1,
+    minHeight: 0,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   documentScroll: {
     flex: 1,
-    minHeight: 180,
-    maxHeight: 430,
+    minHeight: 0,
   },
   documentScrollContent: {
     paddingBottom: 2,

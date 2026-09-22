@@ -63,6 +63,7 @@ export default function VolunteerProjectDetailsScreen({
   const [parentProject, setParentProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const [isBookmarked, setIsBookmarked] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const hasLoadedOnceRef = useRef(false);
   const loadInFlightRef = useRef(false);
@@ -361,8 +362,19 @@ export default function VolunteerProjectDetailsScreen({
 
             <View style={styles.heroActions}>
               {renderJoinButton({ flex: 1 })}
-              <TouchableOpacity style={styles.bookmarkBtn} activeOpacity={0.8}>
-                <MaterialIcons name="bookmark-border" size={20} color="#64748b" />
+              <TouchableOpacity
+                style={styles.bookmarkBtn}
+                activeOpacity={0.8}
+                onPress={() => setIsBookmarked(previous => !previous)}
+                accessibilityRole="button"
+                accessibilityLabel={isBookmarked ? 'Remove event bookmark' : 'Bookmark event'}
+                accessibilityState={{ selected: isBookmarked }}
+              >
+                <MaterialIcons
+                  name={isBookmarked ? 'bookmark' : 'bookmark-border'}
+                  size={20}
+                  color={isBookmarked ? '#166534' : '#64748b'}
+                />
               </TouchableOpacity>
             </View>
           </View>

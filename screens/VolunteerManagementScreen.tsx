@@ -1651,12 +1651,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const sortedVolunteers = [...volunteers]
     .filter(volunteer => {
       if (statusFilter === 'Pending') return volunteer.registrationStatus === 'Pending';
-      if (statusFilter === 'Approved') return volunteer.registrationStatus !== 'Pending';
+      if (statusFilter === 'Approved') return volunteer.registrationStatus === 'Approved';
       return true;
     })
     .sort((left, right) => left.name.localeCompare(right.name));
-  const approvedVolunteers = volunteers.filter(volunteer => volunteer.registrationStatus !== 'Pending').length;
-  const pendingApplications = Math.max(0, volunteers.length - approvedVolunteers);
+  const approvedVolunteers = volunteers.filter(volunteer => volunteer.registrationStatus === 'Approved').length;
+  const pendingApplications = volunteers.filter(volunteer => volunteer.registrationStatus === 'Pending').length;
 
   return (
     <View style={styles.container}>
@@ -1812,13 +1812,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           </Text>
           {approvedVolunteers > 0 && (
             <View style={{ gap: 8 }}>
-              {volunteers.filter(v => v.registrationStatus !== 'Pending').slice(0, 3).map(vol => (
+              {volunteers.filter(v => v.registrationStatus === 'Approved').map(vol => (
                 <View key={vol.id} style={{ flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#ffffff', borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0' }}>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a', fontFamily: 'Nunito' }}>{vol.name}</Text>
-                    <Text style={{ fontSize: 12, color: '#64748b', fontFamily: 'Nunito' }}>
-                      {vol.totalHoursContributed.toFixed(1)} hours contributed
-                    </Text>
                   </View>
                   <TouchableOpacity
                     onPress={() => handleSelectVolunteer(vol)}

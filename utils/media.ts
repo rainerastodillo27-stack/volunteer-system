@@ -49,6 +49,27 @@ function normalizeBase64DataUri(value: string, mimeType?: string | null): string
   return `data:${mimeType || 'application/octet-stream'};base64,${value.trim()}`;
 }
 
+// Expo can occasionally return an URI without the optional base64 field even
+// when the picker was asked for base64. Local picker URIs are temporary cache
+// files, so they must never be stored as report or attendance evidence.
+async function readNativeImageAsDataUri(
+  uri: string | undefined,
+  mimeType?: string | null,
+): Promise<string | null> {
+  if (!uri || Platform.OS === 'web') {
+    return uri || null;
+  }
+
+  try {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return base64 ? normalizeBase64DataUri(base64, mimeType || 'image/jpeg') : null;
+  } catch {
+    return null;
+  }
+}
+
 // Keep browser-selected images consistent with native uploads. Compression is
 // best-effort so a picker still succeeds if the browser cannot use canvas.
 async function compressPickedImageDataUri(dataUri: string): Promise<string> {
@@ -540,9 +561,17 @@ export async function pickImageFromDevice(): Promise<string | null> {
       return optimizedImage || imageDataUri;
     }
 
-    return asset.uri;
+    const imageDataUri = await readNativeImageAsDataUri(asset.uri, asset.mimeType);
+    if (!imageDataUri || !imageDataUri.startsWith('data:image/')) {
+      throw new Error('The selected photo could not be saved securely. Please choose it again.');
+    }
+    const optimizedImage = await compressImage(imageDataUri);
+    return optimizedImage || imageDataUri;
   } catch (error) {
     console.error('Error picking image:', error);
+    if (error instanceof Error && error.message.startsWith('The selected photo could not be saved')) {
+      throw error;
+    }
     return null;
   }
 }
@@ -626,10 +655,18 @@ export async function pickAttendancePhotoFromDevice(): Promise<string | null> {
       return optimizedImage || imageDataUri;
     }
 
-    return asset.uri;
+    const imageDataUri = await readNativeImageAsDataUri(asset.uri, asset.mimeType);
+    if (!imageDataUri || !imageDataUri.startsWith('data:image/')) {
+      throw new Error('The selected photo could not be saved securely. Please choose it again.');
+    }
+    const optimizedImage = await compressImage(imageDataUri, 60);
+    return optimizedImage || imageDataUri;
   } catch (error) {
     // Re-throw unsupported-file errors so callers can display the message.
-    if (error instanceof Error && error.message.startsWith('Unsupported file type')) {
+    if (
+      error instanceof Error &&
+      (error.message.startsWith('Unsupported file type') || error.message.startsWith('The selected photo could not be saved'))
+    ) {
       throw error;
     }
     console.error('Error picking attendance photo:', error);

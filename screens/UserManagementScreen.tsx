@@ -43,6 +43,21 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 
+type UserExportRow = {
+  id: string;
+  name: string;
+  phone: string;
+  role: string;
+  email: string;
+  organization: string;
+  status: string;
+  joined: string;
+};
+
+function escapeCsvCell(value: string): string {
+  return `"${String(value || '').replace(/"/g, '""')}"`;
+}
+
 export default function UserManagementScreen() {
   const { user, isAdmin } = useAuth();
 
@@ -57,6 +72,7 @@ export default function UserManagementScreen() {
   const [pendingUserApprovals, setPendingUserApprovals] = useState<User[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showExportPreview, setShowExportPreview] = useState(false);
   const [showActionMenuUser, setShowActionMenuUser] = useState<User | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const loadVersionRef = useRef(0);
@@ -315,25 +331,6 @@ export default function UserManagementScreen() {
     });
   };
 
-  // CSV Export logic
-  const handleExportCSV = () => {
-    const csvContent =
-      'Name,Email,Role,Status,Joined\n' +
-      users.map(u => `"${u.name}","${u.email}","${u.role}","${u.approvalStatus || 'Active'}","${u.createdAt}"`).join('\n');
-
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.setAttribute('download', `user_export_${format(new Date(), 'yyyy-MM-dd')}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } else {
-      Alert.alert('Export Complete', `${users.length} user records ready for export.`);
-    }
-  };
-
   const openUserReview = (targetUser: User) => {
     setReviewTarget({ type: 'user', record: targetUser });
     setReviewVolunteer(null);
@@ -377,6 +374,51 @@ export default function UserManagementScreen() {
       (volunteer.email || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase()
     ) || null;
 
+  const exportRows = useMemo<UserExportRow[]>(() => users.map(account => {
+    const partner = getLinkedPartnerForUser(account);
+    const roleLabel = account.role === 'admin'
+      ? 'Administrator'
+      : account.role === 'partner'
+        ? 'Partner'
+        : 'Volunteer';
+    const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+
+    return {
+      id: account.id,
+      name: account.name || 'Unnamed user',
+      phone: account.phone || '',
+      role: roleLabel,
+      email: account.email || '',
+      organization: partner?.name || (account.role === 'admin' ? 'NVC' : ''),
+      status: isPending ? 'Pending' : 'Active',
+      joined: format(new Date(account.createdAt || Date.now()), 'MMM dd, yyyy'),
+    };
+  }), [users, partners]);
+
+  // Export opens a table preview first so the downloaded file can be checked.
+  const handleExportCSV = () => setShowExportPreview(true);
+
+  const handleDownloadCSV = () => {
+    const csvRows = [
+      ['Name', 'Phone', 'Account Type', 'Email', 'Organization', 'Status', 'Joined'],
+      ...exportRows.map(row => [row.name, row.phone, row.role, row.email, row.organization, row.status, row.joined]),
+    ];
+    const csvContent = csvRows.map(row => row.map(escapeCsvCell).join(',')).join('\n');
+
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.setAttribute('download', `user_export_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setShowExportPreview(false);
+    } else {
+      Alert.alert('Export Complete', `${exportRows.length} user records ready for export.`);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <View style={styles.container}>
@@ -396,6 +438,12 @@ export default function UserManagementScreen() {
   const totalAdmins = adminUsers.length;
   const totalPartners = partnerUsers.length;
   const totalVolunteers = volunteerUsers.length;
+
+  const handleSummaryCardPress = (nextFilter: 'all' | UserRole) => {
+    setAccountFilter(nextFilter);
+    setStatusFilter('all');
+    setCurrentPage(1);
+  };
 
   // Filtered users list
   const visibleUsers = users.filter(account => {
@@ -469,7 +517,13 @@ export default function UserManagementScreen() {
         {/* 4 Summary Cards Grid */}
         <View style={styles.summaryGrid}>
           {/* Card 1: Total Users */}
-          <View style={styles.summaryCard}>
+          <TouchableOpacity
+            style={[styles.summaryCard, accountFilter === 'all' && styles.summaryCardActive]}
+            onPress={() => handleSummaryCardPress('all')}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Show all users"
+          >
             <View style={[styles.summaryIconBox, { backgroundColor: '#f0fdf4' }]}>
               <MaterialIcons name="person-outline" size={24} color="#16a34a" />
             </View>
@@ -478,10 +532,16 @@ export default function UserManagementScreen() {
               <Text style={styles.summaryTitle}>Total Users</Text>
               <Text style={styles.summarySubtext}>All registered accounts</Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {/* Card 2: Administrators */}
-          <View style={styles.summaryCard}>
+          <TouchableOpacity
+            style={[styles.summaryCard, accountFilter === 'admin' && styles.summaryCardActive]}
+            onPress={() => handleSummaryCardPress('admin')}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Show administrators"
+          >
             <View style={[styles.summaryIconBox, { backgroundColor: '#eff6ff' }]}>
               <MaterialIcons name="shield" size={22} color="#2563eb" />
             </View>
@@ -490,10 +550,16 @@ export default function UserManagementScreen() {
               <Text style={styles.summaryTitle}>Administrators</Text>
               <Text style={styles.summarySubtext}>System administrators</Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {/* Card 3: Partners */}
-          <View style={styles.summaryCard}>
+          <TouchableOpacity
+            style={[styles.summaryCard, accountFilter === 'partner' && styles.summaryCardActive]}
+            onPress={() => handleSummaryCardPress('partner')}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Show partners"
+          >
             <View style={[styles.summaryIconBox, { backgroundColor: '#f3e8ff' }]}>
               <MaterialIcons name="handshake" size={22} color="#9333ea" />
             </View>
@@ -502,10 +568,16 @@ export default function UserManagementScreen() {
               <Text style={styles.summaryTitle}>Partners</Text>
               <Text style={styles.summarySubtext}>Partner accounts</Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {/* Card 4: Volunteers */}
-          <View style={styles.summaryCard}>
+          <TouchableOpacity
+            style={[styles.summaryCard, accountFilter === 'volunteer' && styles.summaryCardActive]}
+            onPress={() => handleSummaryCardPress('volunteer')}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Show volunteers"
+          >
             <View style={[styles.summaryIconBox, { backgroundColor: '#fff7ed' }]}>
               <MaterialIcons name="favorite" size={22} color="#ea580c" />
             </View>
@@ -514,7 +586,7 @@ export default function UserManagementScreen() {
               <Text style={styles.summaryTitle}>Volunteers</Text>
               <Text style={styles.summarySubtext}>Volunteer accounts</Text>
             </View>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Tab Navigation */}
@@ -1196,6 +1268,58 @@ export default function UserManagementScreen() {
         )}
       </Modal>
 
+      {/* Export Preview Modal */}
+      <Modal visible={showExportPreview} animationType="fade" transparent onRequestClose={() => setShowExportPreview(false)}>
+        <View style={styles.exportModalOverlay}>
+          <View style={styles.exportModalCard}>
+            <View style={styles.exportModalHeader}>
+              <View>
+                <Text style={styles.exportModalTitle}>User Export Preview</Text>
+                <Text style={styles.exportModalSubtitle}>{exportRows.length} account records will be exported</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowExportPreview(false)} style={styles.exportModalCloseButton}>
+                <MaterialIcons name="close" size={22} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={styles.exportTableScrollContent}>
+              <View style={styles.exportTable}>
+                <View style={styles.exportTableHeaderRow}>
+                  {['USER', 'PHONE', 'ACCOUNT TYPE', 'EMAIL', 'ORGANIZATION', 'STATUS', 'JOINED'].map(label => (
+                    <Text key={label} style={[styles.exportTableHeaderText, styles[`exportCol${label.replace(/\s/g, '')}` as keyof typeof styles] as any]}>
+                      {label}
+                    </Text>
+                  ))}
+                </View>
+                <ScrollView style={styles.exportTableBody} nestedScrollEnabled>
+                  {exportRows.map(row => (
+                    <View key={row.id} style={styles.exportTableRow}>
+                      <Text style={[styles.exportTableCell, styles.exportColUSER]} numberOfLines={1}>{row.name}</Text>
+                      <Text style={[styles.exportTableCell, styles.exportColPHONE]} numberOfLines={1}>{row.phone || '—'}</Text>
+                      <Text style={[styles.exportTableCell, styles.exportColACCOUNTTYPE]} numberOfLines={1}>{row.role}</Text>
+                      <Text style={[styles.exportTableCell, styles.exportColEMAIL]} numberOfLines={1}>{row.email || '—'}</Text>
+                      <Text style={[styles.exportTableCell, styles.exportColORGANIZATION]} numberOfLines={1}>{row.organization || '—'}</Text>
+                      <Text style={[styles.exportTableCell, row.status === 'Pending' ? styles.exportPendingText : styles.exportActiveText, styles.exportColSTATUS]}>{row.status}</Text>
+                      <Text style={[styles.exportTableCell, styles.exportColJOINED]} numberOfLines={1}>{row.joined}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            </ScrollView>
+
+            <View style={styles.exportModalFooter}>
+              <TouchableOpacity style={styles.exportCancelButton} onPress={() => setShowExportPreview(false)}>
+                <Text style={styles.exportCancelButtonText}>Close</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.exportDownloadButton} onPress={handleDownloadCSV}>
+                <MaterialIcons name="file-download" size={18} color="#ffffff" />
+                <Text style={styles.exportDownloadButtonText}>Download CSV</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <DocumentPreviewModal
         visible={Boolean(documentPreview)}
         title={documentPreview?.title}
@@ -1343,6 +1467,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.02,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
+  },
+  summaryCardActive: {
+    borderColor: '#16a34a',
+    backgroundColor: '#f8fffa',
+    borderWidth: 2,
   },
   summaryIconBox: {
     width: 48,
@@ -1864,6 +1993,152 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 20,
+    fontWeight: '700',
+  },
+  exportModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  exportModalCard: {
+    width: '96%',
+    maxWidth: 1180,
+    maxHeight: '88%',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  exportModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  exportModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  exportModalSubtitle: {
+    marginTop: 3,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  exportModalCloseButton: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+  },
+  exportTableScrollContent: {
+    padding: 16,
+  },
+  exportTable: {
+    minWidth: 1160,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  exportTableHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  exportTableHeaderText: {
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748b',
+    letterSpacing: 0.4,
+  },
+  exportTableBody: {
+    maxHeight: 430,
+  },
+  exportTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 48,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  exportTableCell: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 12,
+    color: '#334155',
+  },
+  exportColUSER: {
+    width: 190,
+  },
+  exportColPHONE: {
+    width: 135,
+  },
+  exportColACCOUNTTYPE: {
+    width: 145,
+  },
+  exportColEMAIL: {
+    width: 260,
+  },
+  exportColORGANIZATION: {
+    width: 220,
+  },
+  exportColSTATUS: {
+    width: 110,
+  },
+  exportColJOINED: {
+    width: 125,
+  },
+  exportActiveText: {
+    color: '#15803d',
+    fontWeight: '700',
+  },
+  exportPendingText: {
+    color: '#b45309',
+    fontWeight: '700',
+  },
+  exportModalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  exportCancelButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  exportCancelButtonText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  exportDownloadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#15803d',
+  },
+  exportDownloadButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
     fontWeight: '700',
   },
   reviewModalContainer: {

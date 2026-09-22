@@ -15,6 +15,9 @@ interface Props {
   volunteerTimeLogs?: VolunteerTimeLog[];
   volunteers?: Volunteer[];
   onViewReport: (report: SubmittedReport) => void;
+  onRequestReportMedia?: (reportIds: string[]) => void;
+  onRequestAttendanceMedia?: () => void;
+  mediaRefreshVersion?: number;
   onUploadReport?: () => void;
   reportType?: 'all' | 'volunteer' | 'partner';
 }
@@ -85,6 +88,17 @@ type ReportDownloadPreview = {
   errorMessage: string;
 };
 
+type PhotoSourceLabel = 'Attendance photo' | 'Report photo';
+
+type PhotoGalleryItem = PhotoBatchDownloadItem & {
+  key: string;
+  folderKey: string;
+  report: SubmittedReport;
+  volunteerName: string;
+  eventTitle: string;
+  photoType: PhotoSourceLabel;
+};
+
 const DOCUMENT_FILE_PATTERN = /\.(pdf|doc|docx|xls|xlsx|csv)(?:$|[?#])/i;
 const VIDEO_FILE_PATTERN = /\.(mp4|mov|m4v|avi|webm|3gp|mkv)(?:$|[?#])/i;
 
@@ -120,7 +134,12 @@ function getPhotoExtension(uri: string): string {
   return extension && supportedExtensions.has(extension) ? extension : 'jpg';
 }
 
-function buildPhotoDownloadItem(report: SubmittedReport, uri: string, photoIndex: number): PhotoBatchDownloadItem {
+function buildPhotoDownloadItem(
+  report: SubmittedReport,
+  uri: string,
+  photoIndex: number,
+  photoType: PhotoSourceLabel,
+): PhotoBatchDownloadItem {
   const submittedDate = new Date(report.submittedAt || '');
   const dateKey = Number.isNaN(submittedDate.getTime())
     ? 'undated'
@@ -128,9 +147,10 @@ function buildPhotoDownloadItem(report: SubmittedReport, uri: string, photoIndex
   const volunteer = safePhotoFilenamePart(report.submitterName, 'volunteer');
   const event = safePhotoFilenamePart(report.projectTitle, 'event');
   const extension = getPhotoExtension(uri);
+  const source = photoType === 'Attendance photo' ? 'attendance-photo' : 'report-photo';
   return {
     uri,
-    filename: `${volunteer}-${event}-${dateKey}-${photoIndex + 1}.${extension}`,
+    filename: `${source}-${volunteer}-${event}-${dateKey}-${photoIndex + 1}.${extension}`,
   };
 }
 
@@ -350,7 +370,7 @@ function buildBatchReportPdf(
   });
 }
 
-export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onUploadReport, reportType = 'all' }: Props) {
+export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onRequestReportMedia, onRequestAttendanceMedia, mediaRefreshVersion = 0, onUploadReport, reportType = 'all' }: Props) {
   const { width: viewportWidth } = useWindowDimensions();
   const isNarrow = viewportWidth < 700;
   const [activeFilter, setActiveFilter] = useState<'All' | 'Events' | 'Photos'>('All');
@@ -375,6 +395,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     volunteerName: string;
     eventTitle: string;
     filename: string;
+    photoType: PhotoSourceLabel;
   } | null>(null);
 
   const projectById = useMemo(() => {
@@ -425,6 +446,24 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     });
     return base;
   }, [reports, volunteerTimeLogs, projectById, volunteers]);
+
+  useEffect(() => {
+    // Keep the Reports landing screen lightweight. Full report attachments are
+    // requested only after the admin opens the Photos view.
+    if (activeFilter !== 'Photos' || !onRequestReportMedia) return;
+    const reportIds = reports
+      .filter(report => !report.id.startsWith('timelog-'))
+      .map(report => report.id);
+    if (reportIds.length > 0) {
+      onRequestReportMedia(Array.from(new Set(reportIds)));
+    }
+  }, [activeFilter, mediaRefreshVersion, onRequestReportMedia, reports]);
+
+  useEffect(() => {
+    if (activeFilter === 'Photos') {
+      onRequestAttendanceMedia?.();
+    }
+  }, [activeFilter, mediaRefreshVersion, onRequestAttendanceMedia]);
 
   const filterableItems = useMemo(
     () => allItems.filter(report => (report as any).status !== 'Rejected'),
@@ -516,7 +555,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
   );
   const eventReports = useMemo(() => taskReports.filter(r => (r as any).projectKind === 'event'), [taskReports]);
   const photoReports = useMemo(
-    () => searchFiltered.filter(report => reportHasPhoto(report) && isAttendanceReport(report)),
+    () => searchFiltered.filter(reportHasPhoto),
     [searchFiltered],
   );
 
@@ -544,24 +583,51 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     return arr;
   }, [taskReports, eventReports, activeFilter, attachmentFilter, search, projects, projectById]);
 
-  // Photos folders: group by image reports
+  const photoGalleryItems = useMemo(() => {
+    const items: PhotoGalleryItem[] = [];
+    const seenPhotos = new Set<string>();
+
+    photoReports.forEach(report => {
+      const photoType: PhotoSourceLabel = isAttendanceReport(report) ? 'Attendance photo' : 'Report photo';
+      const folderKey = photoFolderKey(report);
+      const volunteerName = report.submitterName || 'Volunteer';
+      const eventTitle = getReportActivityTitle(report, projectById);
+
+      getReportPhotoUris(report).forEach((uri, photoIndex) => {
+        const dedupeKey = `${folderKey}|${volunteerName}|${uri}`;
+        if (seenPhotos.has(dedupeKey)) return;
+        seenPhotos.add(dedupeKey);
+
+        const photoFile = buildPhotoDownloadItem(report, uri, photoIndex, photoType);
+        items.push({
+          ...photoFile,
+          key: `${report.id}-${photoType}-${photoIndex}`,
+          folderKey,
+          report,
+          volunteerName,
+          eventTitle,
+          photoType,
+        });
+      });
+    });
+
+    return items;
+  }, [photoReports, projectById]);
+
+  // Photos folders: group attendance and report photos by event/project.
   const photoFolders = useMemo(() => {
     const map = new Map<string, { key: string; title: string; count: number; updatedAt: string }>();
-    const target = activeFilter === 'Events' ? [] : photoReports;
-    target.forEach(rep => {
-      const key = photoFolderKey(rep);
-      const proj = rep.projectId ? projectById.get(rep.projectId) : undefined;
-      const title = proj?.title || rep.projectTitle || 'Photos';
-      if (!map.has(key)) map.set(key, { key, title, count: 0, updatedAt: rep.submittedAt });
+    const target = activeFilter === 'Events' ? [] : photoGalleryItems;
+    target.forEach(item => {
+      const key = item.folderKey;
+      const title = item.eventTitle || 'Photos';
+      if (!map.has(key)) map.set(key, { key, title, count: 0, updatedAt: item.report.submittedAt });
       const f = map.get(key)!;
-      f.count += getReportPhotoUris(rep).length;
-      if (new Date(rep.submittedAt).getTime() > new Date(f.updatedAt).getTime()) f.updatedAt = rep.submittedAt;
+      f.count += 1;
+      if (new Date(item.report.submittedAt).getTime() > new Date(f.updatedAt).getTime()) f.updatedAt = item.report.submittedAt;
     });
-    if (map.size === 0 && activeFilter !== 'Events') {
-      // fallback to show empty state, not needed
-    }
     return Array.from(map.values());
-  }, [photoReports, activeFilter, projectById]);
+  }, [activeFilter, photoGalleryItems]);
 
   // If a search/filter removes the selected folder, clear the selection so
   // the table never remains stuck on an invisible event.
@@ -601,17 +667,11 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     ? photoReports.filter(report => photoFolderKey(report) === selectedPhotoFolderKey)
     : photoReports;
   const selectedPhotoFolder = photoFolders.find(folder => folder.key === selectedPhotoFolderKey);
-  const photoItems = photoTableReports.flatMap(report =>
-    getReportPhotoUris(report).map((uri, photoIndex) => {
-      const photoFile = buildPhotoDownloadItem(report, uri, photoIndex);
-      return {
-        ...photoFile,
-        report,
-        volunteerName: report.submitterName || 'Volunteer',
-        eventTitle: getReportActivityTitle(report, projectById),
-      };
-    })
-  );
+  const photoItems = activeFilter === 'Events'
+    ? []
+    : selectedPhotoFolderKey
+    ? photoGalleryItems.filter(item => item.folderKey === selectedPhotoFolderKey)
+    : photoGalleryItems;
   const attachmentFilterLabel =
     attachmentFilter === 'photos'
       ? 'Has Photos'
@@ -662,28 +722,29 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
 
   const handlePhotoBatchDownload = () => {
     if (!photoItems.length) {
-      Alert.alert('No Photos', 'There are no attendance photos available to download.');
+      Alert.alert('No Photos', 'There are no attendance or report photos available to download.');
       return;
     }
 
     const dateKey = new Date().toISOString().slice(0, 10);
     const archiveTitle = selectedPhotoFolder
-      ? `${selectedPhotoFolder.title} Attendance Photos`
-      : 'Attendance Photos';
+      ? `${selectedPhotoFolder.title} Photos`
+      : 'Attendance and Report Photos';
     setDownloadPreview({
       title: `Preview: ${archiveTitle}`,
       subtitle: `${photoItems.length} photo${photoItems.length === 1 ? '' : 's'} from ${new Set(photoItems.map(item => item.volunteerName)).size} volunteer${new Set(photoItems.map(item => item.volunteerName)).size === 1 ? '' : 's'} ready to download as a ZIP archive`,
       totalRows: photoItems.length,
       recordCount: photoItems.length,
       previewRows: photoItems.slice(0, 5).map(item => ({
+        Type: item.photoType,
         Volunteer: item.volunteerName,
         Event: item.eventTitle,
         Photo: item.filename,
       })),
-      columns: ['Volunteer', 'Event', 'Photo'],
-      fileName: `attendance-photos-${dateKey}`,
+      columns: ['Type', 'Volunteer', 'Event', 'Photo'],
+      fileName: `attendance-and-report-photos-${dateKey}`,
       photoItems,
-      errorMessage: 'Unable to download the attendance photos on this device.',
+      errorMessage: 'Unable to download the attendance or report photos on this device.',
     });
   };
 
@@ -1060,7 +1121,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
             </View>
             <View>
               <Text style={styles.sectionTitle}>Photos Reports</Text>
-              <Text style={styles.sectionSubtitle}>Attendance photos submitted by volunteers who timed in.</Text>
+              <Text style={styles.sectionSubtitle}>Attendance and report photos submitted by volunteers.</Text>
             </View>
           </View>
           <View style={styles.sectionHeaderRight}>
@@ -1078,7 +1139,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 disabled={!photoItems.length}
                 activeOpacity={0.8}
                 accessibilityRole="button"
-                accessibilityLabel="Batch download attendance photos"
+                accessibilityLabel="Batch download attendance and report photos"
               >
                 <MaterialIcons name="file-download" size={15} color="#fff" />
                 <Text style={styles.batchDownloadButtonText}>Batch Download</Text>
@@ -1172,7 +1233,24 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
 
         {photoFolders.length === 0 ? (
           <View style={styles.emptyTable}>
-            <Text style={styles.emptyTableText}>No attendance photos found</Text>
+            <Text style={styles.emptyTableText}>
+              {activeFilter === 'Photos'
+                ? 'No attendance or report photos found'
+                : 'Open Photos above to load attendance and report photos'}
+            </Text>
+            {activeFilter !== 'Photos' && onRequestAttendanceMedia ? (
+              <TouchableOpacity
+                style={styles.loadPhotosButton}
+                onPress={() => {
+                  setActiveFilter('Photos');
+                  onRequestAttendanceMedia();
+                }}
+                activeOpacity={0.85}
+              >
+                <MaterialIcons name="photo-library" size={15} color="#166534" />
+                <Text style={styles.loadPhotosButtonText}>Load Photos</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : selectedPhotoFolder || showAllPhotos ? (
           photoItems.length > 0 ? (
@@ -1184,10 +1262,11 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 onPress={() => setPhotoPreview(item)}
                 activeOpacity={0.88}
                 accessibilityRole="button"
-                accessibilityLabel={`View attendance photo from ${item.volunteerName}`}
+                accessibilityLabel={`View ${item.photoType.toLowerCase()} from ${item.volunteerName}`}
               >
                 <Image source={{ uri: item.uri }} style={styles.photoTileImage} resizeMode="cover" />
                 <View style={styles.photoTileCaption}>
+                  <Text style={styles.photoTileType} numberOfLines={1}>{item.photoType}</Text>
                   <Text style={styles.photoTileVolunteer} numberOfLines={1}>{item.volunteerName}</Text>
                   <Text style={styles.photoTileEvent} numberOfLines={1}>{item.eventTitle}</Text>
                 </View>
@@ -1196,7 +1275,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           </View>
           ) : (
             <View style={styles.emptyTable}>
-              <Text style={styles.emptyTableText}>No attendance photos found</Text>
+              <Text style={styles.emptyTableText}>No attendance or report photos found</Text>
             </View>
           )
         ) : null}
@@ -1299,7 +1378,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
           <View style={styles.photoViewerCard}>
             <View style={styles.photoViewerHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.photoViewerTitle}>Attendance photo</Text>
+                <Text style={styles.photoViewerTitle}>{photoPreview?.photoType || 'Photo'}</Text>
                 <Text style={styles.photoViewerSubtitle} numberOfLines={1}>
                   {photoPreview?.volunteerName || 'Volunteer'}
                 </Text>
@@ -1619,6 +1698,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     gap: 3,
   },
+  photoTileType: { fontSize: 10, fontWeight: '800', color: '#166534' },
   photoTileVolunteer: { fontSize: 12, fontWeight: '800', color: '#1F2937' },
   photoTileEvent: { fontSize: 10, color: '#6B7280' },
   photoViewerBackdrop: {
@@ -1728,6 +1808,19 @@ const styles = StyleSheet.create({
   submitterRole: { fontSize: 11, color: '#6B7280', marginTop: 1 },
   emptyTable: { padding: 24, alignItems: 'center' },
   emptyTableText: { color: '#9CA3AF' },
+  loadPhotosButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 10,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#86B89A',
+    backgroundColor: '#F0FDF4',
+  },
+  loadPhotosButtonText: { fontSize: 11, fontWeight: '800', color: '#166534' },
   fabWrap: {
     position: 'absolute',
     right: 16,
