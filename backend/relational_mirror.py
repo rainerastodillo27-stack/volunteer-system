@@ -85,6 +85,10 @@ RELATIONAL_TABLE_DDL = [
     )
     """,
     "create index if not exists users_email_idx on users (lower(coalesce(email, '')))",
+    # A timed-out mobile request may be retried while the first request is
+    # still committing. Keep one canonical account per non-empty email so a
+    # later delete cannot leave an indistinguishable duplicate behind.
+    "create unique index if not exists users_email_unique_idx on users (lower(trim(email))) where email is not null and trim(email) <> ''",
     "create index if not exists users_phone_idx on users (coalesce(phone, ''))",
     "alter table users add column if not exists approval_status text",
     "alter table users add column if not exists approved_by text",

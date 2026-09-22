@@ -287,6 +287,10 @@ export default function UserManagementScreen() {
       );
       try {
         await deleteUser(targetUser.id);
+        // Refresh from the authoritative backend before leaving the delete
+        // flow. This prevents a slow, pre-delete list request from restoring
+        // the removed row in the web view.
+        await loadUsers(true);
         setSuccessNotice({
           title: 'Account Deleted',
           message: `${targetUser.name}'s account has been removed.`,
@@ -814,6 +818,8 @@ export default function UserManagementScreen() {
               style={[styles.pageNavButton, currentPage === 1 && styles.pageNavButtonDisabled]}
               onPress={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
               disabled={currentPage === 1}
+              accessibilityRole="button"
+              accessibilityLabel="Previous users page"
             >
               <MaterialIcons name="chevron-left" size={20} color={currentPage === 1 ? '#cbd5e1' : '#475569'} />
             </TouchableOpacity>
@@ -823,6 +829,8 @@ export default function UserManagementScreen() {
                 key={pageNum}
                 style={[styles.pageNumberButton, currentPage === pageNum && styles.pageNumberButtonActive]}
                 onPress={() => setCurrentPage(pageNum)}
+                accessibilityRole="button"
+                accessibilityLabel={`Go to users page ${pageNum}`}
               >
                 <Text style={[styles.pageNumberText, currentPage === pageNum && styles.pageNumberTextActive]}>
                   {pageNum}
@@ -834,6 +842,8 @@ export default function UserManagementScreen() {
               style={[styles.pageNavButton, currentPage === totalPages && styles.pageNavButtonDisabled]}
               onPress={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
               disabled={currentPage === totalPages}
+              accessibilityRole="button"
+              accessibilityLabel="Next users page"
             >
               <MaterialIcons name="chevron-right" size={20} color={currentPage === totalPages ? '#cbd5e1' : '#475569'} />
             </TouchableOpacity>

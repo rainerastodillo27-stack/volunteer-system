@@ -6719,6 +6719,14 @@ def auth_register(
             raise HTTPException(status_code=400, detail="Select a valid partner sector.")
 
     with get_connection() as connection:
+        # Serialize registrations for the same verified email across all
+        # Uvicorn workers. Without this transaction lock, two retries can both
+        # pass the existence check before either insert commits.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"registration-email:{email}",),
+            )
         # A mobile client can lose the response after the database commit and
         # retry the same registration. Treat that exact, verified replay as a
         # successful submission so the user sees confirmation instead of a
@@ -10905,6 +10913,11 @@ async def put_storage_item_by_id(
 
     try:
         with get_connection() as connection:
+            if key == "users" and _postgres_get_hot_item_by_id(connection, "users", normalized_item_id) is None:
+                # Registration is the only supported account-creation path.
+                # Do not let a stale admin page or another delayed client PUT
+                # recreate an account that was already deleted.
+                raise HTTPException(status_code=404, detail="User account no longer exists.")
             _assert_storage_item_write_access(connection, key, item, session)
             if key in {"projects", "events"}:
                 try:

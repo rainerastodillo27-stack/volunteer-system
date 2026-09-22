@@ -184,6 +184,8 @@ function SidebarTabBar({ state, descriptors, navigation, collapsed, onToggle, on
     return (
       <TouchableOpacity
         key={item.label}
+        accessibilityRole="button"
+        accessibilityLabel={item.label}
         onPress={() => {
           onNavigateWithBadge(item.route as keyof AdminTabParamList);
           navigation.navigate(item.route, {
