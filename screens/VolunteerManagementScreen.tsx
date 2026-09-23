@@ -245,7 +245,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   // Loads every volunteer time log so admins can audit time-in/time-out activity.
   const loadTimeLogs = async () => {
     try {
-      const logs = await getAllVolunteerTimeLogs();
+      const logs = await getAllVolunteerTimeLogs({ includeImages: false });
       setVolunteerTimeLogs(logs);
       setLoadError(null);
     } catch (error) {
@@ -771,7 +771,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const availableProjects = participation.availableEvents;
     const eventsJoinedCount = participation.joinedEvents.length;
     const photoReportsCount = selectedVolunteerTimeLogs.filter(log =>
-      Boolean(log.attendancePhoto || log.completionPhoto || log.completionReport)
+      Boolean(
+        log.attendancePhoto ||
+          log.completionPhoto ||
+          log.hasAttendancePhoto ||
+          log.hasCompletionPhoto ||
+          log.completionReport
+      )
     ).length;
     const completedEventsCount = participation.completedEvents.length;
     const completedEventIds = new Set(participation.completedEvents.map(project => project.id));

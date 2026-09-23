@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request as FastAPIRequest, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request as FastAPIRequest, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -106,6 +106,7 @@ PUBLIC_API_PATHS = {
     "/db-health",
     "/auth/login",
     "/auth/google",
+    "/auth/logout",
     "/auth/check-email",
     "/auth/registration-otp/send",
     "/auth/registration-otp/verify",
@@ -132,11 +133,14 @@ def _is_public_api_path(path: str) -> bool:
 # bounded/expired so this remains safe for a long-running process.
 _PUBLIC_AUTH_RATE_LIMITS: dict[str, tuple[tuple[int, int], ...]] = {
     "check-email": ((60, 60),),
+    "login": ((20, 900), (5, 300)),
+    "google": ((30, 300),),
     "registration-otp-send": ((5, 900), (2, 60)),
     "registration-otp-verify": ((20, 900), (5, 300)),
     "password-reset-send": ((5, 900), (2, 60)),
     "password-reset-confirm": ((20, 900), (5, 300)),
 }
+SESSION_COOKIE_NAME = "nvc_session"
 _public_auth_rate_limit_lock = threading.Lock()
 _public_auth_rate_limit_events: dict[str, list[float]] = {}
 
@@ -194,6 +198,25 @@ def _enforce_public_auth_rate_limit(
             )
 
 
+def _is_browser_client(request: FastAPIRequest) -> bool:
+    """Identify the web client so its session can use an HttpOnly cookie."""
+    return request.headers.get("x-volcre-client", "").strip().lower() == "web"
+
+
+def _set_browser_session_cookie(response: Response, request: FastAPIRequest, token: str) -> None:
+    if not _is_browser_client(request):
+        return
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=12 * 60 * 60,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/",
+    )
+
+
 def _apply_security_headers(response, request: FastAPIRequest):
     """Apply response hardening without assuming TLS is already configured."""
     is_attachment_response = request.url.path.startswith("/attachments/")
@@ -239,7 +262,7 @@ async def require_api_session(request: FastAPIRequest, call_next):
     if request.method == "OPTIONS" or _is_public_api_path(request.url.path) or is_attachment_download:
         return _apply_security_headers(await call_next(request), request)
 
-    token = extract_bearer_token(request.headers.get("authorization"))
+    token = extract_bearer_token(request.headers.get("authorization")) or request.cookies.get(SESSION_COOKIE_NAME)
     session = verify_session_token(token)
     if session is None:
         return _apply_security_headers(JSONResponse(
@@ -3381,9 +3404,12 @@ def _get_admin_dashboard_collection(
                 f"""
                 select {pk_column} as id, volunteer_id, project_id, time_in, time_out, note,
                        {"attendance_photo" if include_images else "null::text as attendance_photo"},
+                       case when coalesce(btrim(attendance_photo), '') <> '' then true else false end as has_attendance_photo,
                        attendance_confirmed_at, attendance_checked_at,
                        attendance_checked_by, attendance_checked_by_name,
-                       {"completion_photo" if include_images else "null::text as completion_photo"}, completion_report
+                       {"completion_photo" if include_images else "null::text as completion_photo"},
+                       case when coalesce(btrim(completion_photo), '') <> '' then true else false end as has_completion_photo,
+                       completion_report
                 from volunteer_time_logs
                 order by {pk_column} asc
                 """
@@ -3397,11 +3423,13 @@ def _get_admin_dashboard_collection(
                     "timeOut": row["time_out"],
                     "note": row["note"],
                     "attendancePhoto": row["attendance_photo"],
+                    "hasAttendancePhoto": bool(row["has_attendance_photo"]),
                     "attendanceConfirmedAt": row["attendance_confirmed_at"],
                     "attendanceCheckedAt": row["attendance_checked_at"],
                     "attendanceCheckedBy": row["attendance_checked_by"],
                     "attendanceCheckedByName": row["attendance_checked_by_name"],
                     "completionPhoto": row["completion_photo"],
+                    "hasCompletionPhoto": bool(row["has_completion_photo"]),
                     "completionReport": row["completion_report"],
                 }
                 for row in cursor.fetchall()
@@ -5671,7 +5699,8 @@ def _get_email_username_alias(identifier: str) -> str:
 
 
 def _get_identifier_error_message(identifier: str) -> str:
-    return "User not found"
+    # Do not reveal whether an identifier belongs to an account.
+    return "Invalid email, username, or password."
 
 
 # Verifies a Google ID token through Google's token introspection endpoint.
@@ -6887,7 +6916,13 @@ def auth_register(
                 and verify_password(password, existing_user.get("password"))
             )
             if not is_same_verified_submission:
-                raise HTTPException(status_code=409, detail="An account with this email already exists.")
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Unable to complete registration with these details. "
+                        "If you already have an account, sign in or use password recovery."
+                    ),
+                )
 
             saved_user = dict(existing_user)
             # Keep the response shape used by the original successful
@@ -6911,7 +6946,13 @@ def auth_register(
                 "message": "Registration was already submitted successfully. An administrator must approve the account before login is unlocked.",
             }
         if phone and _is_phone_already_registered(phone, connection):
-            raise HTTPException(status_code=409, detail="An account with this phone number already exists.")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Unable to complete registration with these details. "
+                    "Please check your account information and try again."
+                ),
+            )
 
         created_at = datetime.now(timezone.utc).isoformat()
         user_id = f"user-{secrets.token_hex(16)}"
@@ -7228,7 +7269,10 @@ def auth_password_reset_confirm(
 
 @app.post("/auth/login")
 # API endpoint that validates login credentials.
-def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
+def auth_login(payload: AuthLoginPayload, request: FastAPIRequest, response: Response) -> dict[str, Any]:
+    identifier = str(payload.identifier or "").strip().lower()
+    _enforce_public_auth_rate_limit(request, "login", identifier)
+
     # Try demo account first (fast path)
     user = _get_demo_account(payload.identifier)
     is_demo_account = user is not None
@@ -7254,7 +7298,7 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     submitted_password = str(payload.password or "").strip()
     stored_password = user.get("password")
     if not verify_password(submitted_password, stored_password):
-        raise HTTPException(status_code=401, detail="Incorrect password")
+        raise HTTPException(status_code=401, detail="Invalid email, username, or password.")
 
     # Upgrade any legacy plaintext value immediately if startup migration did
     # not already handle it. This keeps the compatibility window short.
@@ -7289,16 +7333,21 @@ def auth_login(payload: AuthLoginPayload) -> dict[str, Any]:
     public_user = dict(user)
     public_user["hasPassword"] = bool(str(user.get("password") or "").strip())
     public_user.pop("password", None)
+    session_token = create_session_token(str(public_user.get("id") or ""), str(public_user.get("role") or ""))
+    _set_browser_session_cookie(response, request, session_token)
     return {
         "user": public_user,
-        "sessionToken": create_session_token(str(public_user.get("id") or ""), str(public_user.get("role") or "")),
+        # Native clients use the bearer token. Browser clients use the
+        # HttpOnly cookie so the session is not persisted in localStorage.
+        "sessionToken": None if _is_browser_client(request) else session_token,
         "message": "Login successful",
     }
 
 
 @app.post("/auth/google")
 # Authenticates only Google emails that already belong to registered accounts.
-def auth_google(payload: GoogleAuthPayload) -> dict[str, Any]:
+def auth_google(payload: GoogleAuthPayload, request: FastAPIRequest, response: Response) -> dict[str, Any]:
+    _enforce_public_auth_rate_limit(request, "google")
     token_info = _verify_google_id_token(payload.idToken)
     email = str(token_info.get("email") or "").strip().lower()
 
@@ -7329,11 +7378,19 @@ def auth_google(payload: GoogleAuthPayload) -> dict[str, Any]:
     public_user = dict(user)
     public_user["hasPassword"] = bool(str(user.get("password") or "").strip())
     public_user.pop("password", None)
+    session_token = create_session_token(str(public_user.get("id") or ""), str(public_user.get("role") or ""))
+    _set_browser_session_cookie(response, request, session_token)
     return {
         "user": public_user,
-        "sessionToken": create_session_token(str(public_user.get("id") or ""), str(public_user.get("role") or "")),
+        "sessionToken": None if _is_browser_client(request) else session_token,
         "message": "Google login successful",
     }
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response) -> dict[str, str]:
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"message": "Logged out"}
 
 
 @app.post("/auth/send-rejection-email")
@@ -8017,9 +8074,11 @@ def get_partner_volunteer_time_log_media(
                 f"""
                 select {pk_column} as id, volunteer_id, project_id, time_in, time_out, note,
                        {"attendance_photo" if include_images else "null::text"} as attendance_photo,
+                       case when coalesce(btrim(attendance_photo), '') <> '' then true else false end as has_attendance_photo,
                        attendance_confirmed_at, attendance_checked_at,
                        attendance_checked_by, attendance_checked_by_name,
                        {"completion_photo" if include_images else "null::text"} as completion_photo,
+                       case when coalesce(btrim(completion_photo), '') <> '' then true else false end as has_completion_photo,
                        completion_report
                 from volunteer_time_logs
                 where project_id = any(%s)
@@ -8036,11 +8095,13 @@ def get_partner_volunteer_time_log_media(
                     "timeOut": row["time_out"],
                     "note": row["note"],
                     "attendancePhoto": row["attendance_photo"],
+                    "hasAttendancePhoto": bool(row["has_attendance_photo"]),
                     "attendanceConfirmedAt": row["attendance_confirmed_at"],
                     "attendanceCheckedAt": row["attendance_checked_at"],
                     "attendanceCheckedBy": row["attendance_checked_by"],
                     "attendanceCheckedByName": row["attendance_checked_by_name"],
                     "completionPhoto": row["completion_photo"],
+                    "hasCompletionPhoto": bool(row["has_completion_photo"]),
                     "completionReport": row["completion_report"],
                 }
                 for row in cursor.fetchall()
@@ -10564,7 +10625,9 @@ async def mark_message_read(request: FastAPIRequest, message_id: str) -> dict[st
 @app.websocket("/ws/messages/{user_id}")
 # Websocket endpoint that streams message events to one user.
 async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
-    session = verify_session_token(websocket.query_params.get("token"))
+    session = verify_session_token(
+        websocket.query_params.get("token") or websocket.cookies.get(SESSION_COOKIE_NAME)
+    )
     if session is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
@@ -10608,7 +10671,9 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
 @app.websocket("/ws/storage")
 # Websocket endpoint that streams shared storage changes to all listeners.
 async def storage_websocket(websocket: WebSocket) -> None:
-    if verify_session_token(websocket.query_params.get("token")) is None:
+    if verify_session_token(
+        websocket.query_params.get("token") or websocket.cookies.get(SESSION_COOKIE_NAME)
+    ) is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 

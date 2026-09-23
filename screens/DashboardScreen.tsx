@@ -587,7 +587,7 @@ export default function DashboardScreen({ navigation }: any) {
 
       // Time logs are not part of the critical dashboard request. Load the
       // optional workflow counters after the dashboard is already usable.
-      void getAllVolunteerTimeLogs().then(nextTimeLogs => {
+      void getAllVolunteerTimeLogs({ includeImages: false }).then(nextTimeLogs => {
         const sortedLogs = [...(nextTimeLogs || [])].sort(
           (a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime()
         );

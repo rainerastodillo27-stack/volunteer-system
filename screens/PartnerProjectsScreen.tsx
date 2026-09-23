@@ -178,7 +178,10 @@ export default function PartnerProjectsScreen({ route }: any) {
 
       // Project cards are usable without the full attendance-photo history.
       // Load the heavier metrics after the first screen has rendered.
-      void Promise.all([getAllVolunteerTimeLogs(), getAllVolunteerProjectJoinRecords()])
+      void Promise.all([
+        getAllVolunteerTimeLogs({ includeImages: false }),
+        getAllVolunteerProjectJoinRecords(),
+      ])
         .then(([allVolunteerTimeLogs, allVolunteerJoinRecords]) => {
           setVolunteerTimeLogs(allVolunteerTimeLogs || []);
           setVolunteerJoinRecords(allVolunteerJoinRecords || []);

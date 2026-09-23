@@ -1237,6 +1237,7 @@ export function getApiBaseUrl(): string {
   }
 
   const configuredWebBaseUrl = getExpoExtraValue('webApiBaseUrl');
+  const isProductionRuntime = getExpoExtraValue('isProductionBuild') === 'true';
   if (typeof document !== 'undefined') {
     const protocol = document.location.protocol || 'http:';
     const host = document.location.hostname || '127.0.0.1';
@@ -1253,6 +1254,10 @@ export function getApiBaseUrl(): string {
 
     if (configuredWebBaseUrl && configuredWebBaseUrl.trim().length > 0) {
       return configuredWebBaseUrl.trim().replace(/\/$/, '');
+    }
+
+    if (isProductionRuntime) {
+      return DEFAULT_PRODUCTION_API_URL;
     }
 
     return `${protocol}//${host}:8000`;
@@ -1272,8 +1277,9 @@ export async function getApiAuthToken(): Promise<string | null> {
 
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
-      const storedToken = window.localStorage.getItem(API_AUTH_TOKEN_KEY)?.trim() || '';
-      memoryApiAuthToken = storedToken || null;
+      // Web sessions are held by the server's HttpOnly cookie. Remove the
+      // legacy bearer token so XSS cannot recover a persistent API credential.
+      window.localStorage.removeItem(API_AUTH_TOKEN_KEY);
       return memoryApiAuthToken;
     } catch {
       return null;
@@ -1294,11 +1300,9 @@ export async function setApiAuthToken(token: string | null): Promise<void> {
 
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
-      if (memoryApiAuthToken) {
-        window.localStorage.setItem(API_AUTH_TOKEN_KEY, memoryApiAuthToken);
-      } else {
-        window.localStorage.removeItem(API_AUTH_TOKEN_KEY);
-      }
+      // Never persist web bearer tokens in localStorage. The API sets an
+      // HttpOnly session cookie during browser authentication instead.
+      window.localStorage.removeItem(API_AUTH_TOKEN_KEY);
     } catch {
       // Continue to native storage fallback only when browser storage is not usable.
     }
@@ -1325,16 +1329,18 @@ export async function getApiAuthHeaders(): Promise<Record<string, string>> {
 async function getMessagesWebSocketUrl(userId: string): Promise<string | null> {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
   const token = await getApiAuthToken();
-  return token
+  return token && typeof document === 'undefined'
     ? `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`
-    : null;
+    : wsBaseUrl;
 }
 
 // Builds the websocket URL used for shared storage change notifications.
 async function getStorageWebSocketUrl(): Promise<string | null> {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
   const token = await getApiAuthToken();
-  return token ? `${wsBaseUrl}/ws/storage?token=${encodeURIComponent(token)}` : null;
+  return token && typeof document === 'undefined'
+    ? `${wsBaseUrl}/ws/storage?token=${encodeURIComponent(token)}`
+    : wsBaseUrl;
 }
 
 async function delay(ms: number): Promise<void> {
@@ -1571,6 +1577,7 @@ async function fetchApiResponse(
       const response = await fetch(`${getApiBaseUrl()}${path}`, {
         ...init,
         signal: controller.signal,
+        credentials: typeof document !== 'undefined' ? 'include' : init?.credentials,
         headers: {
           'ngrok-skip-browser-warning': '69420',
           'User-Agent': 'VolCre-App/1.0',
@@ -3814,6 +3821,7 @@ export async function loginWithCredentials(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(typeof document !== 'undefined' ? { 'X-Volcre-Client': 'web' } : {}),
       },
       body: JSON.stringify({
         identifier: identifier.trim(),
@@ -3822,6 +3830,9 @@ export async function loginWithCredentials(
     });
     if (payload.sessionToken) {
       await setApiAuthToken(payload.sessionToken);
+    } else if (typeof document !== 'undefined') {
+      // Browser authentication uses the server-issued HttpOnly cookie.
+      await setApiAuthToken(null);
     } else {
       throw new Error('The server did not establish a secure session. Please try again.');
     }
@@ -3878,12 +3889,16 @@ export async function loginWithGoogle(idToken: string): Promise<User | null> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(typeof document !== 'undefined' ? { 'X-Volcre-Client': 'web' } : {}),
     },
     body: JSON.stringify({ idToken: normalizedToken }),
   });
 
   if (payload.sessionToken) {
     await setApiAuthToken(payload.sessionToken);
+  } else if (typeof document !== 'undefined') {
+    // Browser authentication uses the server-issued HttpOnly cookie.
+    await setApiAuthToken(null);
   } else {
     throw new Error('The server did not establish a secure session. Please try again.');
   }
@@ -3959,6 +3974,14 @@ export async function deleteUser(userId: string): Promise<void> {
 
 // Persists the currently signed-in user in local-only storage.
 export async function setCurrentUser(user: User | null): Promise<void> {
+  if (!user && typeof document !== 'undefined') {
+    try {
+      await requestApiJson('/auth/logout', { method: 'POST' });
+    } catch {
+      // Local logout must still complete if the API is temporarily offline.
+    }
+  }
+
   // On web, write the auth record synchronously before updating the general
   // cache. This is the source of truth used by the next page load.
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -5114,7 +5137,9 @@ export async function getVolunteerTimeLogs(
 export async function getAllVolunteerTimeLogs(options?: {
   includeImages?: boolean;
 }): Promise<VolunteerTimeLog[]> {
-  const includeImages = options?.includeImages !== false;
+  // Attendance/list screens only need timestamps and status. Photo bytes are
+  // requested explicitly by report, gallery, and detail flows.
+  const includeImages = options?.includeImages === true;
   const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, includeImages)) || [];
   return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 }

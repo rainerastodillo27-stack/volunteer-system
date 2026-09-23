@@ -21,6 +21,8 @@ import {
 
   TouchableOpacity,
 
+  Pressable,
+
   View,
 
   useWindowDimensions,
@@ -340,8 +342,10 @@ function MessageMenu({ isOwn, isOpen, isLoading, onToggle, onSelect }: MessageMe
         onPress={onToggle}
         activeOpacity={0.7}
         disabled={isLoading}
+        hitSlop={6}
         accessibilityRole="button"
         accessibilityLabel="Message options"
+        accessibilityHint="Opens actions for this message"
         accessibilityState={{ expanded: isOpen, disabled: isLoading }}
       >
         {isLoading ? (
@@ -351,28 +355,45 @@ function MessageMenu({ isOwn, isOpen, isLoading, onToggle, onSelect }: MessageMe
         )}
       </TouchableOpacity>
       {isOpen ? (
-        <View style={[styles.msgMenuDropdown, isOwn && styles.msgMenuDropdownOwn]}>
-          <TouchableOpacity
-            style={styles.msgMenuDropdownItem}
-            onPress={() => onSelect('self')}
-            disabled={isLoading}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name={isOwn ? 'person-outline' : 'delete-outline'} size={16} color="#475569" />
-            <Text style={styles.msgMenuDropdownItemText}>{isOwn ? 'Unsend for self' : 'Delete for me'}</Text>
-          </TouchableOpacity>
-          {isOwn ? (
-            <TouchableOpacity
-              style={[styles.msgMenuDropdownItem, styles.msgMenuDropdownItemDanger]}
-              onPress={() => onSelect('everyone')}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="public" size={16} color="#dc2626" />
-              <Text style={styles.msgMenuDropdownItemDangerText}>Unsend for everyone</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+        <Modal
+          transparent
+          visible
+          animationType="fade"
+          statusBarTranslucent
+          onRequestClose={onToggle}
+        >
+          <View style={styles.msgMenuModal}>
+            <Pressable
+              style={styles.msgMenuBackdrop}
+              onPress={onToggle}
+              accessibilityRole="button"
+              accessibilityLabel="Close message options"
+            />
+            <View style={styles.msgMenuSheet} accessibilityViewIsModal>
+              <Text style={styles.msgMenuSheetTitle}>Message options</Text>
+              <TouchableOpacity
+                style={styles.msgMenuDropdownItem}
+                onPress={() => onSelect('self')}
+                disabled={isLoading}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name={isOwn ? 'person-outline' : 'delete-outline'} size={18} color="#475569" />
+                <Text style={styles.msgMenuDropdownItemText}>{isOwn ? 'Unsend for self' : 'Delete for me'}</Text>
+              </TouchableOpacity>
+              {isOwn ? (
+                <TouchableOpacity
+                  style={[styles.msgMenuDropdownItem, styles.msgMenuDropdownItemDanger]}
+                  onPress={() => onSelect('everyone')}
+                  disabled={isLoading}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="public" size={18} color="#dc2626" />
+                  <Text style={styles.msgMenuDropdownItemDangerText}>Unsend for everyone</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+        </Modal>
       ) : null}
     </View>
   );
@@ -2008,6 +2029,16 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
   }, [selectedUser]);
 
+  useEffect(() => {
+
+    // A menu belongs to one conversation only. Close it before a different
+    // direct thread renders so its overlay can never cover the next header.
+    setShowConversationMenu(false);
+
+    setActiveMessageMenu(null);
+
+  }, [selectedUser?.id]);
+
 
 
   // Opening a direct conversation marks every message addressed to the
@@ -2073,6 +2104,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     selectedProjectChatRef.current = selectedProjectChat;
 
     setShowConversationMenu(false);
+
+    setActiveMessageMenu(null);
 
     setShowMembersModal(false);
 
@@ -4035,7 +4068,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         <View style={styles.detail}>
 
-          <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 58 + insets.top }]}>
+          <View
+            style={[
+              styles.detailHeader,
+              !isWide && styles.detailHeaderMobile,
+              !isWide && { paddingTop: insets.top, height: 64 + insets.top },
+            ]}
+          >
 
             {!isWide && (
 
@@ -4585,7 +4624,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         <View style={styles.detail}>
 
-          <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 70 + insets.top }]}>
+          <View
+            style={[
+              styles.detailHeader,
+              !isWide && styles.detailHeaderMobile,
+              !isWide && { paddingTop: insets.top, height: 64 + insets.top },
+            ]}
+          >
 
             {!isWide && (
 
@@ -5040,7 +5085,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       <View style={styles.detail}>
 
-        <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 58 + insets.top }]}>
+        <View
+          style={[
+            styles.detailHeader,
+            !isWide && styles.detailHeaderMobile,
+            !isWide && { paddingTop: insets.top, height: 64 + insets.top },
+          ]}
+        >
 
           {!isWide && (
 
@@ -5052,9 +5103,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
           )}
 
-          <View style={styles.headerInfo}>
+          <View style={[styles.headerInfo, !isWide && styles.headerInfoMobile]}>
 
-            <View style={styles.headerAvatar}>
+            <View style={[styles.headerAvatar, !isWide && styles.headerAvatarMobile]}>
 
               {headerProfilePhoto && isImageMediaUri(headerProfilePhoto) ? (
                 <Image source={{ uri: headerProfilePhoto }} style={styles.headerAvatarImage} />
@@ -5066,9 +5117,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
             <View style={{ flex: 1, flexShrink: 1 }}>
 
-              <Text style={styles.detailTitle} numberOfLines={1} ellipsizeMode="tail">{title}</Text>
+              <Text style={[styles.detailTitle, !isWide && styles.detailTitleMobile]} numberOfLines={1} ellipsizeMode="tail">{title}</Text>
 
-              <Text style={styles.detailSubtitle} numberOfLines={1} ellipsizeMode="tail">{subtitle}</Text>
+              <Text style={[styles.detailSubtitle, !isWide && styles.detailSubtitleMobile]} numberOfLines={1} ellipsizeMode="tail">{subtitle}</Text>
 
             </View>
 
@@ -5080,7 +5131,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               <TouchableOpacity
 
-                style={styles.headerAction}
+                style={[styles.headerAction, !isWide && styles.headerActionMobile]}
 
                 onPress={closeActiveConversation}
 
@@ -5100,11 +5151,24 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <TouchableOpacity
 
-                  style={styles.headerAction}
+                  style={[styles.headerAction, !isWide && styles.headerActionMobile]}
 
-                  onPress={() => setShowConversationMenu(current => !current)}
+                  onPress={() => {
+                    setActiveMessageMenu(null);
+                    setShowConversationMenu(current => !current);
+                  }}
 
                   activeOpacity={0.8}
+
+                  hitSlop={6}
+
+                  accessibilityRole="button"
+
+                  accessibilityLabel="Conversation options"
+
+                  accessibilityHint="Opens actions for this conversation"
+
+                  accessibilityState={{ expanded: showConversationMenu }}
 
                 >
 
@@ -5114,7 +5178,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 {showConversationMenu ? (
 
-                  <View style={styles.conversationMenu}>
+                  <Modal
+                    transparent
+                    visible
+                    animationType="fade"
+                    statusBarTranslucent
+                    onRequestClose={() => setShowConversationMenu(false)}
+                  >
+                    <View style={[styles.conversationMenuModal, { paddingTop: insets.top + 64 }]}>
+                      <Pressable
+                        style={styles.conversationMenuBackdrop}
+                        onPress={() => setShowConversationMenu(false)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Close conversation options"
+                      />
+                      <View style={styles.conversationMenu} accessibilityViewIsModal>
 
                     <TouchableOpacity
 
@@ -5196,6 +5274,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                   </View>
 
+                    </View>
+
+                  </Modal>
+
                 ) : null}
 
               </View>
@@ -5208,11 +5290,24 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <TouchableOpacity
 
-                  style={styles.headerAction}
+                  style={[styles.headerAction, !isWide && styles.headerActionMobile]}
 
-                  onPress={() => setShowConversationMenu(current => !current)}
+                  onPress={() => {
+                    setActiveMessageMenu(null);
+                    setShowConversationMenu(current => !current);
+                  }}
 
                   activeOpacity={0.8}
+
+                  hitSlop={6}
+
+                  accessibilityRole="button"
+
+                  accessibilityLabel="Conversation options"
+
+                  accessibilityHint="Opens actions for this conversation"
+
+                  accessibilityState={{ expanded: showConversationMenu }}
 
                 >
 
@@ -5222,7 +5317,21 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 {showConversationMenu ? (
 
-                  <View style={styles.conversationMenu}>
+                  <Modal
+                    transparent
+                    visible
+                    animationType="fade"
+                    statusBarTranslucent
+                    onRequestClose={() => setShowConversationMenu(false)}
+                  >
+                    <View style={[styles.conversationMenuModal, { paddingTop: insets.top + 64 }]}>
+                      <Pressable
+                        style={styles.conversationMenuBackdrop}
+                        onPress={() => setShowConversationMenu(false)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Close conversation options"
+                      />
+                      <View style={styles.conversationMenu} accessibilityViewIsModal>
 
                     <TouchableOpacity
 
@@ -5251,6 +5360,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     </TouchableOpacity>
 
                   </View>
+
+                    </View>
+
+                  </Modal>
 
                 ) : null}
 
@@ -7290,9 +7403,15 @@ const styles = StyleSheet.create({
 
   },
 
+  detailHeaderMobile: { paddingHorizontal: 12 },
+
   headerInfo: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
 
+  headerInfoMobile: { gap: 10 },
+
   headerAvatar: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
+
+  headerAvatarMobile: { width: 40, height: 40, borderRadius: 12 },
 
   headerAvatarImage: { width: '100%', height: '100%', borderRadius: 12 },
 
@@ -7300,23 +7419,31 @@ const styles = StyleSheet.create({
 
   detailTitle: { fontSize: 16, fontWeight: '900', color: '#0f172a' },
 
+  detailTitleMobile: { fontSize: 15, fontWeight: '800' },
+
   detailSubtitle: { fontSize: 13, color: '#166534', fontWeight: '600', marginTop: 1 },
+
+  detailSubtitleMobile: { fontSize: 12, fontWeight: '600' },
 
   headerActions: { flexShrink: 0, flexDirection: 'row', gap: 4, zIndex: 60 },
 
   headerAction: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0' },
 
+  headerActionMobile: { width: 44, height: 44, borderRadius: 12 },
+
   conversationMenuWrap: { position: 'relative', zIndex: 70 },
+
+  conversationMenuModal: { flex: 1, paddingHorizontal: 12, paddingBottom: 16 },
+
+  conversationMenuBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15,23,42,0.12)' },
 
   conversationMenu: {
 
-    position: 'absolute',
+    alignSelf: 'flex-end',
 
-    right: 0,
+    minWidth: 208,
 
-    top: 44,
-
-    minWidth: 190,
+    maxWidth: '100%',
 
     backgroundColor: '#ffffff',
 
@@ -7336,9 +7463,7 @@ const styles = StyleSheet.create({
 
     shadowRadius: 18,
 
-    elevation: 8,
-
-    zIndex: 80,
+    elevation: 16,
 
   },
 
@@ -7370,7 +7495,7 @@ const styles = StyleSheet.create({
 
   conversationMenuDangerText: { fontSize: 12, fontWeight: '900', color: '#dc2626' },
 
-  backButton: { flexShrink: 0, marginRight: 10 },
+  backButton: { width: 44, height: 44, flexShrink: 0, marginRight: 2, alignItems: 'center', justifyContent: 'center' },
 
 
 
@@ -7795,9 +7920,9 @@ const styles = StyleSheet.create({
 
   messagesList: { flex: 1 },
 
-  messagesListContent: { padding: 10, gap: 8 },
+  messagesListContent: { paddingHorizontal: 8, paddingVertical: 6, gap: 4 },
 
-  messageRow: { width: '85%', maxWidth: '85%', gap: 4, minWidth: 0, flexShrink: 1 },
+  messageRow: { width: '85%', maxWidth: '85%', gap: 2, minWidth: 0, flexShrink: 1 },
 
   proposalMessageRow: { maxWidth: '100%', width: '100%', alignSelf: 'stretch', minWidth: 0 },
 
@@ -7821,7 +7946,7 @@ const styles = StyleSheet.create({
 
   messageSenderName: { color: '#64748b', fontSize: 10, fontWeight: '800', flexShrink: 1 },
 
-  bubble: { padding: 8, borderRadius: 12, maxWidth: '100%', minWidth: 0, flexShrink: 1 },
+  bubble: { paddingHorizontal: 9, paddingVertical: 7, borderRadius: 12, maxWidth: '100%', minWidth: 0, flexShrink: 1 },
 
   bubbleOwn: { backgroundColor: '#166534', borderBottomRightRadius: 3 },
 
@@ -7837,29 +7962,32 @@ const styles = StyleSheet.create({
 
   unsendButtonText: { color: '#dc2626', fontSize: 10, fontWeight: '800' },
 
-  msgMenuWrap: { position: 'relative', zIndex: 30, alignSelf: 'flex-end' },
+  msgMenuWrap: { alignSelf: 'flex-end' },
 
-  msgMenuDotBtn: { padding: 4, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  msgMenuDotBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
 
-  msgMenuDropdown: {
-    position: 'absolute',
-    bottom: 26,
-    left: 0,
+  msgMenuModal: { flex: 1, padding: 16, paddingBottom: 24 },
+
+  msgMenuBackdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15,23,42,0.28)' },
+
+  msgMenuSheet: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    marginTop: 'auto',
     backgroundColor: '#ffffff',
-    borderRadius: 10,
-    paddingVertical: 4,
-    minWidth: 150,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    elevation: 12,
-    zIndex: 999,
+    borderRadius: 20,
+    padding: 8,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 16,
   },
 
-  msgMenuDropdownOwn: { left: 'auto', right: 0 },
+  msgMenuSheetTitle: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8, color: '#64748b', fontSize: 12, fontWeight: '800' },
 
   msgMenuDropdownItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 14 },
 

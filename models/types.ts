@@ -315,11 +315,13 @@ export interface VolunteerTimeLog {
   timeOut?: string;
   note?: string;
   attendancePhoto?: string;
+  hasAttendancePhoto?: boolean;
   attendanceConfirmedAt?: string;
   attendanceCheckedAt?: string;
   attendanceCheckedBy?: string;
   attendanceCheckedByName?: string;
   completionPhoto?: string;
+  hasCompletionPhoto?: boolean;
   completionReport?: string;
 }
 

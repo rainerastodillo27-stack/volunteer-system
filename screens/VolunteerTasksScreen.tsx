@@ -128,6 +128,7 @@ type TaskEventAttendanceState = {
   eventHasNotStarted: boolean;
   eventHasEnded: boolean;
   hasConfirmedToday: boolean;
+  hasMarkedToday: boolean;
   helperText: string;
 };
 
@@ -434,6 +435,7 @@ function getTaskEventAttendanceState(
   const hasConfirmedToday = sortedLogs.some(
     log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey
   );
+  const hasMarkedToday = Boolean(todayLog?.attendanceCheckedAt);
   const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
   const lifecycleStatus = getProjectDisplayStatus(project);
   const eventHasEnded =
@@ -449,7 +451,9 @@ function getTaskEventAttendanceState(
   } else if (eventHasEnded) {
     helperText = 'Attendance is closed because the event timeline already ended.';
   } else if (hasConfirmedToday) {
-    helperText = `Attendance is already confirmed for this attendance window. It will reset at ${formatEventStartTime(project.startDate)} on the next event day.`;
+    helperText = hasMarkedToday
+      ? 'Attendance was marked by the admin or field officer and is now recorded as verified.'
+      : `Attendance is already confirmed for this attendance window. It will reset at ${formatEventStartTime(project.startDate)} on the next event day.`;
   } else if (eventHasNotStarted) {
     helperText = `Attendance confirmation unlocks at ${formatEventStartTime(project.startDate)} on the event start date.`;
   }
@@ -461,6 +465,7 @@ function getTaskEventAttendanceState(
     eventHasNotStarted,
     eventHasEnded,
     hasConfirmedToday,
+    hasMarkedToday,
     helperText,
   };
 }
@@ -572,9 +577,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         console.warn('[VolunteerTasksScreen] Volunteer list load skipped:', error);
         return [] as Volunteer[];
       }),
-      // Attendance photos are intentionally loaded only when management data
-      // is needed; they are not required for the volunteer's own task list.
-      getAllVolunteerTimeLogs().catch(error => {
+      // Field-officer attendance review still displays the submitted photo
+      // inline, so keep this explicit media request scoped to that screen.
+      getAllVolunteerTimeLogs({ includeImages: true }).catch(error => {
         console.warn('[VolunteerTasksScreen] Attendance history load skipped:', error);
         return [] as VolunteerTimeLog[];
       }),
@@ -2087,7 +2092,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                             ]}
                           >
                             <Text style={styles.attendanceStatusText}>
-                              {attendanceState.hasConfirmedToday
+                              {attendanceState.hasMarkedToday
+                                ? 'Marked'
+                                : attendanceState.hasConfirmedToday
                                 ? 'Confirmed'
                                 : attendanceState.eventHasEnded
                                 ? 'Closed'
@@ -2115,7 +2122,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                           <View style={styles.attendanceLogItem}>
                             <Text style={styles.attendanceLogLabel}>Today</Text>
                             <Text style={styles.attendanceLogValue}>
-                              {attendanceState.todayLog
+                              {attendanceState.hasMarkedToday && attendanceState.todayLog?.attendanceCheckedAt
+                                ? `Marked ${formatTimestamp(attendanceState.todayLog.attendanceCheckedAt)}`
+                                : attendanceState.todayLog
                                 ? `Confirmed ${formatTimestamp(
                                     attendanceState.todayLog.attendanceConfirmedAt ||
                                       attendanceState.todayLog.timeIn
@@ -2161,7 +2170,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                   color="#fff"
                                 />
                                 <Text style={styles.attendanceButtonText}>
-                                  {attendanceState.hasConfirmedToday
+                                  {attendanceState.hasMarkedToday
+                                    ? 'Marked'
+                                    : attendanceState.hasConfirmedToday
                                     ? 'Done Today'
                                     : attendanceState.eventHasEnded
                                     ? 'Closed'

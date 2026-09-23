@@ -1,9 +1,9 @@
 """Small, dependency-free signed sessions for the NVC API.
 
-The API is used by both the browser and the Android client, so the session is
-returned as a bearer token instead of relying on browser-only cookies. The
-token contains no private profile data; it only carries the account id, role,
-and expiry and is signed by a server-side secret.
+The API is used by both the browser and the Android client. Native clients use
+the returned bearer token, while the browser uses an HttpOnly cookie. The token
+contains no private profile data; it only carries the account id, role, and
+expiry and is signed by a server-side secret.
 """
 
 from __future__ import annotations

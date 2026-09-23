@@ -804,11 +804,9 @@ export default function ReportsScreen({ navigation, route }: any) {
 
     try {
       const allProjects = await loadProjects();
-      // Keep the web report list lightweight because desktop users can fetch
-      // the selected record on demand. Native report screens need the media
-      // available after a fresh login as well, so retain the full report
-      // payload there instead of relying on a browser-only detail fetch.
-      const includeReportImages = Platform.OS !== 'web';
+      // Report lists only need metadata. Full attachments/media are fetched
+      // when a report or the Photos view is explicitly opened.
+      const includeReportImages = false;
       const rawReports =
         user.role === 'admin' || user.role === 'partner'
           ? await getAllPartnerReports({ includeImages: includeReportImages })

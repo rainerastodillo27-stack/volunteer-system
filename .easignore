@@ -16,5 +16,9 @@ playwright-report/
 test-results/
 scratch/
 runtime/message-attachments/
+backend/
+deploy/
+*.tar
+*.tar.gz
 *.log
 diagnose_out.json

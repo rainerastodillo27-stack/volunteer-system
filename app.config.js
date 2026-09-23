@@ -107,13 +107,18 @@ module.exports = () => {
   loadLocalEnv(__dirname);
   ensureBackendStarted();
 
+  const isProductionBuild = process.env.EAS_BUILD_PROFILE === 'production';
   const configuredApiBaseUrl =
-    process.env.VOLCRE_API_BASE_URL ||
-    process.env.EXPO_PUBLIC_API_BASE_URL ||
-    DEFAULT_HOSTED_API_URL;
+    isProductionBuild
+      ? DEFAULT_HOSTED_API_URL
+      : process.env.VOLCRE_API_BASE_URL ||
+        process.env.EXPO_PUBLIC_API_BASE_URL ||
+        DEFAULT_HOSTED_API_URL;
   const lanApiBaseUrl = configuredApiBaseUrl;
   const webApiBaseUrl =
-    process.env.VOLCRE_WEB_API_BASE_URL || DEFAULT_HOSTED_WEB_API_URL;
+    isProductionBuild
+      ? DEFAULT_HOSTED_WEB_API_URL
+      : process.env.VOLCRE_WEB_API_BASE_URL || DEFAULT_HOSTED_WEB_API_URL;
   const mobileGoogleMapsApiKey =
     process.env.GOOGLE_MAPS_MOBILE_API_KEY ||
     process.env.GOOGLE_MAPS_ANDROID_API_KEY ||
@@ -171,6 +176,7 @@ module.exports = () => {
       },
       scheme: 'volcre',
       extra: {
+        isProductionBuild: isProductionBuild ? 'true' : 'false',
         apiBaseUrl: lanApiBaseUrl,
         webApiBaseUrl,
         mobileGoogleMapsApiKey,
