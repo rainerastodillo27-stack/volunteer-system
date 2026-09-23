@@ -940,6 +940,8 @@ const styles = StyleSheet.create({
   },
   modalHeaderCopy: {
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
   },
   modalTitle: {
     fontSize: 16,
@@ -953,6 +955,7 @@ const styles = StyleSheet.create({
     color: '#166534',
   },
   modalCloseButton: {
+    flexShrink: 0,
     width: 34,
     height: 34,
     borderRadius: 17,

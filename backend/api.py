@@ -477,6 +477,7 @@ class RegistrationPayload(BaseModel):
     role: str
     userType: str = "Student"
     pillarsOfInterest: list[str] = []
+    socialMedia: dict[str, Any] = {}
     partnerRegistration: dict[str, Any] | None = None
     volunteerMembershipSheet: dict[str, Any] | None = None
     emailVerificationToken: str
@@ -6031,6 +6032,7 @@ def _ensure_volunteer_profile_for_user(connection: Any, user: dict[str, Any]) ->
         "specialSkills",
         "skills",
         "affiliations",
+        "socialMedia",
     )
     membership_updates = {
         field: membership_sheet[field]
@@ -6730,6 +6732,11 @@ def auth_register(
 
     volunteer_membership = dict(payload.volunteerMembershipSheet or {})
     partner_registration = dict(payload.partnerRegistration or {})
+    social_media = {
+        str(key): str(value).strip()
+        for key, value in dict(payload.socialMedia or {}).items()
+        if str(value or "").strip()
+    }
     if role == "volunteer":
         required_membership_fields = (
             "gender",
@@ -6829,6 +6836,7 @@ def auth_register(
                 for pillar in (payload.pillarsOfInterest or [])
                 if str(pillar).strip()
             ],
+            "socialMedia": social_media,
             "approvalStatus": "pending",
             "createdAt": created_at,
         }
@@ -6872,6 +6880,7 @@ def auth_register(
                         if str(document).strip()
                     ],
                     "advocacyFocus": advocacy_focus,
+                    "socialMedia": dict(partner_registration.get("socialMedia") or social_media),
                     "contactEmail": email,
                     "contactPhone": phone,
                     "status": "Pending",

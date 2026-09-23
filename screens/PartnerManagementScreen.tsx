@@ -124,6 +124,7 @@ function hydratePartnerRegistration(partner: Partner, partnerUsers: User[]): Par
     stakeholderName: partner.stakeholderName?.trim() || account?.name?.trim() || undefined,
     contactEmail: partner.contactEmail?.trim() || account?.email?.trim() || undefined,
     contactPhone: partner.contactPhone?.trim() || account?.phone?.trim() || undefined,
+    socialMedia: partner.socialMedia || account?.socialMedia || account?.partnerRegistration?.socialMedia,
     registrationDocuments: getPartnerRegistrationDocuments(partner, account),
   };
 }
@@ -143,6 +144,13 @@ function getMeaningfulPartnerDescription(partner: Partner): string {
     .map(value => value.toLowerCase());
 
   return generatedDescriptions.includes(description.toLowerCase()) ? '' : description;
+}
+
+function formatPartnerSocialMedia(partner: Partner): string {
+  return Object.entries(partner.socialMedia || {})
+    .filter(([, value]) => Boolean(value?.trim()))
+    .map(([platform, value]) => `${platform}: ${value}`)
+    .join(' • ');
 }
 
 function getProjectVolunteerCount(project: Project): number {
@@ -841,6 +849,12 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 <Text style={styles.registrationLabel}>Account Email</Text>
                 <Text style={styles.registrationValue}>
                   {selectedPartner.contactEmail || 'Not provided'}
+                </Text>
+              </View>
+              <View style={styles.registrationRow}>
+                <Text style={styles.registrationLabel}>Social Media</Text>
+                <Text style={styles.registrationValue}>
+                  {formatPartnerSocialMedia(selectedPartner) || 'Not provided'}
                 </Text>
               </View>
               <View style={styles.registrationRowLast}>
@@ -1556,6 +1570,12 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                         <View style={styles.appDetailRow}>
                           <Text style={styles.appDetailLabel}>Phone:</Text>
                           <Text style={styles.appDetailValue}>{partner.contactPhone}</Text>
+                        </View>
+                      ) : null}
+                      {formatPartnerSocialMedia(partner) ? (
+                        <View style={styles.appDetailRow}>
+                          <Text style={styles.appDetailLabel}>Social Media:</Text>
+                          <Text style={styles.appDetailValue}>{formatPartnerSocialMedia(partner)}</Text>
                         </View>
                       ) : null}
                       {getPartnerAdvocacyFocus(partner).length > 0 && (

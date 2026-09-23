@@ -202,6 +202,7 @@ const styles = StyleSheet.create({
   },
   modal: {
     width: '100%',
+    minWidth: 0,
     maxWidth: 760,
     maxHeight: '92%',
     overflow: 'hidden',
@@ -211,6 +212,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    minWidth: 0,
     gap: 12,
     paddingHorizontal: 18,
     paddingVertical: 14,
@@ -232,6 +234,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   closeButton: {
+    flexShrink: 0,
     alignItems: 'center',
     justifyContent: 'center',
     width: 40,

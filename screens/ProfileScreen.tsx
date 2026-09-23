@@ -38,7 +38,7 @@ import {
   subscribeToStorageChanges,
 } from '../models/storage';
 import { VolunteerRecognitionStatus } from '../models/storage';
-import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, VolunteerAffiliation, PartnerSectorType, AdvocacyFocus } from '../models/types';
+import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, VolunteerAffiliation, PartnerSectorType, AdvocacyFocus, SocialMediaInfo } from '../models/types';
 import { getAttachmentLabel, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
@@ -76,6 +76,14 @@ function replacePartnerValidIdDocument(partner: Partner, replacement: string): s
   ];
 }
 
+function formatSocialMediaInfo(socialMedia?: SocialMediaInfo): string {
+  if (!socialMedia) return '';
+  return Object.entries(socialMedia)
+    .filter(([, value]) => Boolean(value?.trim()))
+    .map(([platform, value]) => `${platform}: ${value}`)
+    .join(' • ');
+}
+
 // Displays the signed-in user's profile, volunteer recognition, and edit form.
 export default function ProfileScreen() {
   const { user, logout, updateUserProfile } = useAuth();
@@ -96,6 +104,7 @@ export default function ProfileScreen() {
   const [nameDraft, setNameDraft] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
   const [phoneDraft, setPhoneDraft] = useState('');
+  const [socialMediaDraft, setSocialMediaDraft] = useState<SocialMediaInfo>({});
   const [newPasswordDraft, setNewPasswordDraft] = useState('');
   const [confirmPasswordDraft, setConfirmPasswordDraft] = useState('');
   const [userTypeDraft, setUserTypeDraft] = useState<UserType>('Adult');
@@ -289,6 +298,7 @@ export default function ProfileScreen() {
     setNameDraft(user.name || '');
     setEmailDraft(user.email || '');
     setPhoneDraft(user.phone || '');
+    setSocialMediaDraft(user.socialMedia || volunteerProfile?.socialMedia || partnerProfiles[0]?.socialMedia || {});
     setNewPasswordDraft('');
     setConfirmPasswordDraft('');
     setUserTypeDraft(user.userType || 'Adult');
@@ -537,6 +547,7 @@ export default function ProfileScreen() {
         name: normalizedName,
         email: normalizedEmail || undefined,
         phone: normalizedPhone || undefined,
+        socialMedia: socialMediaDraft,
         ...(normalizedPassword ? { password: normalizedPassword } : {}),
         profilePhoto: profilePhotoDraft || undefined,
         userType: userTypeDraft,
@@ -555,6 +566,7 @@ export default function ProfileScreen() {
               validIdPhoto: validIdPhotoDraft,
               hobbiesAndInterests: hobbiesAndInterestsDraft,
               specialSkills: skillsDraft.join(', '),
+              socialMedia: socialMediaDraft,
             }
           : user.volunteerMembershipSheet,
       };
@@ -621,6 +633,7 @@ export default function ProfileScreen() {
           validIdPhoto: validIdPhotoDraft,
           hobbiesAndInterests: hobbiesAndInterestsDraft,
           affiliations: affiliationsDraft,
+          socialMedia: socialMediaDraft,
         };
 
         const persistedVolunteerProfile = await saveVolunteer(updatedVolunteerProfile);
@@ -646,6 +659,7 @@ export default function ProfileScreen() {
               ownerUserId: user.id,
               contactEmail: normalizedEmail || undefined,
               contactPhone: normalizedPhone || undefined,
+              socialMedia: socialMediaDraft,
               registrationDocuments:
                 partnerProfile.id === primaryPartnerId
                   ? replacePartnerValidIdDocument(partnerProfile, partnerValidIdDocumentDraft)
@@ -1014,6 +1028,12 @@ export default function ProfileScreen() {
         <View style={styles.detailInfoCard}>
           <Text style={styles.detailInfoLabel}>Phone</Text>
           <Text style={styles.detailInfoValue}>{user?.phone || 'Not provided'}</Text>
+        </View>
+        <View style={styles.detailInfoCard}>
+          <Text style={styles.detailInfoLabel}>Social Media</Text>
+          <Text style={styles.detailInfoValue}>
+            {formatSocialMediaInfo(user?.socialMedia || volunteerProfile?.socialMedia || partnerProfiles[0]?.socialMedia) || 'Not provided'}
+          </Text>
         </View>
         <View style={styles.detailInfoCard}>
           <Text style={styles.detailInfoLabel}>Profile Type</Text>
@@ -1618,6 +1638,25 @@ export default function ProfileScreen() {
               keyboardType="phone-pad"
               editable={!saveLoading}
             />
+
+            <Text style={styles.sectionHeader}>Social Media (Optional)</Text>
+            <Text style={styles.sectionHint}>Add public profiles so NVC can stay connected with you.</Text>
+            {([
+              ['facebook', 'Facebook profile or username'],
+              ['instagram', 'Instagram profile or username'],
+              ['tiktok', 'TikTok profile or username'],
+              ['linkedin', 'LinkedIn profile or username'],
+            ] as const).map(([key, placeholder]) => (
+              <TextInput
+                key={key}
+                style={styles.input}
+                value={socialMediaDraft[key] || ''}
+                onChangeText={(value) => setSocialMediaDraft(current => ({ ...current, [key]: value }))}
+                placeholder={placeholder}
+                autoCapitalize="none"
+                editable={!saveLoading}
+              />
+            ))}
 
             <Text style={styles.fieldLabel}>Profile Type</Text>
             <View style={styles.optionRow}>

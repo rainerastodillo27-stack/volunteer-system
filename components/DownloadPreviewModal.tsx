@@ -317,6 +317,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     maxWidth: 800,
     width: '100%',
+    minWidth: 0,
     height: '82%',
     minHeight: 520,
     maxHeight: '92%',
@@ -327,6 +328,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    minWidth: 0,
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
@@ -347,6 +349,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   closeButton: {
+    flexShrink: 0,
     width: 40,
     height: 40,
     borderRadius: 20,

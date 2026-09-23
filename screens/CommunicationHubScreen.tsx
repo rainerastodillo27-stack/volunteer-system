@@ -7261,6 +7261,10 @@ const styles = StyleSheet.create({
 
     height: 70,
 
+    width: '100%',
+
+    minWidth: 0,
+
     flexDirection: 'row',
 
     alignItems: 'center',
@@ -7279,7 +7283,7 @@ const styles = StyleSheet.create({
 
   },
 
-  headerInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerInfo: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
 
   headerAvatar: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#166534', alignItems: 'center', justifyContent: 'center' },
 
@@ -7291,7 +7295,7 @@ const styles = StyleSheet.create({
 
   detailSubtitle: { fontSize: 13, color: '#166534', fontWeight: '600', marginTop: 1 },
 
-  headerActions: { flexDirection: 'row', gap: 4, zIndex: 60 },
+  headerActions: { flexShrink: 0, flexDirection: 'row', gap: 4, zIndex: 60 },
 
   headerAction: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0' },
 
@@ -7359,7 +7363,7 @@ const styles = StyleSheet.create({
 
   conversationMenuDangerText: { fontSize: 12, fontWeight: '900', color: '#dc2626' },
 
-  backButton: { marginRight: 16 },
+  backButton: { flexShrink: 0, marginRight: 10 },
 
 
 

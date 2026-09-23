@@ -553,6 +553,7 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
+    minWidth: 0,
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     gap: 12,
@@ -563,8 +564,11 @@ const styles = StyleSheet.create({
   },
   headerContent: {
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
   },
   headerActions: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -586,6 +590,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   headerCloseButton: {
+    flexShrink: 0,
     width: 38,
     height: 38,
     borderRadius: 19,

@@ -79,6 +79,7 @@ import {
   User,
   UserRole,
   UserType,
+  SocialMediaInfo,
 } from "../models/types";
 import {
   DEFAULT_VOLUNTEER_SKILL_OPTIONS,
@@ -120,6 +121,7 @@ type SignupVolunteerSheetState = {
   affiliationOrg1: string;
   affiliationPos1: string;
   validIdPhoto: string;
+  socialMedia: SocialMediaInfo;
 };
 
 type SignupPartnerApplicationState = {
@@ -134,6 +136,7 @@ type SignupPartnerApplicationState = {
   secRegistrationNo: string;
   validIdDocument: string;
   advocacyFocus: AdvocacyFocus[];
+  socialMedia: SocialMediaInfo;
 };
 
 type MobileEntryRole = Exclude<UserRole, "admin">;
@@ -187,6 +190,7 @@ function createEmptySignupVolunteerSheet(): SignupVolunteerSheetState {
     affiliationOrg1: "",
     affiliationPos1: "",
     validIdPhoto: "",
+    socialMedia: {},
   };
 }
 
@@ -204,6 +208,7 @@ function createEmptySignupPartnerApplication(): SignupPartnerApplicationState {
     secRegistrationNo: "",
     validIdDocument: "",
     advocacyFocus: [],
+    socialMedia: {},
   };
 }
 
@@ -1212,6 +1217,20 @@ export default function LoginScreen() {
     setSignupPartnerApplication((current) => ({ ...current, [key]: value }));
   };
 
+  const updateSignupSocialMedia = (key: keyof SocialMediaInfo, value: string) => {
+    if (signupRole === "partner") {
+      updateSignupPartnerApplication("socialMedia", {
+        ...signupPartnerApplication.socialMedia,
+        [key]: value,
+      });
+    } else {
+      updateSignupVolunteerSheet("socialMedia", {
+        ...signupVolunteerSheet.socialMedia,
+        [key]: value,
+      });
+    }
+  };
+
   const requestSignupEmailVerificationCode = async () => {
     const email = normalizeEmailInput(signupEmail);
     setSignupValidationError(null);
@@ -1596,6 +1615,9 @@ export default function LoginScreen() {
         phone: normalizePhoneInput(signupAccountPhone),
         role: signupRole,
         userType: signupUserType,
+        socialMedia: signupRole === "partner"
+          ? signupPartnerApplication.socialMedia
+          : signupVolunteerSheet.socialMedia,
         pillarsOfInterest:
           signupRole === "partner"
             ? signupPartnerApplication.advocacyFocus.filter(
@@ -1621,6 +1643,7 @@ export default function LoginScreen() {
               secRegistrationNo: signupPartnerApplication.secRegistrationNo?.trim() || "",
               registrationDocuments: [signupPartnerApplication.validIdDocument.trim()],
               advocacyFocus: signupPartnerApplication.advocacyFocus,
+              socialMedia: signupPartnerApplication.socialMedia,
             }
             : undefined,
         volunteerMembershipSheet:
@@ -1654,6 +1677,7 @@ export default function LoginScreen() {
                 (affiliation) =>
                   affiliation.organization || affiliation.position,
               ),
+              socialMedia: signupVolunteerSheet.socialMedia,
             }
             : undefined,
       });
@@ -1858,6 +1882,57 @@ export default function LoginScreen() {
           </>
         ) : null}
       </View>
+    );
+  };
+
+  const renderSignupSocialMediaFields = () => {
+    const socialMedia = signupRole === "partner"
+      ? signupPartnerApplication.socialMedia
+      : signupVolunteerSheet.socialMedia;
+
+    return (
+      <>
+        <Text style={styles.modalSectionLabel}>Social Media (Optional)</Text>
+        <Text style={styles.certificateHelperText}>
+          Add your public social profiles so NVC can stay connected with you.
+        </Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Facebook profile or username"
+          placeholderTextColor="#999"
+          value={socialMedia.facebook || ""}
+          onChangeText={(value) => updateSignupSocialMedia("facebook", value)}
+          editable={!signupLoading}
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Instagram profile or username"
+          placeholderTextColor="#999"
+          value={socialMedia.instagram || ""}
+          onChangeText={(value) => updateSignupSocialMedia("instagram", value)}
+          editable={!signupLoading}
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="TikTok profile or username"
+          placeholderTextColor="#999"
+          value={socialMedia.tiktok || ""}
+          onChangeText={(value) => updateSignupSocialMedia("tiktok", value)}
+          editable={!signupLoading}
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="LinkedIn profile or username"
+          placeholderTextColor="#999"
+          value={socialMedia.linkedin || ""}
+          onChangeText={(value) => updateSignupSocialMedia("linkedin", value)}
+          editable={!signupLoading}
+          autoCapitalize="none"
+        />
+      </>
     );
   };
 
@@ -2872,6 +2947,7 @@ export default function LoginScreen() {
                             onChangeText={(value) => setSignupAccountPhone(normalizePhoneInput(value))}
                             editable={!signupLoading}
                           />
+                          {renderSignupSocialMediaFields()}
                           <TextInput
                             style={[
                               styles.input,
@@ -2927,6 +3003,7 @@ export default function LoginScreen() {
                             onChangeText={(value) => setSignupAccountPhone(normalizePhoneInput(value))}
                             editable={!signupLoading}
                           />
+                          {renderSignupSocialMediaFields()}
                           <TextInput
                             style={[
                               styles.input,

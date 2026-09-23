@@ -43,6 +43,7 @@ import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
+import { downloadXlsxFile } from '../utils/xlsxDownload';
 
 type VolunteerDocumentField = 'validIdPhoto' | 'certificationsOrTrainings';
 
@@ -633,27 +634,44 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
-  // Downloads a CSV report with total hours per volunteer for admin review.
-  const handleDownloadVolunteerHoursReport = () => {
-    const rows = volunteers
-      .slice()
-      .sort((left, right) => right.totalHoursContributed - left.totalHoursContributed)
-      .map(volunteer => {
+  const getVolunteerHoursReportRows = () => volunteers
+    .slice()
+    .sort((left, right) => right.totalHoursContributed - left.totalHoursContributed)
+    .map(volunteer => {
         const logsForVolunteer = volunteerTimeLogs.filter(log => log.volunteerId === volunteer.id);
         const completedLogs = logsForVolunteer.filter(log => Boolean(log.timeOut)).length;
         const activeLogs = logsForVolunteer.length - completedLogs;
 
-        return [
-          volunteer.name,
-          volunteer.email,
-          volunteer.totalHoursContributed.toFixed(1),
-          String(completedLogs),
-          String(activeLogs),
-        ];
+        return {
+          name: volunteer.name,
+          email: volunteer.email,
+          totalHours: Number(volunteer.totalHoursContributed.toFixed(1)),
+          completedLogs: String(completedLogs),
+          activeLogs: String(activeLogs),
+          facebook: volunteer.socialMedia?.facebook || '',
+          instagram: volunteer.socialMedia?.instagram || '',
+          tiktok: volunteer.socialMedia?.tiktok || '',
+          linkedin: volunteer.socialMedia?.linkedin || '',
+        };
       });
 
+  // Downloads a CSV report with total hours and social links per volunteer for admin review.
+  const handleDownloadVolunteerHoursReport = () => {
+    const reportRows = getVolunteerHoursReportRows();
+    const rows = reportRows.map(row => [
+      row.name,
+      row.email,
+      row.totalHours,
+      row.completedLogs,
+      row.activeLogs,
+      row.facebook,
+      row.instagram,
+      row.tiktok,
+      row.linkedin,
+    ]);
+
     const csv = [
-      ['Volunteer Name', 'Email', 'Total Hours', 'Completed Logs', 'Active Logs'],
+      ['Volunteer Name', 'Email', 'Total Hours', 'Completed Logs', 'Active Logs', 'Facebook', 'Instagram', 'TikTok', 'LinkedIn'],
       ...rows,
     ]
       .map(columns =>
@@ -680,6 +698,30 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       'Report Ready',
       'CSV download is currently available on the admin web view.'
     );
+  };
+
+  const handleDownloadVolunteerHoursXlsxReport = () => {
+    const reportRows = getVolunteerHoursReportRows();
+    const downloaded = downloadXlsxFile(
+      `volunteer-hours-report-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      'Volunteer Hours',
+      [
+        { key: 'name', label: 'Volunteer Name' },
+        { key: 'email', label: 'Email' },
+        { key: 'totalHours', label: 'Total Hours' },
+        { key: 'completedLogs', label: 'Completed Logs' },
+        { key: 'activeLogs', label: 'Active Logs' },
+        { key: 'facebook', label: 'Facebook' },
+        { key: 'instagram', label: 'Instagram' },
+        { key: 'tiktok', label: 'TikTok' },
+        { key: 'linkedin', label: 'LinkedIn' },
+      ],
+      reportRows,
+    );
+
+    if (!downloaded) {
+      Alert.alert('Report Ready', 'XLSX download is currently available on the admin web view.');
+    }
   };
 
   if (!isAdmin) {
@@ -1893,9 +1935,22 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>Volunteer Hours Report</Text>
-                <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>CSV export of all volunteer hours and activity</Text>
+                <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>CSV export with hours, activity, and social media</Text>
               </View>
               <MaterialIcons name="arrow-forward" size={20} color="#e99b34" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#f0fdf4', borderRadius: 12, borderWidth: 1, borderColor: '#bbf7d0' }}
+              onPress={handleDownloadVolunteerHoursXlsxReport}
+            >
+              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#15803d', alignItems: 'center', justifyContent: 'center', marginRight: 16 }}>
+                <MaterialIcons name="table-chart" size={24} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 15, fontWeight: '800', color: '#0f172a', fontFamily: 'Nunito' }}>Volunteer Hours Excel Report</Text>
+                <Text style={{ fontSize: 13, color: '#64748b', fontFamily: 'Nunito' }}>XLSX export with hours, activity, and social media</Text>
+              </View>
+              <MaterialIcons name="arrow-forward" size={20} color="#15803d" />
             </TouchableOpacity>
             
             <View style={{ padding: 16, backgroundColor: '#f1f5f9', borderRadius: 12 }}>

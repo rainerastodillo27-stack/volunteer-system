@@ -16,6 +16,13 @@ export type ImpactHubReportType =
   | 'partner_collaboration'
   | 'system_metrics';
 
+export interface SocialMediaInfo {
+  facebook?: string;
+  instagram?: string;
+  tiktok?: string;
+  linkedin?: string;
+}
+
 export interface AppSettings {
   notificationsEnabled: boolean;
   autoRefreshEnabled: boolean;
@@ -39,6 +46,7 @@ export interface User {
   name: string;
   phone?: string;
   profilePhoto?: string;
+  socialMedia?: SocialMediaInfo;
   userType?: UserType;
   pillarsOfInterest?: NVCSector[];
   approvalStatus?: 'pending' | 'approved' | 'rejected'; // Admin approval for new users
@@ -58,6 +66,7 @@ export interface User {
     province: string;
     cityMunicipality: string;
     advocacyFocus: AdvocacyFocus[];
+    socialMedia?: SocialMediaInfo;
   };
   volunteerMembershipSheet?: {
     gender: string;
@@ -76,6 +85,7 @@ export interface User {
     validIdPhoto?: string;
     skills?: string[];
     affiliations?: VolunteerAffiliation[];
+    socialMedia?: SocialMediaInfo;
   };
 }
 
@@ -105,6 +115,7 @@ export interface Partner {
   credentialsUnlockedAt?: string;
   createdAt: string;
   registrationDocuments?: string[]; // URLs to documents
+  socialMedia?: SocialMediaInfo;
 }
 
 export interface ProjectInternalTask {
@@ -286,6 +297,7 @@ export interface Volunteer {
   specialSkills?: string;
   videoBriefingUrl?: string;
   affiliations?: VolunteerAffiliation[];
+  socialMedia?: SocialMediaInfo;
   registrationStatus?: 'Pending' | 'Approved' | 'Rejected';
   rejectionReason?: string;
   reviewedBy?: string;

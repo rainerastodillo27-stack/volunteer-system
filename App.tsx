@@ -117,7 +117,7 @@ if (typeof document !== "undefined") {
 
       /* The Expo/React root container — constrain to phone dimensions */
       #root {
-        width: 430px !important;
+        width: min(430px, 100vw) !important;
         max-width: 100% !important;
         height: 100% !important;
         max-height: 932px !important;
@@ -125,6 +125,17 @@ if (typeof document !== "undefined") {
         border-radius: 24px !important;
         box-shadow: 0 8px 60px rgba(0, 0, 0, 0.45) !important;
         position: relative !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+      }
+
+      #root > div {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        height: 100% !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
       }
 
       /* Modal portals — React Native Web attaches them as direct <div>
@@ -148,7 +159,7 @@ if (typeof document !== "undefined") {
       body > div:not(#root) > div {
         pointer-events: none !important;
         position: fixed !important;
-        width: 430px !important;
+        width: min(430px, 100vw) !important;
         max-width: 100vw !important;
         height: 100% !important;
         max-height: 932px !important;
@@ -157,6 +168,7 @@ if (typeof document !== "undefined") {
         transform: translate(-50%, -50%) !important;
         border-radius: 24px !important;
         overflow: hidden !important;
+        box-sizing: border-box !important;
       }
 
       /* React Native Web places the actual modal content several levels
@@ -167,7 +179,7 @@ if (typeof document !== "undefined") {
       body > div:not(#root):has([role="dialog"]) [role="dialog"] {
         pointer-events: auto !important;
         position: fixed !important;
-        width: 430px !important;
+        width: min(430px, 100vw) !important;
         max-width: 100vw !important;
         height: 100% !important;
         max-height: 932px !important;
@@ -178,6 +190,7 @@ if (typeof document !== "undefined") {
         transform: translate(-50%, -50%) !important;
         border-radius: 24px !important;
         overflow: hidden !important;
+        box-sizing: border-box !important;
       }
 
       /* ModalContent and its inner container both add full-screen fixed
@@ -187,10 +200,12 @@ if (typeof document !== "undefined") {
       body > div:not(#root) > div > div > div > div {
         position: relative !important;
         width: 100% !important;
+        min-width: 0 !important;
         height: 100% !important;
         max-width: 100% !important;
         max-height: 100% !important;
         inset: auto !important;
+        box-sizing: border-box !important;
       }
 
       /* Enable pointer events normally for descendants of active dialogs. */
@@ -289,7 +304,7 @@ function AppContent() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: 'rgba(238, 252, 245, 0.72)' }}>
+    <View style={{ flex: 1, width: '100%', minWidth: 0, overflow: 'hidden', backgroundColor: 'rgba(238, 252, 245, 0.72)' }}>
       <NavigationContainer
         ref={navigationRef}
         initialState={initialNavigationState}

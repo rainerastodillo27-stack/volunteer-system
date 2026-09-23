@@ -37,6 +37,7 @@ import {
   PartnerProjectProposalDetails,
   ProgramTrack,
   VolunteerProjectJoinRecord,
+  SocialMediaInfo,
 } from './types';
 import { NVCSector, UserRole } from './types';
 
@@ -3567,6 +3568,7 @@ export async function createUserAccount(input: {
   role: UserRole;
   userType: UserType;
   pillarsOfInterest: NVCSector[];
+  socialMedia?: SocialMediaInfo;
   partnerRegistration?: {
     organizationName: string;
     address?: string;
@@ -3579,6 +3581,7 @@ export async function createUserAccount(input: {
       province?: string;
       cityMunicipality?: string;
       advocacyFocus: AdvocacyFocus[];
+      socialMedia?: SocialMediaInfo;
   };
   volunteerMembershipSheet?: {
     gender: string;
@@ -3601,6 +3604,7 @@ export async function createUserAccount(input: {
       organization: string;
       position: string;
     }>;
+    socialMedia?: SocialMediaInfo;
   };
 }): Promise<User> {
   if (String(input.role) === 'admin') {
@@ -3670,6 +3674,7 @@ export async function createUserAccount(input: {
         role: input.role,
         userType: input.userType,
         pillarsOfInterest: input.pillarsOfInterest,
+        socialMedia: input.socialMedia,
         partnerRegistration: input.partnerRegistration,
         volunteerMembershipSheet: input.volunteerMembershipSheet,
       }),

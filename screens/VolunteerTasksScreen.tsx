@@ -3700,6 +3700,8 @@ const styles = StyleSheet.create({
   },
   modalView: {
     backgroundColor: '#fff',
+    width: '100%',
+    alignSelf: 'center',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingVertical: 20,
@@ -3721,6 +3723,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   closeButton: {
+    flexShrink: 0,
     alignItems: 'flex-end',
     paddingHorizontal: 20,
     paddingVertical: 10,

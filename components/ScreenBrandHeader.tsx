@@ -326,12 +326,16 @@ export default function ScreenBrandHeader({
 const styles = StyleSheet.create({
   container: {
     backgroundColor: 'transparent',
+    width: '100%',
+    minWidth: 0,
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 10,
   },
   brandBlock: {
     backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    width: '100%',
+    minWidth: 0,
     paddingHorizontal: 4,
     paddingVertical: 8,
     flexDirection: 'row',
@@ -368,6 +372,8 @@ const styles = StyleSheet.create({
   },
   copyBlock: {
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
   },
   copyBlockCompact: {
     alignItems: 'center',
@@ -394,6 +400,7 @@ const styles = StyleSheet.create({
   },
   notificationBellWrap: {
     position: 'relative',
+    flexShrink: 0,
     padding: 8,
     marginLeft: 'auto',
   },
@@ -436,6 +443,7 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     maxHeight: 500,
     width: '100%',
+    minWidth: 0,
     alignSelf: 'center',
   },
   notificationModalHeader: {

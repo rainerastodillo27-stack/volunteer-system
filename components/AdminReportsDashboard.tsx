@@ -18,6 +18,7 @@ import DownloadPreviewModal from './DownloadPreviewModal';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project, Volunteer } from '../models/types';
 import { buildTablePdf } from '../utils/pdfDownload';
+import { downloadXlsxFile } from '../utils/xlsxDownload';
 
 interface AdminReportsDashboardProps {
   reports: SubmittedReport[];
@@ -327,8 +328,8 @@ function groupReportsByEvent(
     );
 }
 
-function estimateFileSize(rowCount: number, format: 'csv' | 'pdf'): string {
-  const bytesPerRow = format === 'csv' ? 350 : 500;
+function estimateFileSize(rowCount: number, format: 'csv' | 'xlsx' | 'pdf'): string {
+  const bytesPerRow = format === 'csv' ? 350 : format === 'xlsx' ? 250 : 500;
   const totalBytes = bytesPerRow * rowCount;
 
   if (totalBytes < 1024) return `${totalBytes} B`;
@@ -354,7 +355,7 @@ export default function AdminReportsDashboard({
   const [columnViewMode, setColumnViewMode] = useState<ColumnViewModeState>({});
   const [previewModalState, setPreviewModalState] = useState<{
     visible: boolean;
-    format: 'csv' | 'pdf';
+    format: 'csv' | 'xlsx' | 'pdf';
   }>({ visible: false, format: 'csv' });
 
   const summary = useMemo(() => {
@@ -476,6 +477,10 @@ export default function AdminReportsDashboard({
     setPreviewModalState({ visible: true, format: 'pdf' });
   };
 
+  const handleDownloadXlsx = () => {
+    setPreviewModalState({ visible: true, format: 'xlsx' });
+  };
+
   const handleConfirmDownload = async () => {
     const format = previewModalState.format;
     setPreviewModalState({ visible: false, format });
@@ -504,6 +509,33 @@ export default function AdminReportsDashboard({
         'text/csv;charset=utf-8;',
         'Unable to save this CSV on the phone.'
       );
+    } else if (format === 'xlsx') {
+      const downloaded = downloadXlsxFile(
+        `admin-event-reports-${selectedEventLabel}-${new Date().toISOString().slice(0, 10)}.xlsx`,
+        'Event Reports',
+        [
+          { key: 'title', label: 'Title' },
+          { key: 'submitter', label: 'Submitter' },
+          { key: 'role', label: 'Role' },
+          { key: 'type', label: 'Type' },
+          { key: 'event', label: 'Event' },
+          { key: 'status', label: 'Status' },
+          { key: 'submittedAt', label: 'Submitted At' },
+        ],
+        tableRows.map(row => ({
+          title: row.title,
+          submitter: row.submitter,
+          role: row.role,
+          type: row.type,
+          event: row.event,
+          status: row.status,
+          submittedAt: row.submittedAt,
+        })),
+      );
+
+      if (!downloaded) {
+        Alert.alert('Download Unavailable', 'XLSX download is currently available on the admin web view.');
+      }
     } else {
       const pdf = buildReportsPdf(tableRows, `Admin Event Reports - ${selectedEventLabel}`);
       void downloadFile(
@@ -1122,7 +1154,7 @@ export default function AdminReportsDashboard({
               <View>
                 <Text style={styles.tableTitle}>Event Submitted Reports</Text>
                 <Text style={styles.tableSubtitle}>
-                  Select an event, then download CSV, download PDF, or print.
+                  Select an event, then download CSV, XLSX, PDF, or print.
                 </Text>
               </View>
               <View style={styles.tableActions}>
@@ -1141,6 +1173,14 @@ export default function AdminReportsDashboard({
                 >
                   <MaterialIcons name="picture-as-pdf" size={16} color="#fff" />
                   <Text style={styles.tableActionButtonText}>Download PDF</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.tableActionButton, styles.tableXlsxButton]}
+                  onPress={handleDownloadXlsx}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="table-chart" size={16} color="#fff" />
+                  <Text style={styles.tableActionButtonText}>Download XLSX</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.tableActionButton, styles.tablePrintButton]}
@@ -1283,15 +1323,27 @@ export default function AdminReportsDashboard({
           },
           {
             label: 'File Format',
-            value: previewModalState.format === 'csv' ? 'CSV (Text)' : 'PDF (Document)',
-            icon: previewModalState.format === 'csv' ? 'description' : 'picture-as-pdf',
+            value: previewModalState.format === 'csv'
+              ? 'CSV (Text)'
+              : previewModalState.format === 'xlsx'
+                ? 'XLSX (Excel)'
+                : 'PDF (Document)',
+            icon: previewModalState.format === 'csv'
+              ? 'description'
+              : previewModalState.format === 'xlsx'
+                ? 'table-chart'
+                : 'picture-as-pdf',
           },
         ]}
         fileSize={estimateFileSize(tableRows.length, previewModalState.format)}
         onConfirm={handleConfirmDownload}
         onCancel={() => setPreviewModalState({ visible: false, format: 'csv' })}
         confirmText={`Download ${previewModalState.format.toUpperCase()}`}
-        confirmColor={previewModalState.format === 'csv' ? '#2563eb' : '#b91c1c'}
+        confirmColor={previewModalState.format === 'csv'
+          ? '#2563eb'
+          : previewModalState.format === 'xlsx'
+            ? '#15803d'
+            : '#b91c1c'}
       />
     </View>
   );
@@ -1441,6 +1493,9 @@ const styles = StyleSheet.create({
   },
   tablePdfButton: {
     backgroundColor: '#b91c1c',
+  },
+  tableXlsxButton: {
+    backgroundColor: '#15803d',
   },
   tablePrintButton: {
     backgroundColor: '#166534',

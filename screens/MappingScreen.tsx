@@ -1014,12 +1014,18 @@ const styles = StyleSheet.create({
   },
   modalView: {
     backgroundColor: '#fff',
+    width: '100%',
+    maxWidth: 520,
+    alignSelf: 'center',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingVertical: 20,
     minHeight: '70%',
+    maxHeight: '90%',
+    overflow: 'hidden',
   },
   closeButton: {
+    flexShrink: 0,
     alignSelf: 'flex-end',
     width: 40,
     height: 40,

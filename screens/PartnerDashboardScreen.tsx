@@ -3683,6 +3683,10 @@ const styles = StyleSheet.create({
 
     backgroundColor: '#fff',
 
+    width: '100%',
+
+    alignSelf: 'center',
+
     borderRadius: 20,
 
     maxHeight: '90%',
@@ -3703,6 +3707,8 @@ const styles = StyleSheet.create({
 
     flexDirection: 'row',
 
+    minWidth: 0,
+
     alignItems: 'center',
 
     justifyContent: 'space-between',
@@ -3720,6 +3726,8 @@ const styles = StyleSheet.create({
   },
 
   modalCloseButton: {
+
+    flexShrink: 0,
 
     padding: 6,
 
