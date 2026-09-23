@@ -159,7 +159,7 @@ import { downloadAttachmentUri, isImageMediaUri, isVideoMediaUri, pickDocumentFr
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
 import ProposalMessageTemplate from '../components/ProposalMessageTemplate';
-import { WebView } from 'react-native-webview';
+import { VideoView, useVideoPlayer } from 'expo-video';
 
 function LazyDateTimePicker(props: any) {
 
@@ -1107,13 +1107,11 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
   useEffect(() => {
-    if (!isWide && navigation) {
-      const showHeader = view === 'sidebar';
-      navigation.setOptions({ headerShown: showHeader });
-    } else if (isWide && navigation) {
-      navigation.setOptions({ headerShown: true });
-    }
-  }, [view, isWide, navigation]);
+    // Messages owns its complete mobile layout (conversation list, chat
+    // header, and composer). Keep the navigator header out of this screen so
+    // it cannot leave an empty/oversized band above the message list.
+    navigation?.setOptions({ headerShown: false });
+  }, [navigation]);
 
   // Keep "Unsend for self" local to this signed-in account/device. The
   // shared message remains available to the other participant.
@@ -2507,6 +2505,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   const [previewDocumentUri, setPreviewDocumentUri] = useState<string | null>(null);
   const [previewDocumentName, setPreviewDocumentName] = useState('Document preview');
   const [previewDocumentIsVideo, setPreviewDocumentIsVideo] = useState(false);
+  const previewVideoPlayer = useVideoPlayer(
+    previewDocumentIsVideo ? previewDocumentUri : null,
+    player => {
+      player.loop = false;
+    },
+  );
 
   const handleOpenProposalAttachment = async (
     uri: string,
@@ -2562,6 +2566,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   };
 
   const closeAttachmentPreview = () => {
+    previewVideoPlayer.pause();
     setPreviewImageUri(null);
     setPreviewImageName('Photo preview');
     setPreviewDocumentUri(null);
@@ -4030,7 +4035,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         <View style={styles.detail}>
 
-          <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 70 + insets.top }]}>
+          <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 58 + insets.top }]}>
 
             {!isWide && (
 
@@ -5035,7 +5040,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       <View style={styles.detail}>
 
-        <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 70 + insets.top }]}>
+        <View style={[styles.detailHeader, !isWide && { paddingTop: insets.top, height: 58 + insets.top }]}>
 
           {!isWide && (
 
@@ -6742,12 +6747,14 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 </View>
               ) : Platform.OS !== 'web' && previewDocumentUri ? (
                 <View style={styles.documentPreviewFrame}>
-                  <WebView
-                    source={{ uri: previewDocumentUri }}
-                    style={styles.documentPreviewWebView}
-                    allowsInlineMediaPlayback
-                    mediaPlaybackRequiresUserAction
-                    originWhitelist={['*']}
+                  <VideoView
+                    player={previewVideoPlayer}
+                    style={styles.documentPreviewVideo}
+                    nativeControls
+                    contentFit="contain"
+                    allowsPictureInPicture
+                    playsInline
+                    accessibilityLabel={previewDocumentName}
                   />
                 </View>
               ) : (
@@ -7774,7 +7781,7 @@ const styles = StyleSheet.create({
 
   documentPreviewFrame: { flex: 1, backgroundColor: '#f8fafc' },
 
-  documentPreviewWebView: { flex: 1, backgroundColor: '#0f172a' },
+  documentPreviewVideo: { flex: 1, backgroundColor: '#0f172a' },
 
   documentPreviewFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: '#f8fafc' },
 

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions, Modal, TouchableOpacity, ScrollView, Pressable, Platform } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { PartnerProjectApplication, User, VolunteerProjectMatch } from '../models/types';
 import AppLogo from './AppLogo';
@@ -65,7 +64,7 @@ export default function ScreenBrandHeader({
   userId,
 }: ScreenBrandHeaderProps) {
   const { width } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
+  const isMobileHeader = Platform.OS !== 'web' || width < 768;
   const isCompact = width < 380;
   const glassSurfaceStyle = Platform.OS === 'web'
     ? ({ backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' } as any)
@@ -238,18 +237,20 @@ export default function ScreenBrandHeader({
 
   return (
     <>
-      <View style={[styles.container, { paddingTop: Math.max(12, insets.top + 8) }]}>
-        <View style={[styles.brandBlock, glassSurfaceStyle, isCompact && styles.brandBlockCompact]}>
-          <View style={{ paddingHorizontal: 4 }}>
-            <AppLogo width={isCompact ? 64 : 80} />
+      <View style={[styles.container, isMobileHeader ? styles.containerMobile : null]}>
+        <View style={[styles.brandBlock, glassSurfaceStyle, isMobileHeader && styles.brandBlockMobile]}>
+          <View style={isMobileHeader ? styles.mobileLogoCentered : { paddingHorizontal: 4 }}>
+            <AppLogo width={isMobileHeader ? (isCompact ? 68 : 76) : 80} />
           </View>
-          <View style={[styles.copyBlock, isCompact && styles.copyBlockCompact]}>
-            <Text style={[styles.screenTitle, isCompact && styles.screenTitleCompact]} numberOfLines={2}>
-              {title}
-            </Text>
-          </View>
+          {!isMobileHeader ? (
+            <View style={[styles.copyBlock, isCompact && styles.copyBlockCompact]}>
+              <Text style={[styles.screenTitle, isCompact && styles.screenTitleCompact]} numberOfLines={2}>
+                {title}
+              </Text>
+            </View>
+          ) : null}
           <TouchableOpacity
-            style={styles.notificationBellWrap}
+            style={[styles.notificationBellWrap, isMobileHeader && styles.notificationBellWrapMobile]}
             onPress={handleOpenNotificationModal}
             activeOpacity={0.7}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -332,6 +333,11 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 10,
   },
+  containerMobile: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
   brandBlock: {
     backgroundColor: 'rgba(255, 255, 255, 0.72)',
     width: '100%',
@@ -349,6 +355,18 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
     elevation: 5,
+  },
+  brandBlockMobile: {
+    minHeight: 62,
+    height: 62,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 18,
+  },
+  mobileLogoCentered: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   brandBlockCompact: {
     flexDirection: 'column',
@@ -403,6 +421,11 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     padding: 8,
     marginLeft: 'auto',
+  },
+  notificationBellWrapMobile: {
+    position: 'absolute',
+    right: 10,
+    marginLeft: 0,
   },
   notificationBadge: {
     position: 'absolute',
