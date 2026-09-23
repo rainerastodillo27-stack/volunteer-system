@@ -602,7 +602,6 @@ export function VolunteerReportsDashboard({
                 >
                   <View style={styles.folderCardTop}>
                     <MaterialIcons name="folder" size={28} color="#EAB308" />
-                    <MaterialIcons name="more-vert" size={18} color="#9ca3af" />
                   </View>
                   <Text style={styles.folderCardTitle} numberOfLines={2} ellipsizeMode="tail">{folder.event.title}</Text>
                   <Text style={styles.folderCardDate}>{updated}</Text>
@@ -2407,6 +2406,74 @@ function formatPdfDate(value?: string): string {
   return date && !Number.isNaN(date.getTime()) ? date.toLocaleString() : 'Unknown date';
 }
 
+type PartnerReportMetricTotal = {
+  key: string;
+  label: string;
+  value: number;
+};
+
+type PartnerReportAccountGroup = {
+  key: string;
+  volunteer: string;
+  reports: SubmittedReport[];
+  metrics: Map<string, PartnerReportMetricTotal>;
+};
+
+function getPartnerReportAccountKey(report: SubmittedReport): string {
+  return (
+    normalizePartnerPreviewValue(report.submittedBy) ||
+    normalizePartnerPreviewValue(report.submitterName) ||
+    `report:${normalizePartnerPreviewValue(report.id)}`
+  );
+}
+
+function getPartnerReportAccountGroups(reports: SubmittedReport[]): PartnerReportAccountGroup[] {
+  const groups = new Map<string, PartnerReportAccountGroup>();
+
+  reports.forEach(report => {
+    const key = getPartnerReportAccountKey(report);
+    const existing = groups.get(key);
+    const group = existing || {
+      key,
+      volunteer: report.submitterName || 'Volunteer',
+      reports: [],
+      metrics: new Map<string, PartnerReportMetricTotal>(),
+    };
+
+    if (
+      (!group.volunteer || group.volunteer === 'Volunteer') &&
+      report.submitterName &&
+      report.submitterName !== 'Volunteer'
+    ) {
+      group.volunteer = report.submitterName;
+    }
+    group.reports.push(report);
+
+    Object.entries(report.metrics || {})
+      .filter(([metric]) => !isHiddenPartnerPreviewMetric(metric))
+      .forEach(([metric, value]) => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return;
+        const metricKey = metric.replace(/[^a-z0-9]/gi, '').toLowerCase();
+        const metricTotal = group.metrics.get(metricKey);
+        if (metricTotal) {
+          metricTotal.value += value;
+        } else {
+          group.metrics.set(metricKey, {
+            key: metricKey,
+            label: formatPdfMetricLabel(metric),
+            value,
+          });
+        }
+      });
+
+    if (!existing) {
+      groups.set(key, group);
+    }
+  });
+
+  return Array.from(groups.values());
+}
+
 function buildPartnerQuarterlyReportTables(input: {
   title: string;
   quarterLabel: string;
@@ -2430,27 +2497,13 @@ function buildPartnerQuarterlyReportTables(input: {
   const volunteerReports = relatedReports.filter(
     report => report.submitterRole === 'volunteer' && report.status !== 'Rejected'
   );
-  const displayedVolunteerNames = new Set<string>();
-  const volunteerMetricRows = volunteerReports.flatMap(report => {
-    const volunteerName = report.submitterName || 'Volunteer';
-    const volunteerKey = normalizePartnerPreviewValue(volunteerName) || report.submittedBy || 'volunteer';
-    const metricEntries = Object.entries(report.metrics || {})
-      .filter(([metric]) => !isHiddenPartnerPreviewMetric(metric))
-      .filter(([, value]) => typeof value === 'number' && Number.isFinite(value));
-    if (metricEntries.length === 0) {
-      return [];
-    }
-
-    const displayVolunteerName = displayedVolunteerNames.has(volunteerKey)
-      ? ''
-      : volunteerName;
-    displayedVolunteerNames.add(volunteerKey);
-
-    return metricEntries.map(([metric, value], metricIndex) => ({
-      volunteer: displayVolunteerName,
-      report: report.title || 'Untitled report',
-      metric: formatPdfMetricLabel(metric),
-      value,
+  const volunteerAccountGroups = getPartnerReportAccountGroups(volunteerReports);
+  const volunteerMetricRows = volunteerAccountGroups.flatMap(group => {
+    const metricTotals = Array.from(group.metrics.values());
+    return metricTotals.map((metric, metricIndex) => ({
+      volunteer: metricIndex === 0 ? group.volunteer : '',
+      metric: metric.label,
+      value: metric.value,
       __groupStart: metricIndex === 0,
     }));
   });
@@ -2462,31 +2515,34 @@ function buildPartnerQuarterlyReportTables(input: {
     status: event.status || 'Unknown',
     volunteers: event.volunteersNeeded || 0,
   }));
-  const volunteerAccountRows = Array.from(
-    (summary?.volunteerAccounts || []).reduce((accounts, account) => {
-      const volunteerName = account.submitterName || 'Volunteer';
-      const volunteerKey = normalizePartnerPreviewValue(volunteerName) || account.key;
-      const existing = accounts.get(volunteerKey);
-      if (existing) {
-        existing.reports += account.reports.length;
-      } else {
-        accounts.set(volunteerKey, {
-          volunteer: volunteerName,
-          reports: account.reports.length,
-          __groupStart: true,
-        });
-      }
-      return accounts;
-    }, new Map<string, { volunteer: string; reports: number; __groupStart: boolean }>())
-  ).map(([, row]) => row);
-  const reportRows = relatedReports.map(report => ({
-    report: report.title || 'Untitled report',
-    volunteer: report.submitterName || 'Unknown volunteer',
-    event: report.projectTitle || 'Unlinked event',
-    status: report.status || 'Unknown',
-    submitted: formatPdfDate(report.submittedAt),
-    description: report.description || 'No description provided.',
+  const volunteerAccountRows = volunteerAccountGroups.map(group => ({
+    volunteer: group.volunteer,
+    reports: group.reports.length,
+    __groupStart: true,
   }));
+  const reportRows = volunteerAccountGroups.map(group => {
+    const latestReport = [...group.reports].sort(
+      (left, right) =>
+        new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
+    )[0];
+    const events = Array.from(
+      new Set(group.reports.map(report => report.projectTitle || 'Unlinked event'))
+    ).join(', ');
+    const metricSummary = Array.from(group.metrics.values())
+      .map(metric => `${metric.label}: ${metric.value}`)
+      .join('; ');
+
+    return {
+      volunteer: group.volunteer,
+      reports: group.reports.length,
+      events,
+      submitted: formatPdfDate(latestReport?.submittedAt),
+      metrics: metricSummary || 'No numeric metrics submitted.',
+      description:
+        latestReport?.description || 'No description provided.',
+      __groupStart: true,
+    };
+  });
 
   return [
       {
@@ -2523,10 +2579,9 @@ function buildPartnerQuarterlyReportTables(input: {
       {
         title: 'Volunteer-Reported Metrics',
         columns: [
-          { key: 'volunteer', label: 'Volunteer', width: 1.2 },
-          { key: 'report', label: 'Report', width: 1.4 },
-          { key: 'metric', label: 'Metric', width: 1.2 },
-          { key: 'value', label: 'Value', width: 0.7 },
+          { key: 'volunteer', label: 'Volunteer', width: 1.8 },
+          { key: 'metric', label: 'Metric', width: 1.7 },
+          { key: 'value', label: 'Value', width: 0.8 },
         ],
         rows: volunteerMetricRows,
         emptyMessage: 'No volunteer-reported metrics were submitted for this quarter.',
@@ -2543,12 +2598,12 @@ function buildPartnerQuarterlyReportTables(input: {
       {
         title: 'Project and Event Report Details',
         columns: [
-          { key: 'report', label: 'Report', width: 1.1 },
-          { key: 'volunteer', label: 'Volunteer', width: 0.95 },
-          { key: 'event', label: 'Event', width: 1 },
-          { key: 'status', label: 'Status', width: 0.7 },
-          { key: 'submitted', label: 'Submitted', width: 0.95 },
-          { key: 'description', label: 'Description', width: 1.9, maxLines: 12 },
+          { key: 'volunteer', label: 'Volunteer', width: 1.4 },
+          { key: 'reports', label: 'Reports', width: 0.65 },
+          { key: 'events', label: 'Events', width: 1.3, maxLines: 4 },
+          { key: 'submitted', label: 'Latest submitted', width: 1.15, maxLines: 2 },
+          { key: 'metrics', label: 'Combined metrics', width: 1.8, maxLines: 8 },
+          { key: 'description', label: 'Latest description', width: 1.8, maxLines: 8 },
         ],
         rows: reportRows,
         emptyMessage: 'No reports were submitted for this quarter.',

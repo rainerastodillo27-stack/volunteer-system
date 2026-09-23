@@ -138,14 +138,18 @@ export default function DownloadPreviewModal({
                           showsHorizontalScrollIndicator={false}
                           style={styles.documentTableScroll}
                         >
-                          <View style={[styles.documentTable, { minWidth: tableMinWidth }]}>
-                            <View style={styles.documentTableRow}>
+                          <View style={[styles.documentTable, { width: tableMinWidth }]}>
+                            <View style={[styles.documentTableRow, styles.documentTableFullWidthRow]}>
                               {table.columns.map(column => (
                                 <View
                                   key={column.key}
                                   style={[
                                     styles.documentTableHeaderCell,
-                                    { flex: Math.max(0.1, column.width ?? 1) / totalWeight },
+                                    {
+                                      flex: Math.max(0.1, column.width ?? 1) / totalWeight,
+                                      flexBasis: 0,
+                                      minWidth: 0,
+                                    },
                                   ]}
                                 >
                                   <Text style={styles.documentTableHeaderText}>{column.label}</Text>
@@ -158,6 +162,7 @@ export default function DownloadPreviewModal({
                                 key={rowIndex}
                                 style={[
                                   styles.documentTableRow,
+                                  styles.documentTableFullWidthRow,
                                   rowIndex % 2 === 1 && styles.documentTableAlternateRow,
                                   Boolean((row as Record<string, unknown>).__groupStart) &&
                                     styles.documentTableGroupStartRow,
@@ -168,7 +173,11 @@ export default function DownloadPreviewModal({
                                     key={column.key}
                                     style={[
                                       styles.documentTableCell,
-                                      { flex: Math.max(0.1, column.width ?? 1) / totalWeight },
+                                      {
+                                        flex: Math.max(0.1, column.width ?? 1) / totalWeight,
+                                        flexBasis: 0,
+                                        minWidth: 0,
+                                      },
                                     ]}
                                   >
                                     <Text style={styles.documentTableCellText}>
@@ -419,6 +428,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#c7d2d9',
     minHeight: 28,
+  },
+  documentTableFullWidthRow: {
+    width: '100%',
   },
   documentTableHeaderCell: {
     justifyContent: 'center',

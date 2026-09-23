@@ -12,6 +12,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
+import { GLOBAL_FONT_FAMILY } from '../utils/fonts';
 
 type DocumentPreviewModalProps = {
   visible: boolean;
@@ -266,7 +267,7 @@ const styles = StyleSheet.create({
   },
   textPreviewValue: {
     color: '#1e293b',
-    fontFamily: Platform.OS === 'web' ? 'monospace' : undefined,
+    fontFamily: GLOBAL_FONT_FAMILY,
     fontSize: 12,
     lineHeight: 18,
   },

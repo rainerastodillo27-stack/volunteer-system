@@ -127,6 +127,7 @@ import {
   getStatusUpdatesByProject,
 
   getVolunteerProjectJoinRecords,
+  deleteVolunteerProjectJoinRecord,
 
   saveVolunteerProjectMatch,
 
@@ -11967,6 +11968,84 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
   };
 
+  const handleViewVolunteerMatch = (match: VolunteerProjectMatch) => {
+    setReviewerNotes('');
+    setSelectedMatch(match);
+  };
+
+  const handleRemoveVolunteerFromEvent = (match: VolunteerProjectMatch) => {
+    const event = activeSelectedProject;
+    if (!isAdmin || !event?.isEvent) {
+      return;
+    }
+
+    const volunteerName = getVolunteerDisplayNameForMatch(match);
+    showConfirm({
+      title: 'Remove volunteer from event?',
+      message: `Remove ${volunteerName} from "${event.title}"? Their membership, attendance, reports, photos, and event messages will be removed. Their volunteer account and records for other events will remain.`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      confirmColor: '#DC2626',
+      icon: 'person-remove',
+      iconColor: '#DC2626',
+      loadingText: 'Removing...',
+      onConfirm: async () => {
+        const loadingKey = `remove-${match.id}`;
+        setReviewActionLoadingId(loadingKey);
+        try {
+          const result = await deleteVolunteerProjectJoinRecord(event.id, match.volunteerId);
+
+          setSelectedEventMatches(current =>
+            current.filter(candidate =>
+              !(candidate.projectId === event.id && candidate.volunteerId === match.volunteerId)
+            )
+          );
+          setSelectedMatch(current => current?.id === match.id ? null : current);
+          setVolunteerMatches(current =>
+            current.filter(candidate =>
+              !(candidate.projectId === event.id && candidate.volunteerId === match.volunteerId)
+            )
+          );
+          setAllVolunteerMatches(current =>
+            current.filter(candidate =>
+              !(candidate.projectId === event.id && candidate.volunteerId === match.volunteerId)
+            )
+          );
+          setVolunteerJoinRecords(current =>
+            current.filter(record =>
+              !(record.projectId === event.id && record.volunteerId === match.volunteerId)
+            )
+          );
+          setVolunteerTimeLogs(current =>
+            current.filter(log =>
+              !(log.projectId === event.id && log.volunteerId === match.volunteerId)
+            )
+          );
+
+          const updatedProject = result.project;
+          if (updatedProject) {
+            setProjects(current => current.map(project =>
+              project.id === updatedProject.id ? updatedProject : project
+            ));
+            setSelectedProject(current =>
+              current?.id === updatedProject.id ? updatedProject : current
+            );
+          }
+
+          void loadVolunteerMatchesForProject(event.id);
+          void loadVolunteerJoinsForProject(event.id);
+          void loadVolunteerTimeLogs();
+          void loadVolunteers();
+          Alert.alert('Volunteer removed', `${volunteerName} was removed from this event.`);
+        } catch (error) {
+          Alert.alert('Unable to remove volunteer', getRequestErrorMessage(error, 'The volunteer could not be removed from this event.'));
+        } finally {
+          setReviewActionLoadingId(current => current === loadingKey ? null : current);
+        }
+      },
+    });
+  };
+
 
 
   const renderVolunteerApplicationsModal = () => {
@@ -12565,7 +12644,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         key={match.id}
 
-                        onPress={() => setSelectedMatch(match)}
+                        onPress={() => handleViewVolunteerMatch(match)}
 
                         style={{
 
@@ -12619,13 +12698,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
 
-                          <TouchableOpacity style={{ padding: 4 }} onPress={() => setSelectedMatch(match)}>
+                          <TouchableOpacity style={{ padding: 4 }} onPress={() => handleViewVolunteerMatch(match)}>
 
                             <MaterialIcons name="description" size={16} color="#64748b" />
 
                           </TouchableOpacity>
 
-                          <TouchableOpacity style={{ padding: 4 }} onPress={() => setSelectedMatch(match)}>
+                          <TouchableOpacity style={{ padding: 4 }} onPress={() => handleViewVolunteerMatch(match)}>
 
                             <MaterialIcons name="chat" size={16} color="#64748b" />
 
@@ -12635,7 +12714,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           <TouchableOpacity
 
-                            onPress={() => setSelectedMatch(match)}
+                            onPress={() => handleViewVolunteerMatch(match)}
 
                             style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6, marginLeft: 8 }}
 
@@ -12685,7 +12764,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         key={match.id}
 
-                        onPress={() => setSelectedMatch(match)}
+                        onPress={() => handleViewVolunteerMatch(match)}
 
                         style={{
 
@@ -12747,7 +12826,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           <TouchableOpacity
 
-                            onPress={() => setSelectedMatch(match)}
+                            onPress={() => handleViewVolunteerMatch(match)}
 
                             style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6 }}
 
@@ -12757,11 +12836,28 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </TouchableOpacity>
 
-                          <TouchableOpacity style={{ padding: 4 }}>
-
-                            <MaterialIcons name="more-vert" size={18} color="#64748b" />
-
-                          </TouchableOpacity>
+                          {isAdmin ? (
+                            <TouchableOpacity
+                              onPress={() => handleRemoveVolunteerFromEvent(match)}
+                              style={{
+                                paddingHorizontal: 10,
+                                paddingVertical: 6,
+                                borderRadius: 6,
+                                backgroundColor: '#fef2f2',
+                                borderWidth: 1,
+                                borderColor: '#fecaca',
+                              }}
+                              disabled={reviewActionLoadingId === `remove-${match.id}`}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Remove ${name} from event`}
+                            >
+                              {reviewActionLoadingId === `remove-${match.id}` ? (
+                                <ActivityIndicator size="small" color="#dc2626" />
+                              ) : (
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: '#dc2626' }}>Delete</Text>
+                              )}
+                            </TouchableOpacity>
+                          ) : null}
 
                         </View>
 
@@ -12803,7 +12899,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         key={match.id}
 
-                        onPress={() => setSelectedMatch(match)}
+                        onPress={() => handleViewVolunteerMatch(match)}
 
                         style={{
 
@@ -12857,7 +12953,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           <TouchableOpacity
 
-                            onPress={() => setSelectedMatch(match)}
+                            onPress={() => handleViewVolunteerMatch(match)}
 
                             style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6 }}
 

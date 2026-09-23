@@ -6035,29 +6035,31 @@ export async function getAllVolunteerProjectJoinRecords(): Promise<VolunteerProj
 export async function deleteVolunteerProjectJoinRecord(
   projectId: string,
   volunteerId: string
-): Promise<void> {
-  console.log('deleteVolunteerProjectJoinRecord called with:', { projectId, volunteerId });
-
+): Promise<{ success?: boolean; project?: Project | null; removed?: Record<string, number> }> {
   const url = `/projects/${encodeURIComponent(projectId)}/volunteers/${encodeURIComponent(volunteerId)}`;
-  console.log('DELETE URL:', url);
 
-  const payload = await requestApiJson<{ success?: boolean }>(
+  const payload = await requestApiJson<{
+    success?: boolean;
+    project?: Project | null;
+    removed?: Record<string, number>;
+  }>(
     url,
     {
       method: 'DELETE',
     }
   );
 
-  console.log('API response:', payload);
-
   if (!payload.success) {
     throw new Error('Failed to remove volunteer from event.');
   }
 
-  // Clear caches
   const changedKeys = [
     STORAGE_KEYS.VOLUNTEER_MATCHES,
     STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+    STORAGE_KEYS.PARTNER_REPORTS,
+    STORAGE_KEYS.MESSAGES,
+    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
     STORAGE_KEYS.VOLUNTEERS,
     STORAGE_KEYS.PROJECTS,
     STORAGE_KEYS.EVENTS,
@@ -6065,7 +6067,7 @@ export async function deleteVolunteerProjectJoinRecord(
   invalidateSharedStorageCache(changedKeys);
   notifyStorageChanged(changedKeys);
 
-  console.log('Volunteer removed successfully, caches cleared');
+  return payload;
 }
 
 export async function reconcileApprovedVolunteerEventMemberships(): Promise<void> {

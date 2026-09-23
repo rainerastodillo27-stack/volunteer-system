@@ -9324,7 +9324,10 @@ async def remove_volunteer_from_project(
             record
             for record in all_join_records
             if str(record.get("projectId") or "") == project_id
-            and str(record.get("volunteerId") or "").strip() == volunteer_id
+            and (
+                str(record.get("volunteerId") or "").strip() in volunteer_ids_to_remove
+                or str(record.get("volunteerUserId") or "").strip() in volunteer_user_ids_to_remove
+            )
         ]
         for record in matching_join_records:
             record_user_id = str(record.get("volunteerUserId") or "").strip()
@@ -9364,11 +9367,108 @@ async def remove_volunteer_from_project(
         if len(updated_matches) != len(all_matches):
             replace_postgres_hot_storage_collection(connection, "volunteerMatches", updated_matches)
 
-        updated_volunteer = (
-            _postgres_sync_volunteer_engagement_status(connection, volunteer_id)
-            if volunteer is not None
-            else None
+        # Remove every event-scoped trace belonging to this volunteer. The
+        # volunteer profile itself remains available for other events and for
+        # the administrator's directory.
+        volunteer_identity_values = sorted(
+            volunteer_ids_to_remove | volunteer_user_ids_to_remove
         )
+        deleted_report_count = 0
+        deleted_report_ids: list[str] = []
+        deleted_time_log_count = 0
+        deleted_direct_message_count = 0
+        deleted_group_message_count = 0
+        if volunteer_identity_values:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    delete from public.reports
+                    where project_id = %s
+                      and lower(coalesce(submitter_role, '')) = 'volunteer'
+                      and submitter_user_id = any(%s)
+                    returning reports_id
+                    """,
+                    (project_id, volunteer_identity_values),
+                )
+                deleted_report_ids = [
+                    str(row[0]).strip()
+                    for row in cursor.fetchall()
+                    if row and str(row[0] or "").strip()
+                ]
+                deleted_report_count = len(deleted_report_ids)
+
+                # Generated/partner reports can retain the deleted volunteer
+                # report IDs as source references. Remove those references so
+                # the volunteer's event report is not still discoverable
+                # through a summary report.
+                if deleted_report_ids:
+                    cursor.execute(
+                        """
+                        update public.reports
+                        set source_report_ids = array(
+                            select source_id
+                            from unnest(coalesce(source_report_ids, '{}'::text[])) as source_id
+                            where not (source_id = any(%s::text[]))
+                        )
+                        where project_id = %s
+                          and source_report_ids && %s::text[]
+                        """,
+                        (deleted_report_ids, project_id, deleted_report_ids),
+                    )
+
+                cursor.execute(
+                    """
+                    delete from public.volunteer_time_logs
+                    where project_id = %s
+                      and volunteer_id = any(%s)
+                    """,
+                    (project_id, volunteer_identity_values),
+                )
+                deleted_time_log_count = cursor.rowcount or 0
+
+                cursor.execute(
+                    """
+                    delete from public.messages
+                    where project_id = %s
+                      and (sender_id = any(%s) or recipient_id = any(%s))
+                    """,
+                    (project_id, volunteer_identity_values, volunteer_identity_values),
+                )
+                deleted_direct_message_count = cursor.rowcount or 0
+
+                cursor.execute("select to_regclass('public.project_group_messages')")
+                group_messages_table = cursor.fetchone()[0]
+                if group_messages_table:
+                    cursor.execute(
+                        """
+                        delete from public.project_group_messages
+                        where project_id = %s
+                          and sender_id = any(%s)
+                        """,
+                        (project_id, volunteer_identity_values),
+                    )
+                    deleted_group_message_count = cursor.rowcount or 0
+
+        updated_volunteer = None
+        if volunteer is not None:
+            volunteer_id_for_sync = str(volunteer.get("id") or volunteer_id)
+            past_projects = [
+                str(item).strip()
+                for item in (volunteer.get("pastProjects") or [])
+                if str(item).strip() and str(item).strip() != project_id
+            ]
+            volunteer_for_sync = volunteer
+            if past_projects != list(volunteer.get("pastProjects") or []):
+                volunteer_for_sync = {
+                    **volunteer,
+                    "pastProjects": past_projects,
+                }
+                _postgres_upsert_hot_item(connection, "volunteers", volunteer_for_sync)
+            updated_volunteer = _postgres_sync_volunteer_engagement_status(
+                connection,
+                volunteer_id_for_sync,
+                volunteer_for_sync,
+            )
 
         connection.commit()
 
@@ -9376,14 +9476,30 @@ async def remove_volunteer_from_project(
         project_storage_key,
         "volunteerProjectJoins",
         "volunteerMatches",
-        "volunteers"
+        "volunteerTimeLogs",
+        "partnerReports",
+        "messages",
+        "projectGroupMessages",
+        "volunteers",
     ]
     _invalidate_collection_cache(changed_keys)
     _projects_snapshot_cache.clear()
     # Storage invalidation is best effort and must not hold the delete/leave
     # response open for a slow websocket client.
     asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
-    return {"success": True, "project": updated_project, "volunteerProfile": updated_volunteer}
+    return {
+        "success": True,
+        "project": updated_project,
+        "volunteerProfile": updated_volunteer,
+        "removed": {
+            "matches": len(all_matches) - len(updated_matches),
+            "joinRecords": len(all_join_records) - len(updated_join_records),
+            "reports": deleted_report_count,
+            "timeLogs": deleted_time_log_count,
+            "directMessages": deleted_direct_message_count,
+            "groupMessages": deleted_group_message_count,
+        },
+    }
 
 
 def _compact_proposal_message_content(content: Any) -> str:
