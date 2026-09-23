@@ -125,6 +125,75 @@ def _is_public_api_path(path: str) -> bool:
     return path in PUBLIC_API_PATHS or path.startswith("/validation/dswd-accreditation/")
 
 
+# Public account bootstrap endpoints are intentionally unauthenticated, but
+# they must not be unlimited. Keep the limiter in the API as a second layer
+# behind the reverse proxy so it still protects the service if another proxy
+# is added later. The VPS currently runs one API process, and the counters are
+# bounded/expired so this remains safe for a long-running process.
+_PUBLIC_AUTH_RATE_LIMITS: dict[str, tuple[tuple[int, int], ...]] = {
+    "check-email": ((60, 60),),
+    "registration-otp-send": ((5, 900), (2, 60)),
+    "registration-otp-verify": ((20, 900), (5, 300)),
+    "password-reset-send": ((5, 900), (2, 60)),
+    "password-reset-confirm": ((20, 900), (5, 300)),
+}
+_public_auth_rate_limit_lock = threading.Lock()
+_public_auth_rate_limit_events: dict[str, list[float]] = {}
+
+
+def _request_client_ip(request: FastAPIRequest) -> str:
+    """Resolve the client IP without trusting spoofed proxy headers."""
+    direct_host = str(getattr(request.client, "host", "") or "unknown").strip()
+    if direct_host in {"127.0.0.1", "::1"}:
+        forwarded = str(request.headers.get("x-real-ip") or "").strip()
+        if forwarded:
+            return forwarded[:128]
+    return direct_host[:128] or "unknown"
+
+
+def _consume_public_auth_rate_limit(key: str, maximum: int, window_seconds: int) -> int | None:
+    now = time.monotonic()
+    cutoff = now - window_seconds
+    with _public_auth_rate_limit_lock:
+        events = [timestamp for timestamp in _public_auth_rate_limit_events.get(key, []) if timestamp > cutoff]
+        if len(events) >= maximum:
+            retry_after = max(1, math.ceil(window_seconds - (now - events[0])))
+            _public_auth_rate_limit_events[key] = events
+            return retry_after
+        events.append(now)
+        _public_auth_rate_limit_events[key] = events
+        if len(_public_auth_rate_limit_events) > 10_000:
+            stale_keys = [
+                event_key
+                for event_key, timestamps in _public_auth_rate_limit_events.items()
+                if not timestamps or timestamps[-1] <= cutoff
+            ]
+            for event_key in stale_keys[:2_000]:
+                _public_auth_rate_limit_events.pop(event_key, None)
+    return None
+
+
+def _enforce_public_auth_rate_limit(
+    request: FastAPIRequest,
+    action: str,
+    email: str | None = None,
+) -> None:
+    limits = _PUBLIC_AUTH_RATE_LIMITS[action]
+    client_ip = _request_client_ip(request)
+    scopes = [(f"{action}:ip:{client_ip}", limits[0])]
+    if email:
+        scopes.append((f"{action}:email:{email}", limits[-1]))
+
+    for key, (maximum, window_seconds) in scopes:
+        retry_after = _consume_public_auth_rate_limit(key, maximum, window_seconds)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+
 def _apply_security_headers(response, request: FastAPIRequest):
     """Apply response hardening without assuming TLS is already configured."""
     is_attachment_response = request.url.path.startswith("/attachments/")
@@ -6328,8 +6397,15 @@ def _ensure_registration_otp_table(connection: Any) -> None:
                   otp_digest text not null,
                   otp_salt text not null,
                   issued_at timestamptz not null,
-                  expires_at timestamptz not null
+                  expires_at timestamptz not null,
+                  attempts integer not null default 0
                 )
+                """
+            )
+            cursor.execute(
+                """
+                alter table public.registration_email_otps
+                add column if not exists attempts integer not null default 0
                 """
             )
             cursor.execute(
@@ -6482,31 +6558,27 @@ def _is_email_already_registered(email: str, connection: Any | None = None) -> b
 
 
 @app.get("/auth/check-email")
-def auth_check_email(email: str = "") -> dict[str, Any]:
-    """Returns whether the given email is already registered."""
+def auth_check_email(request: FastAPIRequest, email: str = "") -> dict[str, Any]:
+    """Validate registration input without revealing account existence."""
     normalized = str(email or "").strip().lower()
+    _enforce_public_auth_rate_limit(request, "check-email")
     if not normalized or "@" not in normalized:
-        return {"exists": False, "email": normalized}
-    exists = _is_email_already_registered(normalized)
+        return {"email": normalized, "message": "If this email can be used, you can continue with registration."}
     return {
-        "exists": exists,
         "email": normalized,
-        "message": "An account with this email already exists." if exists else "Email is available.",
+        "message": "If this email can be used, you can continue with registration.",
     }
 
 
 @app.post("/auth/registration-otp/send")
-def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str, Any]:
+def auth_registration_otp_send(
+    payload: RegistrationOtpSendPayload,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
     email = str(payload.email or "").strip().lower()
+    _enforce_public_auth_rate_limit(request, "registration-otp-send", email)
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
-
-    # Block if email is already registered
-    if _is_email_already_registered(email):
-        raise HTTPException(
-            status_code=409,
-            detail="An account with this email already exists.",
-        )
 
     otp = "".join(str(secrets.randbelow(10)) for _ in range(6))
     now = datetime.now(timezone.utc)
@@ -6542,13 +6614,14 @@ def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str,
             cursor.execute(
                 """
                 insert into public.registration_email_otps
-                  (email, otp_digest, otp_salt, issued_at, expires_at)
-                values (%s, %s, %s, %s, %s)
+                  (email, otp_digest, otp_salt, issued_at, expires_at, attempts)
+                values (%s, %s, %s, %s, %s, 0)
                 on conflict (email) do update set
                   otp_digest = excluded.otp_digest,
                   otp_salt = excluded.otp_salt,
                   issued_at = excluded.issued_at,
-                  expires_at = excluded.expires_at
+                  expires_at = excluded.expires_at,
+                  attempts = 0
                 """,
                 (
                     email,
@@ -6591,9 +6664,13 @@ def auth_registration_otp_send(payload: RegistrationOtpSendPayload) -> dict[str,
 
 
 @app.post("/auth/registration-otp/verify")
-def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[str, Any]:
+def auth_registration_otp_verify(
+    payload: RegistrationOtpVerifyPayload,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
     email = str(payload.email or "").strip().lower()
     otp = str(payload.otp or "").strip()
+    _enforce_public_auth_rate_limit(request, "registration-otp-verify", email)
 
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
@@ -6606,7 +6683,7 @@ def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                select otp_digest, otp_salt, expires_at
+                select otp_digest, otp_salt, expires_at, attempts
                 from public.registration_email_otps
                 where email = %s
                 for update
@@ -6620,7 +6697,7 @@ def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[
                     detail="No verification code found. Please request a new one.",
                 )
             else:
-                stored_digest, stored_salt, expires_at = stored
+                stored_digest, stored_salt, expires_at, attempts = stored
                 if expires_at.tzinfo is None:
                     expires_at = expires_at.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) >= expires_at:
@@ -6640,10 +6717,25 @@ def auth_registration_otp_verify(payload: RegistrationOtpVerifyPayload) -> dict[
                         supplied_digest = ""
 
                     if not secrets.compare_digest(str(stored_digest), supplied_digest):
-                        verification_error = HTTPException(
-                            status_code=401,
-                            detail="Incorrect code. Please try again.",
-                        )
+                        next_attempts = int(attempts or 0) + 1
+                        if next_attempts >= 5:
+                            cursor.execute(
+                                "delete from public.registration_email_otps where email = %s",
+                                (email,),
+                            )
+                            verification_error = HTTPException(
+                                status_code=429,
+                                detail="Too many incorrect codes. Please request a new one.",
+                            )
+                        else:
+                            cursor.execute(
+                                "update public.registration_email_otps set attempts = %s where email = %s",
+                                (next_attempts, email),
+                            )
+                            verification_error = HTTPException(
+                                status_code=401,
+                                detail="Incorrect code. Please try again.",
+                            )
                     else:
                         cursor.execute(
                             "delete from public.registration_email_otps where email = %s",
@@ -6920,10 +7012,14 @@ def auth_register(
 
 
 @app.post("/auth/password-reset/send")
-def auth_password_reset_send(payload: PasswordResetRequestPayload) -> dict[str, Any]:
+def auth_password_reset_send(
+    payload: PasswordResetRequestPayload,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
     """Send a one-time password reset code to an existing account email."""
 
     email = str(payload.email or "").strip().lower()
+    _enforce_public_auth_rate_limit(request, "password-reset-send", email)
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
 
@@ -7033,12 +7129,16 @@ def auth_password_reset_send(payload: PasswordResetRequestPayload) -> dict[str, 
 
 
 @app.post("/auth/password-reset/confirm")
-def auth_password_reset_confirm(payload: PasswordResetConfirmPayload) -> dict[str, Any]:
+def auth_password_reset_confirm(
+    payload: PasswordResetConfirmPayload,
+    request: FastAPIRequest,
+) -> dict[str, Any]:
     """Verify a reset code and replace the account password with a bcrypt hash."""
 
     email = str(payload.email or "").strip().lower()
     otp = str(payload.otp or "").strip()
     new_password = str(payload.newPassword or "").strip()
+    _enforce_public_auth_rate_limit(request, "password-reset-confirm", email)
 
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A valid email address is required.")

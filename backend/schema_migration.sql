@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS public.registration_email_otps (
   otp_digest text NOT NULL,
   otp_salt text NOT NULL,
   issued_at timestamptz NOT NULL,
-  expires_at timestamptz NOT NULL
+  expires_at timestamptz NOT NULL,
+  attempts integer NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS registration_email_otps_expires_idx

@@ -91,12 +91,12 @@ function ensureBackendStarted() {
 }
 
 // Exposes runtime Expo configuration for API URLs and native map keys.
-// Fallback LAN IP for cloud builds where .env is not available.
-// Update this whenever your PC's Wi-Fi IP changes before rebuilding the APK.
-const HARDCODED_LAN_IP = '192.168.0.106';
+// Production builds must always have a hosted HTTPS fallback. Local HTTP
+// endpoints are selected explicitly through the development environment.
+const DEFAULT_HOSTED_API_URL = 'https://nvcfoundationconnect.online';
 // The hosted web app is served through this hostname. Keeping the web API on
 // the same origin avoids browser CORS failures for writes such as attendance
-// marking while native builds continue to use the VPS IP below.
+// marking.
 const DEFAULT_HOSTED_WEB_API_URL = 'https://nvcfoundationconnect.online';
 // OAuth client IDs are public identifiers and are safe to bundle in the app.
 // Never place an OAuth client secret here.
@@ -110,7 +110,7 @@ module.exports = () => {
   const configuredApiBaseUrl =
     process.env.VOLCRE_API_BASE_URL ||
     process.env.EXPO_PUBLIC_API_BASE_URL ||
-    'http://129.121.73.76';
+    DEFAULT_HOSTED_API_URL;
   const lanApiBaseUrl = configuredApiBaseUrl;
   const webApiBaseUrl =
     process.env.VOLCRE_WEB_API_BASE_URL || DEFAULT_HOSTED_WEB_API_URL;
@@ -208,7 +208,9 @@ module.exports = () => {
           'expo-build-properties',
           {
             android: {
-              usesCleartextTraffic: true,
+              // Standalone production builds communicate through the hosted
+              // HTTPS API. Development clients may still use a local HTTP API.
+              usesCleartextTraffic: process.env.EAS_BUILD_PROFILE !== 'production',
             },
           },
         ],

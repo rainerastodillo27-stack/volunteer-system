@@ -1161,7 +1161,7 @@ function getExpoExtraValue(key: string): string | undefined {
   return undefined;
 }
 
-const DEFAULT_PRODUCTION_TUNNEL_URL = 'http://129.121.73.76:8001';
+const DEFAULT_PRODUCTION_API_URL = 'https://nvcfoundationconnect.online';
 const HOSTED_WEB_APP_HOST = 'nvcfoundationconnect.online';
 
 function isPrivateOrLocalHost(hostname: string): boolean {
@@ -1213,7 +1213,7 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
       // On a standalone device without a bundler host, private IPs and loopbacks
       // cannot be reached over cellular data. Route directly to the public tunnel.
       if (!bundlerHost && isLocalHost) {
-        return DEFAULT_PRODUCTION_TUNNEL_URL;
+        return DEFAULT_PRODUCTION_API_URL;
       }
 
       return trimmedBaseUrl;
@@ -1226,7 +1226,7 @@ function resolveNativeApiBaseUrl(configuredBaseUrl?: string): string {
     return `http://${bundlerHost}:8000`;
   }
 
-  return DEFAULT_PRODUCTION_TUNNEL_URL;
+  return DEFAULT_PRODUCTION_API_URL;
 }
 
 // Returns the effective HTTP base URL used by the frontend storage layer.

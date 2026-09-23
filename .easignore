@@ -3,6 +3,8 @@ node_modules/
 .npm-cache-eas/
 .expo/
 .git/
+.env
+.env.*
 .venv/
 .dev-logs/
 .dev-pids/
