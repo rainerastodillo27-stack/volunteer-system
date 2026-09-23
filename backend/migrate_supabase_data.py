@@ -61,7 +61,14 @@ COLLECTION_KEYS = [
 ]
 
 DERIVED_COLLECTION_KEYS = ["skills", "tasks"]
-DIRECT_TABLES = ["messages", "project_group_messages", "event_email_reminders"]
+DIRECT_TABLES = [
+    "messages",
+    "project_group_messages",
+    "event_email_reminders",
+    "notification_reads",
+    "registration_email_otps",
+    "password_reset_email_otps",
+]
 
 RUNTIME_SUPPORT_TABLE_DDL = """
 create table if not exists public.event_email_reminders (
@@ -71,6 +78,34 @@ create table if not exists public.event_email_reminders (
   volunteer_email text not null,
   reminder_type text not null,
   sent_at timestamptz not null
+)
+
+;
+create table if not exists public.notification_reads (
+  notification_reads_id text primary key,
+  user_id text not null,
+  notification_id text not null,
+  seen_at timestamptz not null default now(),
+  unique (user_id, notification_id)
+)
+
+;
+create table if not exists public.registration_email_otps (
+  email text primary key,
+  otp_digest text not null,
+  otp_salt text not null,
+  issued_at timestamptz not null,
+  expires_at timestamptz not null
+)
+
+;
+create table if not exists public.password_reset_email_otps (
+  email text primary key,
+  otp_digest text not null,
+  otp_salt text not null,
+  issued_at timestamptz not null,
+  expires_at timestamptz not null,
+  attempts integer not null default 0
 )
 """
 
@@ -179,7 +214,7 @@ def fetch_source_collection(connection: Any, key: str) -> list[dict[str, Any]]:
     items = []
     for row in rows:
         try:
-            item = _row_to_item(key, dict(row))
+            item = _row_to_item(key, dict(row), include_password=key == "users")
         except Exception:
             continue
         if isinstance(item, dict) and item.get("id"):
