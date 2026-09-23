@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal, Pressable, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Text } from 'react-native';
 
 // Safe Platform accessor for web environments
@@ -268,6 +269,7 @@ function getAdminInitials(name?: string): string {
 
 export default function AdminNavigator() {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
   const [unreadMessages, setUnreadMessages] = useState<any[]>([]);
@@ -752,7 +754,15 @@ export default function AdminNavigator() {
         tabBarIcon: ({ color, size }) => <MaterialIcons name={getIconName(route.name as keyof AdminTabParamList)} size={size} color={color} />,
         tabBarActiveTintColor: '#4CAF50',
         tabBarInactiveTintColor: '#999',
-        tabBarStyle: isWeb ? { display: 'none' } : { backgroundColor: '#fff', borderTopColor: '#eee', paddingBottom: 4 },
+        tabBarStyle: isWeb
+          ? { display: 'none' }
+          : {
+              backgroundColor: '#fff',
+              borderTopColor: '#eee',
+              paddingTop: 6,
+              paddingBottom: Math.max(insets.bottom, 12),
+              height: 56 + Math.max(insets.bottom, 12),
+            },
       })}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'Admin Dashboard' }} />

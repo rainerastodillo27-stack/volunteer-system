@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, Platform, Alert, Modal, useWindowDimensions } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import type { Project, VolunteerTimeLog, Volunteer } from '../models/types';
 import { downloadPhotoBatch, getAttachmentUris, isImageMediaUri, type PhotoBatchDownloadItem } from '../utils/media';
@@ -372,6 +373,7 @@ function buildBatchReportPdf(
 
 export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onRequestReportMedia, onRequestAttendanceMedia, mediaRefreshVersion = 0, onUploadReport, reportType = 'all' }: Props) {
   const { width: viewportWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const isNarrow = viewportWidth < 700;
   const [activeFilter, setActiveFilter] = useState<'All' | 'Events' | 'Photos'>('All');
   const [search, setSearch] = useState('');
@@ -1374,7 +1376,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         animationType="fade"
         onRequestClose={() => setPhotoPreview(null)}
       >
-        <View style={styles.photoViewerBackdrop}>
+        <View style={[styles.photoViewerBackdrop, { paddingTop: Math.max(insets.top, 24), paddingBottom: Math.max(insets.bottom, 24) }]}>
           <View style={styles.photoViewerCard}>
             <View style={styles.photoViewerHeader}>
               <View style={{ flex: 1 }}>
@@ -1389,7 +1391,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 accessibilityRole="button"
                 accessibilityLabel="Close photo preview"
               >
-                <MaterialIcons name="close" size={24} color="#fff" />
+                <MaterialIcons name="close" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
             <Image
@@ -1726,7 +1728,17 @@ const styles = StyleSheet.create({
   },
   photoViewerTitle: { color: '#fff', fontSize: 15, fontWeight: '800' },
   photoViewerSubtitle: { color: '#CBD5E1', fontSize: 11, marginTop: 2 },
-  photoViewerClose: { padding: 4, marginLeft: 12 },
+  photoViewerClose: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 12,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.8)',
+  },
   photoViewerImage: { flex: 1, width: '100%', backgroundColor: '#0F172A' },
   folderGrid: {
     flexDirection: 'row',

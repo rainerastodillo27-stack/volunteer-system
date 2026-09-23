@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
 import { GLOBAL_FONT_FAMILY } from '../utils/fonts';
 
@@ -52,6 +53,7 @@ export default function DocumentPreviewModal({
   allowExternalOpen = false,
   onOpenExternal,
 }: DocumentPreviewModalProps) {
+  const insets = useSafeAreaInsets();
   const normalizedUri = typeof uri === 'string' ? uri.trim() : '';
   const [imageFailed, setImageFailed] = useState(false);
   const [textContent, setTextContent] = useState<string | null>(null);
@@ -108,7 +110,7 @@ export default function DocumentPreviewModal({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.backdrop}>
+      <View style={[styles.backdrop, { paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 20) }]}>
         <View style={styles.modal}>
           <View style={styles.header}>
             <View style={styles.headerCopy}>
@@ -123,7 +125,7 @@ export default function DocumentPreviewModal({
               accessibilityRole="button"
               accessibilityLabel="Close document preview"
             >
-              <MaterialIcons name="close" size={22} color="#475569" />
+              <MaterialIcons name="close" size={20} color="#ffffff" />
             </TouchableOpacity>
           </View>
 
@@ -232,10 +234,12 @@ const styles = StyleSheet.create({
   closeButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#f1f5f9',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#ffffff',
   },
   previewFrame: {
     minHeight: 260,

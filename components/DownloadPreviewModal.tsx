@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import type { PdfTable } from '../utils/pdfDownload';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface PreviewModalProps {
   visible: boolean;
@@ -56,6 +57,7 @@ export default function DownloadPreviewModal({
   confirmText = 'Download',
   confirmColor = '#2563eb',
 }: PreviewModalProps) {
+  const insets = useSafeAreaInsets();
   const sampleSize = Math.min(5, previewRows.length);
   const hasStructuredPreview = Boolean(previewTables?.length);
 
@@ -66,7 +68,7 @@ export default function DownloadPreviewModal({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <View style={styles.backdrop}>
+      <View style={[styles.backdrop, { paddingTop: Math.max(insets.top, 16), paddingBottom: Math.max(insets.bottom, 16) }]}>
         <View style={styles.modal}>
           {/* Header */}
           <View style={styles.header}>
@@ -75,7 +77,7 @@ export default function DownloadPreviewModal({
               <Text style={styles.headerSubtitle}>{subtitle}</Text>
             </View>
             <TouchableOpacity onPress={onCancel} style={styles.closeButton}>
-              <MaterialIcons name="close" size={24} color="#5f687a" />
+              <MaterialIcons name="close" size={20} color="#ffffff" />
             </TouchableOpacity>
           </View>
 
@@ -345,8 +347,14 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   closeButton: {
-    padding: 8,
-    marginRight: -8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#ffffff',
   },
   statsSection: {
     paddingHorizontal: 16,

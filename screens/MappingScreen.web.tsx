@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AdvocacyFocus, Partner, PartnerProjectApplication, Project, ProgramTrack, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import {
   getAllPartners,
@@ -304,6 +305,7 @@ function formatMonthShort(value: Date) {
 // Displays the web version of the project map using the Google Maps JavaScript API.
 export default function MappingScreen({ navigation }: any) {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const [projects, setProjects] = useState<Project[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -1712,10 +1714,10 @@ export default function MappingScreen({ navigation }: any) {
       ) : null}
 
       <Modal animationType="slide" transparent visible={showDetails} onRequestClose={() => setShowDetails(false)}>
-        <View style={styles.centeredView}>
+        <View style={[styles.centeredView, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           <View style={styles.modalView}>
             <TouchableOpacity style={styles.closeButton} onPress={() => setShowDetails(false)}>
-              <MaterialIcons name="close" size={28} color="#333" />
+              <MaterialIcons name="close" size={22} color="#ffffff" />
             </TouchableOpacity>
 
             {selectedProject && (
@@ -1799,10 +1801,10 @@ export default function MappingScreen({ navigation }: any) {
         visible={Boolean(locationPromptProject)}
         onRequestClose={() => setLocationPromptProject(null)}
       >
-        <View style={styles.centeredView}>
+        <View style={[styles.centeredView, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           <View style={[styles.modalView, { maxWidth: 520 }]}>
             <TouchableOpacity style={styles.closeButton} onPress={() => setLocationPromptProject(null)}>
-              <MaterialIcons name="close" size={26} color="#333" />
+              <MaterialIcons name="close" size={22} color="#ffffff" />
             </TouchableOpacity>
 
             {locationPromptProject && (
@@ -2555,9 +2557,17 @@ const styles = StyleSheet.create({
     minHeight: '70%',
   },
   closeButton: {
-    alignItems: 'flex-end',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    alignSelf: 'flex-end',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+    marginBottom: 6,
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#ffffff',
   },
   modalContent: {
     paddingHorizontal: 20,

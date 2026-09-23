@@ -4854,7 +4854,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                             >
 
-                              <MaterialIcons name={isImageAttachment ? "visibility" : "download"} size={18} color="#166534" />
+                              <MaterialIcons name={isImageAttachment ? "visibility" : "download"} size={18} color="#ffffff" />
 
                               <Text style={styles.attachmentDownloadButtonText}>
 
@@ -6121,7 +6121,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         const canReviseProposal = user?.role === 'partner' && (cardStatus === 'Rejected' || matchedApp?.status === 'Rejected') && !hasNewerRevision && !hasLaterCardInChat;
 
         return (
-          <View style={styles.modalOverlay}>
+          <View style={[styles.modalOverlay, !isWide && { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 12) }]}>
             <View style={[styles.modalContainer, { maxWidth: 520, maxHeight: '85%' }]}>
               {/* Header */}
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 10 }}>
@@ -6230,7 +6230,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                                 onPress={() => void handleOpenProposalAttachment(attachmentUri, attachmentIndex, attachmentType || undefined)}
                                 activeOpacity={0.85}
                               >
-                                <MaterialIcons name="download" size={18} color="#166534" />
+                                <MaterialIcons name="download" size={18} color="#ffffff" />
                                 <Text style={styles.attachmentDownloadButtonText}>
                                   {isImageAttachment ? 'Open or Download Photo' : 'Open or Download File'}
                                 </Text>
@@ -6332,7 +6332,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       {showRejectionModal && pendingRejectApp && (
 
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, !isWide && { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 12) }]}>
 
           <View style={[styles.modalContainer, { maxWidth: 480 }]}>
 
@@ -6519,7 +6519,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       >
 
-        <View style={styles.membersModalBackdrop}>
+        <View style={[styles.membersModalBackdrop, !isWide && { paddingTop: Math.max(insets.top, 18), paddingBottom: Math.max(insets.bottom, 18) }]}>
 
           <View style={styles.membersModalCard}>
 
@@ -6547,7 +6547,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
               >
 
-                <Ionicons name="close" size={20} color="#475569" />
+                <Ionicons name="close" size={20} color="#ffffff" />
 
               </TouchableOpacity>
 
@@ -6651,7 +6651,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       >
 
-        <View style={styles.imagePreviewBackdrop}>
+        <View style={[styles.imagePreviewBackdrop, !isWide && { paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 20) }]}>
 
           <View style={styles.imagePreviewCard}>
 
@@ -6675,7 +6675,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                 <TouchableOpacity onPress={closeAttachmentPreview} style={styles.imagePreviewClose}>
 
-                  <MaterialIcons name="close" size={20} color="#0f172a" />
+                  <MaterialIcons name="close" size={20} color="#ffffff" />
 
                 </TouchableOpacity>
 
@@ -6705,7 +6705,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         animationType="fade"
         onRequestClose={closeAttachmentPreview}
       >
-        <View style={styles.imagePreviewBackdrop}>
+        <View style={[styles.imagePreviewBackdrop, !isWide && { paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 20) }]}>
           <View style={styles.documentPreviewModalCard}>
             <View style={styles.imagePreviewHeader}>
               <View style={{ flex: 1 }}>
@@ -6724,7 +6724,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                   <Text style={styles.imagePreviewDownloadText}>Download</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={closeAttachmentPreview} style={styles.imagePreviewClose}>
-                  <MaterialIcons name="close" size={20} color="#0f172a" />
+                  <MaterialIcons name="close" size={20} color="#ffffff" />
                 </TouchableOpacity>
               </View>
             </View>
@@ -7293,7 +7293,7 @@ const styles = StyleSheet.create({
 
   headerActions: { flexDirection: 'row', gap: 4, zIndex: 60 },
 
-  headerAction: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  headerAction: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0' },
 
   conversationMenuWrap: { position: 'relative', zIndex: 70 },
 
@@ -7459,7 +7459,7 @@ const styles = StyleSheet.create({
 
     borderRadius: 12,
 
-    backgroundColor: '#ffffff',
+    backgroundColor: '#0f172a',
 
     alignItems: 'center',
 
@@ -7467,7 +7467,7 @@ const styles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: '#e2e8f0',
+    borderColor: '#ffffff',
 
   },
 
@@ -7702,6 +7702,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
 
     backgroundColor: '#166534',
+    borderWidth: 1,
+    borderColor: '#0b3d20',
 
   },
 
@@ -7727,7 +7729,21 @@ const styles = StyleSheet.create({
 
   imagePreviewClose: {
 
-    padding: 8,
+    width: 38,
+
+    height: 38,
+
+    borderRadius: 19,
+
+    alignItems: 'center',
+
+    justifyContent: 'center',
+
+    backgroundColor: '#0f172a',
+
+    borderWidth: 1,
+
+    borderColor: '#ffffff',
 
   },
 
@@ -7770,7 +7786,7 @@ const styles = StyleSheet.create({
 
   messagesListContent: { padding: 10, gap: 8 },
 
-  messageRow: { maxWidth: '85%', gap: 4, minWidth: 0 },
+  messageRow: { width: '85%', maxWidth: '85%', gap: 4, minWidth: 0, flexShrink: 1 },
 
   proposalMessageRow: { maxWidth: '100%', width: '100%', alignSelf: 'stretch', minWidth: 0 },
 
@@ -7794,13 +7810,13 @@ const styles = StyleSheet.create({
 
   messageSenderName: { color: '#64748b', fontSize: 10, fontWeight: '800', flexShrink: 1 },
 
-  bubble: { padding: 8, borderRadius: 12 },
+  bubble: { padding: 8, borderRadius: 12, maxWidth: '100%', minWidth: 0, flexShrink: 1 },
 
   bubbleOwn: { backgroundColor: '#166534', borderBottomRightRadius: 3 },
 
   bubbleOther: { backgroundColor: '#f1f5f9', borderBottomLeftRadius: 3 },
 
-  bubbleText: { fontSize: 12, lineHeight: 16, color: '#334155' },
+  bubbleText: { fontSize: 12, lineHeight: 16, color: '#334155', maxWidth: '100%', flexShrink: 1 },
 
   bubbleTextOwn: { color: '#fff' },
 
@@ -8274,7 +8290,7 @@ const styles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: '#86efac',
+    borderColor: '#0b3d20',
 
   },
 
@@ -8284,7 +8300,7 @@ const styles = StyleSheet.create({
 
     fontWeight: '800',
 
-    color: '#166534',
+    color: '#ffffff',
 
   },
 
@@ -8380,7 +8396,7 @@ const styles = StyleSheet.create({
 
     borderRadius: 10,
 
-    backgroundColor: '#f0fdf4',
+    backgroundColor: '#166534',
 
     borderWidth: 1,
 

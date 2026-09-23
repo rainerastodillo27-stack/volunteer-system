@@ -12,6 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SubmittedReport } from '../screens/ReportsScreen';
 import {
   getAttachmentLabel,
@@ -46,6 +47,7 @@ export default function ReportDetailsModal({
     documentSubtitle: string;
   } | null>(null);
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   if (!report) return null;
 
@@ -94,7 +96,7 @@ export default function ReportDetailsModal({
   return (
     <>
       <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
-      <View style={styles.backdrop}>
+      <View style={[styles.backdrop, { paddingTop: Math.max(insets.top, 16), paddingBottom: Math.max(insets.bottom, 16) }]}>
         <View style={[styles.container, isWideLayout && styles.containerWide]}>
           {/* Header */}
           <View style={styles.header}>
@@ -104,11 +106,11 @@ export default function ReportDetailsModal({
             </View>
             <View style={styles.headerActions}>
               <TouchableOpacity style={styles.downloadButton} onPress={handleDownloadReport}>
-                <MaterialIcons name="download" size={18} color="#166534" />
+                <MaterialIcons name="download" size={18} color="#ffffff" />
                 <Text style={styles.downloadButtonText}>PDF</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.headerCloseButton} onPress={handleClose} hitSlop={8}>
-                <MaterialIcons name="close" size={24} color="#0f172a" />
+                <MaterialIcons name="close" size={20} color="#ffffff" />
               </TouchableOpacity>
             </View>
           </View>
@@ -300,7 +302,7 @@ export default function ReportDetailsModal({
         animationType="fade"
         onRequestClose={closeAttachmentPreview}
       >
-        <View style={styles.attachmentPreviewBackdrop}>
+        <View style={[styles.attachmentPreviewBackdrop, { paddingTop: Math.max(insets.top, 8), paddingBottom: Math.max(insets.bottom, 8) }]}>
           <View style={styles.attachmentPreviewModalCard}>
             <View style={styles.attachmentPreviewHeader}>
               <Text style={styles.attachmentPreviewModalTitle}>Full-resolution photo</Text>
@@ -574,14 +576,14 @@ const styles = StyleSheet.create({
     minHeight: 38,
     paddingHorizontal: 12,
     borderRadius: 19,
-    backgroundColor: '#f0fdf4',
+    backgroundColor: '#166534',
     borderWidth: 1,
-    borderColor: '#bbf7d0',
+    borderColor: '#0b3d20',
   },
   downloadButtonText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#166534',
+    color: '#ffffff',
   },
   headerCloseButton: {
     width: 38,
@@ -589,9 +591,9 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#ffffff',
   },
   title: {
     fontSize: 18,
@@ -840,7 +842,14 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
   },
   attachmentPreviewClose: {
-    padding: 8,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.8)',
   },
   attachmentPreviewModalImage: {
     width: '100%',
