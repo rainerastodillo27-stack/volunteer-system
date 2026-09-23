@@ -372,6 +372,13 @@ export function buildTablePdf(title: string, options: PdfTablePdfOptions): strin
         });
         x += widths[columnIndex];
       });
+      if (row.__groupStart) {
+        commands.push(pdfRgb(PDF_COLORS.header, true));
+        commands.push('1.2 w');
+        commands.push(
+          `${formatPdfNumber(margin)} ${formatPdfNumber(cursorY)} m ${formatPdfNumber(margin + contentWidth)} ${formatPdfNumber(cursorY)} l S`
+        );
+      }
       cursorY -= rowHeight;
     });
 

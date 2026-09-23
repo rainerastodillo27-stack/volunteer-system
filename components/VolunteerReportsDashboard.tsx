@@ -2322,6 +2322,7 @@ export function PartnerReportsDashboard({
         stats={downloadPreview ? [
           { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
           { label: 'Included reports', value: String(downloadPreview.recordCount), icon: 'description' },
+          { label: 'Photos available', value: String(allVolunteerPhotos.length), icon: 'photo-library' },
         ] : undefined}
         onConfirm={() => {
           if (!downloadPreview) return;
@@ -2349,6 +2350,51 @@ function getVolunteerReportsForSummary(summary: PartnerProjectReportSummary): Su
     );
 }
 
+function normalizePartnerPreviewValue(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function getPartnerPreviewReportKey(report: SubmittedReport): string {
+  const metrics = Object.entries(report.metrics || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${normalizePartnerPreviewValue(key)}=${String(value)}`)
+    .join('|');
+
+  return [
+    normalizePartnerPreviewValue(report.submitterRole),
+    normalizePartnerPreviewValue(report.submitterName),
+    normalizePartnerPreviewValue(report.title),
+    normalizePartnerPreviewValue(report.projectId),
+    normalizePartnerPreviewValue(report.projectTitle),
+    normalizePartnerPreviewValue(report.submittedAt),
+    normalizePartnerPreviewValue(report.description),
+    metrics,
+  ].join('¦');
+}
+
+function getUniquePartnerPreviewReports(reports: SubmittedReport[]): SubmittedReport[] {
+  const seen = new Set<string>();
+  return reports.filter(report => {
+    const key = getPartnerPreviewReportKey(report);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function isHiddenPartnerPreviewMetric(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return (
+    normalized === 'volunteerhours' ||
+    normalized === 'volunteerhoursserved' ||
+    normalized === 'beneficiariesserved' ||
+    normalized === 'beneficiaryserved'
+  );
+}
+
 function formatPdfMetricLabel(key: string): string {
   return key
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -2374,7 +2420,9 @@ function buildPartnerQuarterlyReportTables(input: {
   reports?: SubmittedReport[];
 }): PdfTable[] {
   const summary = input.summary;
-  const relatedReports = input.reports || (summary ? getVolunteerReportsForSummary(summary) : []);
+  const relatedReports = getUniquePartnerPreviewReports(
+    input.reports || (summary ? getVolunteerReportsForSummary(summary) : [])
+  );
   // The quarterly document must report what volunteers actually submitted.
   // Attendance, active-volunteer, event-count, and beneficiary totals are
   // dashboard aggregates and must not be presented as volunteer-reported
@@ -2382,16 +2430,30 @@ function buildPartnerQuarterlyReportTables(input: {
   const volunteerReports = relatedReports.filter(
     report => report.submitterRole === 'volunteer' && report.status !== 'Rejected'
   );
-  const volunteerMetricRows = volunteerReports.flatMap(report =>
-    Object.entries(report.metrics || {})
-      .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
-      .map(([metric, value]) => ({
-        volunteer: report.submitterName || 'Volunteer',
-        report: report.title || 'Untitled report',
-        metric: formatPdfMetricLabel(metric),
-        value,
-      }))
-  );
+  const displayedVolunteerNames = new Set<string>();
+  const volunteerMetricRows = volunteerReports.flatMap(report => {
+    const volunteerName = report.submitterName || 'Volunteer';
+    const volunteerKey = normalizePartnerPreviewValue(volunteerName) || report.submittedBy || 'volunteer';
+    const metricEntries = Object.entries(report.metrics || {})
+      .filter(([metric]) => !isHiddenPartnerPreviewMetric(metric))
+      .filter(([, value]) => typeof value === 'number' && Number.isFinite(value));
+    if (metricEntries.length === 0) {
+      return [];
+    }
+
+    const displayVolunteerName = displayedVolunteerNames.has(volunteerKey)
+      ? ''
+      : volunteerName;
+    displayedVolunteerNames.add(volunteerKey);
+
+    return metricEntries.map(([metric, value], metricIndex) => ({
+      volunteer: displayVolunteerName,
+      report: report.title || 'Untitled report',
+      metric: formatPdfMetricLabel(metric),
+      value,
+      __groupStart: metricIndex === 0,
+    }));
+  });
   const linkedEventRows = (summary?.linkedEvents || []).map(event => ({
     event: event.title || 'Untitled event',
     schedule: event.startDate
@@ -2400,10 +2462,23 @@ function buildPartnerQuarterlyReportTables(input: {
     status: event.status || 'Unknown',
     volunteers: event.volunteersNeeded || 0,
   }));
-  const volunteerAccountRows = (summary?.volunteerAccounts || []).map(account => ({
-    volunteer: account.submitterName || 'Volunteer',
-    reports: account.reports.length,
-  }));
+  const volunteerAccountRows = Array.from(
+    (summary?.volunteerAccounts || []).reduce((accounts, account) => {
+      const volunteerName = account.submitterName || 'Volunteer';
+      const volunteerKey = normalizePartnerPreviewValue(volunteerName) || account.key;
+      const existing = accounts.get(volunteerKey);
+      if (existing) {
+        existing.reports += account.reports.length;
+      } else {
+        accounts.set(volunteerKey, {
+          volunteer: volunteerName,
+          reports: account.reports.length,
+          __groupStart: true,
+        });
+      }
+      return accounts;
+    }, new Map<string, { volunteer: string; reports: number; __groupStart: boolean }>())
+  ).map(([, row]) => row);
   const reportRows = relatedReports.map(report => ({
     report: report.title || 'Untitled report',
     volunteer: report.submitterName || 'Unknown volunteer',

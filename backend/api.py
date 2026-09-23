@@ -4309,6 +4309,7 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
         return set()
 
     project_ids: set[str] = set()
+    approved_program_modules: set[str] = set()
     applications = _postgres_get_hot_items_by_field(
         connection,
         "partnerProjectApplications",
@@ -4320,7 +4321,20 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
         if str(application.get("status") or "").strip() == "Approved":
             project_id = str(application.get("projectId") or "").strip()
             if project_id:
-                project_ids.add(project_id)
+                if project_id.startswith("program:"):
+                    module = project_id[len("program:"):].strip()
+                    if module:
+                        approved_program_modules.add(module.casefold())
+                else:
+                    project_ids.add(project_id)
+
+            proposal_details = application.get("proposalDetails")
+            if isinstance(proposal_details, dict):
+                requested_module = str(
+                    proposal_details.get("requestedProgramModule") or ""
+                ).strip()
+                if requested_module:
+                    approved_program_modules.add(requested_module.casefold())
 
     partner_records = get_postgres_hot_storage_collection(connection, "partners", include_images=False)
     partner_ids = {
@@ -4330,7 +4344,7 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
     }
 
     scoped_projects: list[dict[str, Any]] = []
-    for key in ("projects", "events"):
+    for key in ("projects", "programs", "events"):
         records = get_postgres_hot_storage_collection(connection, key, include_images=False)
         scoped_projects.extend(record for record in records if isinstance(record, dict))
         for project in records:
@@ -4338,6 +4352,23 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
                 project_id = str(project.get("id") or "").strip()
                 if project_id:
                     project_ids.add(project_id)
+
+            # Keep server-side media authorization in sync with the partner
+            # dashboard's legacy fallback for applications that still carry a
+            # program:<module> placeholder instead of the generated project ID.
+            project_module = str(
+                project.get("programModule") or project.get("program_module") or ""
+            ).strip().casefold()
+            project_category = str(project.get("category") or "").strip().casefold()
+            project_id = str(project.get("id") or "").strip()
+            if project_id and (
+                project_module in approved_program_modules
+                or (
+                    project_id.startswith("project-proposal-")
+                    and project_category in approved_program_modules
+                )
+            ):
+                project_ids.add(project_id)
 
     # Events are children of the approved project through parentProjectId. Some
     # older event records do not carry the partner ownership field, so include

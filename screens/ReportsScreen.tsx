@@ -89,7 +89,6 @@ export interface PartnerVolunteerAccountSummary {
   reports: SubmittedReport[];
   volunteerEventJoins: number;
   verifiedAttendance: number;
-  beneficiariesServed: number;
   latestActivityAt?: string;
 }
 
@@ -228,6 +227,55 @@ function shouldDisplayReport(report: SubmittedReport): boolean {
   return report.status !== 'Rejected';
 }
 
+function isPartnerReportMetricExcluded(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return (
+    normalized === 'volunteerhours' ||
+    normalized === 'volunteerhoursserved' ||
+    normalized === 'beneficiariesserved' ||
+    normalized === 'beneficiaryserved'
+  );
+}
+
+function stripPartnerReportMetrics(report: SubmittedReport): SubmittedReport {
+  const metrics = Object.fromEntries(
+    Object.entries(report.metrics || {}).filter(([key]) => !isPartnerReportMetricExcluded(key))
+  );
+  return { ...report, metrics };
+}
+
+function getPartnerReportDataKey(report: SubmittedReport): string {
+  const metrics = Object.entries(report.metrics || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join('|');
+  return [
+    report.submitterRole,
+    report.submittedBy,
+    report.submitterName,
+    report.title,
+    report.projectId,
+    report.projectTitle,
+    report.submittedAt,
+    report.description,
+    metrics,
+  ]
+    .map(value => String(value ?? '').trim().toLowerCase())
+    .join('¦');
+}
+
+function sanitizePartnerReportData(reports: SubmittedReport[]): SubmittedReport[] {
+  const seen = new Set<string>();
+  return reports
+    .map(stripPartnerReportMetrics)
+    .filter(report => {
+      const key = getPartnerReportDataKey(report);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function normalizeProjectId(value: unknown): string {
   return String(value || '').trim();
 }
@@ -351,6 +399,30 @@ function buildPartnerProjectSummaries(
   );
 
   const volunteerById = new Map(volunteers.map(volunteer => [volunteer.id, volunteer]));
+  const volunteerByUserId = new Map(
+    volunteers
+      .filter(volunteer => Boolean(volunteer.userId))
+      .map(volunteer => [volunteer.userId as string, volunteer])
+  );
+  const volunteerKeyByIdentifier = new Map<string, string>();
+  const volunteerKeyByName = new Map<string, string>();
+  volunteers.forEach(volunteer => {
+    const canonicalKey = String(volunteer.id || volunteer.userId || '').trim();
+    if (!canonicalKey) return;
+
+    [volunteer.id, volunteer.userId].forEach(identifier => {
+      const normalizedIdentifier = String(identifier || '').trim();
+      if (normalizedIdentifier) {
+        volunteerKeyByIdentifier.set(normalizedIdentifier, canonicalKey);
+      }
+    });
+
+    const normalizedName = String(volunteer.name || '').trim().toLowerCase();
+    if (normalizedName && !volunteerKeyByName.has(normalizedName)) {
+      volunteerKeyByName.set(normalizedName, canonicalKey);
+    }
+  });
+  const partnerReportData = sanitizePartnerReportData(reports);
 
   return projects
     .filter(project => {
@@ -372,7 +444,7 @@ function buildPartnerProjectSummaries(
       );
       const linkedEventIds = new Set(linkedEvents.map(event => normalizeProjectId(event.id)));
       const relatedProjectIds = new Set([project.id, ...linkedEventIds].map(normalizeProjectId));
-      const partnerReports = reports
+      const partnerReports = partnerReportData
         .filter(
           report =>
             shouldDisplayReport(report) &&
@@ -384,7 +456,7 @@ function buildPartnerProjectSummaries(
           (left, right) =>
             new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
         );
-      const volunteerReports = reports
+      const volunteerReports = partnerReportData
         .filter(
             report =>
               shouldDisplayReport(report) &&
@@ -404,9 +476,32 @@ function buildPartnerProjectSummaries(
 
       const volunteerAccountsMap = new Map<string, PartnerVolunteerAccountSummary>();
 
+      const canonicalizeVolunteerKey = (
+        identifier: unknown,
+        name: unknown,
+        fallback: string,
+      ) => {
+        const normalizedIdentifier = String(identifier || '').trim();
+        const normalizedName = String(name || '').trim().toLowerCase();
+        return (
+          volunteerKeyByIdentifier.get(normalizedIdentifier) ||
+          volunteerKeyByName.get(normalizedName) ||
+          normalizedIdentifier ||
+          normalizedName ||
+          fallback
+        );
+      };
+
       const ensureVolunteerAccount = (key: string, submitterName: string) => {
         const existing = volunteerAccountsMap.get(key);
         if (existing) {
+          if (
+            (!existing.submitterName || existing.submitterName === 'Volunteer') &&
+            submitterName &&
+            submitterName !== 'Volunteer'
+          ) {
+            existing.submitterName = submitterName;
+          }
           return existing;
         }
 
@@ -416,18 +511,20 @@ function buildPartnerProjectSummaries(
           reports: [],
           volunteerEventJoins: 0,
           verifiedAttendance: 0,
-          beneficiariesServed: 0,
         };
         volunteerAccountsMap.set(key, created);
         return created;
       };
 
       relatedEventJoinRecords.forEach(record => {
-        const volunteer = volunteerById.get(record.volunteerId);
-        const accountKey =
-          record.volunteerUserId ||
-          volunteer?.userId ||
-          `volunteer:${record.volunteerId || record.id}`;
+        const volunteer =
+          volunteerById.get(record.volunteerId) ||
+          volunteerByUserId.get(record.volunteerUserId || '');
+        const accountKey = canonicalizeVolunteerKey(
+          record.volunteerUserId || record.volunteerId,
+          record.volunteerName || volunteer?.name,
+          `volunteer:${record.volunteerId || record.id}`
+        );
         const account = ensureVolunteerAccount(
           accountKey,
           record.volunteerName || volunteer?.name || 'Volunteer'
@@ -443,8 +540,14 @@ function buildPartnerProjectSummaries(
       });
 
       relatedCheckedAttendanceLogs.forEach(log => {
-        const volunteer = volunteerById.get(log.volunteerId);
-        const accountKey = volunteer?.userId || `volunteer:${log.volunteerId}`;
+        const volunteer =
+          volunteerById.get(log.volunteerId) ||
+          volunteerByUserId.get(log.volunteerId || '');
+        const accountKey = canonicalizeVolunteerKey(
+          log.volunteerId,
+          volunteer?.name,
+          `volunteer:${log.volunteerId}`
+        );
         const account = ensureVolunteerAccount(accountKey, volunteer?.name || 'Volunteer');
         account.verifiedAttendance += 1;
         const latestLogTime = log.attendanceCheckedAt || log.timeOut || log.timeIn;
@@ -458,10 +561,19 @@ function buildPartnerProjectSummaries(
       });
 
       volunteerReports.forEach(report => {
-        const accountKey = report.submittedBy || `report:${report.id}`;
-        const account = ensureVolunteerAccount(accountKey, report.submitterName || 'Volunteer');
+        const volunteer =
+          volunteerById.get(report.submittedBy) ||
+          volunteerByUserId.get(report.submittedBy || '');
+        const accountKey = canonicalizeVolunteerKey(
+          report.submittedBy,
+          report.submitterName || volunteer?.name,
+          `report:${report.id}`
+        );
+        const account = ensureVolunteerAccount(
+          accountKey,
+          volunteer?.name || report.submitterName || 'Volunteer'
+        );
         account.reports.push(report);
-        account.beneficiariesServed += report.metrics.beneficiariesServed || 0;
         if (
           !account.latestActivityAt ||
           new Date(report.submittedAt).getTime() > new Date(account.latestActivityAt).getTime()
@@ -488,10 +600,6 @@ function buildPartnerProjectSummaries(
         activeVolunteers: volunteerAccounts.length,
         volunteerEventJoins: relatedEventJoinRecords.length,
         verifiedAttendance: relatedCheckedAttendanceLogs.length,
-        beneficiariesServed: volunteerReports.reduce(
-          (sum, report) => sum + (report.metrics.beneficiariesServed || 0),
-          0
-        ),
         eventsCount: linkedEvents.length,
       };
 
@@ -891,7 +999,7 @@ export default function ReportsScreen({ navigation, route }: any) {
 
   const partnerVisibleReports = useMemo(
     () =>
-      reports.filter(report => {
+      sanitizePartnerReportData(reports.filter(report => {
         const projectId = String(report.projectId || '').trim();
         if (!projectId || !partnerReportProjectIds.has(projectId)) {
           return false;
@@ -905,7 +1013,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         }
 
         return user?.role === 'admin' || report.submittedBy === user?.id;
-      }),
+      })),
     [partnerAcceptedEventIds, partnerReportProjectIds, reports, user?.id, user?.role]
   );
 
@@ -1217,7 +1325,12 @@ export default function ReportsScreen({ navigation, route }: any) {
       try {
         fullReport = await getPartnerReportById(report.id);
         if (fullReport) {
-          setSelectedReport(normalizeImpactHubReport(fullReport, projects));
+          const normalizedFullReport = normalizeImpactHubReport(fullReport, projects);
+          setSelectedReport(
+            user?.role === 'partner'
+              ? stripPartnerReportMetrics(normalizedFullReport)
+              : normalizedFullReport
+          );
         }
       } catch (error) {
         console.warn('[ReportsScreen] Report attachments skipped:', error);

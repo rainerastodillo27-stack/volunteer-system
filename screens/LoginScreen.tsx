@@ -594,9 +594,6 @@ export default function LoginScreen() {
         if (!cancelled && mountedRef.current) {
           slowRetryCount = 0;
           setBackendStatus("online");
-          setBackendMessage(
-            `Backend connected to Postgres: ${getApiBaseUrl()}`,
-          );
         }
       } catch (error) {
         if (!cancelled && mountedRef.current) {
@@ -729,7 +726,6 @@ export default function LoginScreen() {
       // Update auth context - this triggers state change and navigation
       await login(user);
       setBackendStatus("online");
-      setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
       setLoginError(null);
       setIdentifier("");
       setPassword("");
@@ -824,7 +820,6 @@ export default function LoginScreen() {
 
       await login(user);
       setBackendStatus("online");
-      setBackendMessage(`Backend connected to Postgres: ${getApiBaseUrl()}`);
       setLoginError(null);
       if (user.hasPassword === false) {
         Alert.alert(
@@ -1946,38 +1941,6 @@ export default function LoginScreen() {
                 </Text>
               </View>
             ) : null}
-
-            <View
-              style={[
-                styles.backendStatusCard,
-                backendStatus === "online"
-                  ? styles.backendStatusOnline
-                  : backendStatus === "offline"
-                    ? styles.backendStatusOffline
-                    : styles.backendStatusChecking,
-              ]}
-            >
-              <View style={styles.backendStatusRow}>
-                <View
-                  style={[
-                    styles.backendStatusDot,
-                    backendStatus === "online"
-                      ? styles.backendStatusDotOnline
-                      : backendStatus === "offline"
-                        ? styles.backendStatusDotOffline
-                        : styles.backendStatusDotChecking,
-                  ]}
-                />
-                <Text style={styles.backendStatusTitle}>
-                  {backendStatus === "online"
-                    ? "Database Connected"
-                    : backendStatus === "offline"
-                      ? "Database Unavailable"
-                      : "Checking Database"}
-                </Text>
-              </View>
-              <Text style={styles.backendStatusText}>{backendMessage}</Text>
-            </View>
 
             {!isWeb && !selectedMobileRole ? (
               <View style={styles.mobilePortalContainer}>
@@ -4382,54 +4345,6 @@ const styles = StyleSheet.create({
   },
   selectionCardActionPartner: {
     color: "#92400e",
-  },
-  backendStatusCard: {
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-  },
-  backendStatusChecking: {
-    backgroundColor: "#eff6ff",
-    borderColor: "#bfdbfe",
-  },
-  backendStatusOnline: {
-    backgroundColor: "#ecfdf5",
-    borderColor: "#bbf7d0",
-  },
-  backendStatusOffline: {
-    backgroundColor: "#fef2f2",
-    borderColor: "#fecaca",
-  },
-  backendStatusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  backendStatusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  backendStatusDotChecking: {
-    backgroundColor: "#2563eb",
-  },
-  backendStatusDotOnline: {
-    backgroundColor: "#16a34a",
-  },
-  backendStatusDotOffline: {
-    backgroundColor: "#dc2626",
-  },
-  backendStatusTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#0f172a",
-  },
-  backendStatusText: {
-    marginTop: 8,
-    fontSize: 12,
-    color: "#475569",
-    lineHeight: 18,
   },
   input: {
     backgroundColor: "#fff",

@@ -159,6 +159,8 @@ export default function DownloadPreviewModal({
                                 style={[
                                   styles.documentTableRow,
                                   rowIndex % 2 === 1 && styles.documentTableAlternateRow,
+                                  Boolean((row as Record<string, unknown>).__groupStart) &&
+                                    styles.documentTableGroupStartRow,
                                 ]}
                               >
                                 {table.columns.map(column => (
@@ -446,6 +448,10 @@ const styles = StyleSheet.create({
   },
   documentTableAlternateRow: {
     backgroundColor: '#f3f8f5',
+  },
+  documentTableGroupStartRow: {
+    borderTopWidth: 2,
+    borderTopColor: '#126b3b',
   },
   documentEmptyRow: {
     paddingHorizontal: 8,
