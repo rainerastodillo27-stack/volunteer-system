@@ -208,6 +208,17 @@ function formatMetricLabel(key: string): string {
     .replace(/^./, character => character.toUpperCase());
 }
 
+function isHiddenReportMetric(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return (
+    normalized === 'volunteerhours' ||
+    normalized === 'volunteerhoursserved' ||
+    normalized === 'attendancehours' ||
+    normalized === 'beneficiariesserved' ||
+    normalized === 'beneficiaryserved'
+  );
+}
+
 function getReportActivityTitle(report: SubmittedReport, projectById: Map<string, Project>): string {
   const project = report.projectId ? projectById.get(report.projectId) : undefined;
   return project?.title || report.projectTitle || report.category || 'Unlinked activity';
@@ -237,11 +248,7 @@ function buildSingleReportTables(
   projectById: Map<string, Project>,
 ): PdfTable[] {
   const metricRows = Object.entries(report.metrics || {})
-    .filter(([metric]) => (
-      metric !== 'volunteerHours'
-      && metric !== 'beneficiariesServed'
-      && metric !== 'attendanceHours'
-    ))
+    .filter(([metric, value]) => !isHiddenReportMetric(metric) && value !== undefined && value !== null)
     .map(([metric, value]) => ({
       metric: formatMetricLabel(metric),
       value,
@@ -302,7 +309,7 @@ function buildBatchReportTables(
     new Set(
       reports.flatMap(report =>
         Object.entries(report.metrics || {})
-          .filter(([, value]) => value !== undefined && value !== null)
+          .filter(([metric, value]) => !isHiddenReportMetric(metric) && value !== undefined && value !== null)
           .map(([metric]) => metric)
       )
     )
@@ -1455,9 +1462,7 @@ function buildSingleReportPreviewRows(
     .filter(([metric, value]) => (
       value !== undefined
       && value !== null
-      && metric !== 'volunteerHours'
-      && metric !== 'beneficiariesServed'
-      && metric !== 'attendanceHours'
+      && !isHiddenReportMetric(metric)
     ))
     .forEach(([metric, value]) => {
       rows.push({ Field: formatMetricLabel(metric), Value: String(value) });
