@@ -4507,7 +4507,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         ),
         // Keep the project/event snapshot lightweight, but load the cover
         // images needed by the program cards separately.
-        getStorageItem<ProgramTrack[]>('programTracks', true).catch(() => null),
+        getAllProgramTracks({ includeImages: true }).catch(() => null),
       ]);
 
       const allProjects = snapshot.projects || [];
@@ -4664,12 +4664,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const tracks = await getAllProgramTracks({ includeImages: false });
+      const tracks = await getAllProgramTracks({ includeImages: true });
 
       // Do not let a stale/temporarily empty compatibility read erase the
       // tracks already delivered by the project snapshot.
       if (tracks.length > 0) {
-        setProgramTracks(tracks);
+        setProgramTracks(currentTracks => {
+          const currentTracksById = new Map(
+            currentTracks.map(track => [String(track.id), track])
+          );
+          return tracks.map(track => {
+            const currentTrack = currentTracksById.get(String(track.id));
+            return track.imageUrl || !currentTrack?.imageUrl
+              ? track
+              : { ...track, imageUrl: currentTrack.imageUrl };
+          });
+        });
       }
 
     } catch (error) {
