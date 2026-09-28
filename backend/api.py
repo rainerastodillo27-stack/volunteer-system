@@ -7680,7 +7680,11 @@ def _delete_user_account_records(connection: Any, user_id: str) -> list[str]:
         )
         user = cursor.fetchone()
         if user is None:
-            raise HTTPException(status_code=404, detail="User not found.")
+            # DELETE is intentionally idempotent. A stale admin list can issue
+            # the same request after another refresh already removed the user;
+            # treat that state as already complete instead of surfacing a
+            # misleading error to the administrator.
+            return []
 
         normalized_deleted_email = str(user.get("email") or "").strip().lower()
         raw_deleted_phone = str(user.get("phone") or "").strip()
@@ -7818,6 +7822,7 @@ async def delete_user_account(user_id: str) -> dict[str, Any]:
     return {
         "status": "ok",
         "deletedUserId": user_id,
+        "alreadyDeleted": not bool(changed_keys),
         # Let the caller invalidate only collections that actually changed.
         "changedKeys": changed_keys,
     }

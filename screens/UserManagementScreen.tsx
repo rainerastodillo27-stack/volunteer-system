@@ -76,6 +76,7 @@ export default function UserManagementScreen() {
   const [showActionMenuUser, setShowActionMenuUser] = useState<User | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const loadVersionRef = useRef(0);
+  const deletedUserIdsRef = useRef<Set<string>>(new Set());
 
   // Form state drafts
   const [nameDraft, setNameDraft] = useState('');
@@ -125,7 +126,9 @@ export default function UserManagementScreen() {
           ]);
           if (requestVersion !== loadVersionRef.current) return;
           setVolunteers(allVolunteersResult || []);
-          setPendingUserApprovals(pendingApprovals);
+          setPendingUserApprovals(
+            pendingApprovals.filter(approval => !deletedUserIdsRef.current.has(approval.id))
+          );
         } catch {}
       };
 
@@ -144,7 +147,9 @@ export default function UserManagementScreen() {
         }
         return a.name.localeCompare(b.name);
       });
-      setUsers(sortedUsers);
+      setUsers(
+        sortedUsers.filter(existingUser => !deletedUserIdsRef.current.has(existingUser.id))
+      );
       setPartners(allPartners);
       setLoadError(null);
     } catch (error) {
@@ -297,6 +302,7 @@ export default function UserManagementScreen() {
 
     const executeDelete = async () => {
       const previousUsers = users;
+      deletedUserIdsRef.current.add(targetUser.id);
       setUsers(currentUsers => currentUsers.filter(existingUser => existingUser.id !== targetUser.id));
       setPendingUserApprovals(currentApprovals =>
         currentApprovals.filter(existingUser => existingUser.id !== targetUser.id)
@@ -307,12 +313,16 @@ export default function UserManagementScreen() {
         // flow. This prevents a slow, pre-delete list request from restoring
         // the removed row in the web view.
         await loadUsers(true);
+        // A refresh that started before the delete can still finish with the
+        // old row. Keep the successful deletion authoritative for this screen.
+        setUsers(currentUsers => currentUsers.filter(existingUser => existingUser.id !== targetUser.id));
         setSuccessNotice({
           title: 'Account Deleted',
           message: `${targetUser.name}'s account has been removed.`,
         });
         Alert.alert('Account Deleted', `${targetUser.name}'s account has been removed.`);
       } catch (error) {
+        deletedUserIdsRef.current.delete(targetUser.id);
         setUsers(previousUsers);
         Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to delete user account.'));
       }
