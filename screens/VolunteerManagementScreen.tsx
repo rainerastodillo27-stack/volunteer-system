@@ -101,6 +101,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
   const selectedVolunteerIdRef = useRef<string | null>(null);
   const selectedVolunteerRecordRef = useRef<Volunteer | null>(null);
+  const volunteerLoadGenerationRef = useRef(0);
+  const projectLoadGenerationRef = useRef(0);
+  const timeLogLoadGenerationRef = useRef(0);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
@@ -203,11 +206,15 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
   // Loads all volunteer profiles and keeps the selected volunteer in sync.
   const loadVolunteers = async () => {
+    const requestGeneration = ++volunteerLoadGenerationRef.current;
     try {
       // Volunteer applications can be created from another screen/device.
       // Bypass the fast cache so a newly registered volunteer is visible here
       // immediately instead of waiting for the cache TTL to expire.
       const allVolunteers = await getAllVolunteers({ forceRefresh: true });
+      if (requestGeneration !== volunteerLoadGenerationRef.current) {
+        return;
+      }
       setVolunteers(allVolunteers);
       setLoadError(null);
       setSelectedVolunteer(currentSelectedVolunteer => {
@@ -217,42 +224,56 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
         return (
           allVolunteers.find(volunteer => volunteer.id === currentSelectedVolunteer.id) ||
-          currentSelectedVolunteer
+          null
         );
       });
     } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load volunteers.'),
-      });
+      if (requestGeneration === volunteerLoadGenerationRef.current) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load volunteers.'),
+        });
+      }
     }
   };
 
   // Loads available projects for matching and detail display.
   const loadProjects = async () => {
+    const requestGeneration = ++projectLoadGenerationRef.current;
     try {
       const allProjects = await getAllProjects();
+      if (requestGeneration !== projectLoadGenerationRef.current) {
+        return;
+      }
       setProjects(allProjects);
       setLoadError(null);
     } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load projects.'),
-      });
+      if (requestGeneration === projectLoadGenerationRef.current) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load projects.'),
+        });
+      }
     }
   };
 
   // Loads every volunteer time log so admins can audit time-in/time-out activity.
   const loadTimeLogs = async () => {
+    const requestGeneration = ++timeLogLoadGenerationRef.current;
     try {
       const logs = await getAllVolunteerTimeLogs({ includeImages: false });
+      if (requestGeneration !== timeLogLoadGenerationRef.current) {
+        return;
+      }
       setVolunteerTimeLogs(logs);
       setLoadError(null);
     } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load volunteer time logs.'),
-      });
+      if (requestGeneration === timeLogLoadGenerationRef.current) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load volunteer time logs.'),
+        });
+      }
     }
   };
 

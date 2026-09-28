@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -192,6 +192,8 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   const [showSectorFilterDropdown, setShowSectorFilterDropdown] = useState(false);
   const [approvingPartnerId, setApprovingPartnerId] = useState<string | null>(null);
   const [reviewActionLoadingId, setReviewActionLoadingId] = useState<string | null>(null);
+  const partnerLoadGenerationRef = useRef(0);
+  const projectLoadGenerationRef = useRef(0);
 
   useEffect(() => {
     if (navigation) {
@@ -252,12 +254,16 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
   // Loads all partner profiles and applications.
   const loadPartners = async () => {
+    const requestGeneration = ++partnerLoadGenerationRef.current;
     try {
       const [allPartnerRecords, allApps, allUsers] = await Promise.all([
         getAllPartners(),
         getAllPartnerProjectApplications(),
         getAllUsers(),
       ]);
+      if (requestGeneration !== partnerLoadGenerationRef.current) {
+        return;
+      }
       const partnerUsers = allUsers.filter(account => account.role === 'partner');
       const allPartners = allPartnerRecords.map(partner =>
         hydratePartnerRegistration(partner, partnerUsers),
@@ -274,14 +280,16 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
         return (
           allPartners.find(partner => partner.id === currentSelectedPartner.id) ||
-          currentSelectedPartner
+          null
         );
       });
     } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load partners.'),
-      });
+      if (requestGeneration === partnerLoadGenerationRef.current) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load partners.'),
+        });
+      }
     }
   };
 
@@ -467,15 +475,21 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
   // Loads available projects for display.
   const loadProjects = async () => {
+    const requestGeneration = ++projectLoadGenerationRef.current;
     try {
       const allProjects = await getAllProjects();
+      if (requestGeneration !== projectLoadGenerationRef.current) {
+        return;
+      }
       setProjects(allProjects);
       setLoadError(null);
     } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load projects.'),
-      });
+      if (requestGeneration === projectLoadGenerationRef.current) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load projects.'),
+        });
+      }
     }
   };
 

@@ -2783,12 +2783,15 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
                 (related_ids,),
             )
             counts = cursor.fetchone() or (0,) * 9
-        except Exception:
+        except Exception as error:
             try:
                 connection.rollback()
             except Exception:
                 pass
-            return []
+            # A cascade failure must abort the delete. Returning an empty
+            # change list would let the caller remove the parent while leaving
+            # orphaned applications, reports, chats, or memberships behind.
+            raise error
 
     changed_keys: list[str] = []
     for count, key in zip(
@@ -5613,15 +5616,12 @@ def startup() -> None:
                 # worker gets its own connection so the first dashboard load
                 # does not wait for eleven sequential collection queries.
                 def _warm_dashboard_key(key: str) -> tuple[str, Any]:
-                    try:
-                        with get_connection() as dashboard_connection:
-                            return key, _get_admin_dashboard_collection(
-                                dashboard_connection,
-                                key,
-                                include_images=False,
-                            )
-                    except Exception:
-                        return key, []
+                    with get_connection() as dashboard_connection:
+                        return key, _get_admin_dashboard_collection(
+                            dashboard_connection,
+                            key,
+                            include_images=False,
+                        )
 
                 items: dict[str, Any] = {}
                 with ThreadPoolExecutor(
@@ -10847,10 +10847,13 @@ def get_storage_item(
             return {"key": key, "value": value}
     except Exception as error:
         print(f"[ERROR] Failed to get storage key '{key}': {type(error).__name__}: {error}")
-        # Return empty list/object instead of 500 error to keep UI responsive
-        if key in COLLECTION_KEYS:
-            return {"key": key, "value": []}
-        return {"key": key, "value": {}}
+        # Never turn a database failure into a successful empty response. An
+        # empty list is valid data and would make the UI hide real records or
+        # cache a false "no accounts/projects" state.
+        raise HTTPException(
+            status_code=503,
+            detail="Shared data is temporarily unavailable. Please try again.",
+        ) from error
 
 
 @app.post("/admin/cache/clear")
@@ -11046,28 +11049,24 @@ def get_storage_items_batch(
 
         # Fetch keys in parallel using thread pool
         def _fetch_collection(key: str) -> tuple[str, Any]:
-            try:
-                fetch_start = time.time()
-                with get_connection() as connection:
-                    conn_time = time.time() - fetch_start
-                    if key in {"projects", "events", "programs"}:
-                        value = _get_cached_media_light_collection(
-                            connection, key, include_images=payload.include_images
-                        )
-                    else:
-                        value = _get_cached_collection(
-                            connection,
-                            key,
-                            include_images=payload.include_images,
-                        )
-                    value = _scope_storage_collection(connection, key, value, session)
-                    query_time = time.time() - fetch_start - conn_time
-                    if conn_time > 1.0 or query_time > 1.0:
-                        print(f"[PERF] Key '{key}': connection={conn_time:.1f}s, query={query_time:.1f}s")
-                return key, value
-            except Exception as e:
-                print(f"[WARN] Failed to fetch key '{key}': {type(e).__name__}: {e}")
-                return key, [] if key in COLLECTION_KEYS else {}
+            fetch_start = time.time()
+            with get_connection() as connection:
+                conn_time = time.time() - fetch_start
+                if key in {"projects", "events", "programs"}:
+                    value = _get_cached_media_light_collection(
+                        connection, key, include_images=payload.include_images
+                    )
+                else:
+                    value = _get_cached_collection(
+                        connection,
+                        key,
+                        include_images=payload.include_images,
+                    )
+                value = _scope_storage_collection(connection, key, value, session)
+                query_time = time.time() - fetch_start - conn_time
+                if conn_time > 1.0 or query_time > 1.0:
+                    print(f"[PERF] Key '{key}': connection={conn_time:.1f}s, query={query_time:.1f}s")
+            return key, value
 
         # Use ThreadPoolExecutor to parallelize database queries
         # Limit to number of keys to avoid excessive connections
@@ -11080,20 +11079,27 @@ def get_storage_items_batch(
                 try:
                     key, value = future.result()
                     items[key] = value
-                except Exception as e:
+                except Exception as error:
                     key = futures[future]
-                    print(f"[WARN] Exception fetching key '{key}': {type(e).__name__}: {e}")
-                    items[key] = [] if key in COLLECTION_KEYS else {}
+                    print(f"[WARN] Exception fetching key '{key}': {type(error).__name__}: {error}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Shared data is temporarily unavailable. Please try again.",
+                    ) from error
 
         total_time = time.time() - request_start
         if total_time > 5.0:
             print(f"[PERF] /storage/batch completed in {total_time:.1f}s for {len(keys)} keys")
         
         return {"items": items}
+    except HTTPException:
+        raise
     except Exception as error:
         print(f"[ERROR] Batch storage request failed: {type(error).__name__}: {error}")
-        # Return empty items instead of 500 error
-        return {"items": {k: ([] if k in COLLECTION_KEYS else {}) for k in (payload.keys or [])}}
+        raise HTTPException(
+            status_code=503,
+            detail="Shared data is temporarily unavailable. Please try again.",
+        ) from error
 
 
 # Keys returned by the admin dashboard snapshot endpoint.
@@ -11141,16 +11147,12 @@ def get_admin_dashboard_snapshot(request: FastAPIRequest) -> dict[str, Any]:
             items: dict[str, Any] = {}
 
             def _fetch_admin_key(key: str) -> tuple[str, Any]:
-                try:
-                    with get_connection() as connection:
-                        return key, _get_admin_dashboard_collection(
-                            connection,
-                            key,
-                            include_images=False,
-                        )
-                except Exception as e:
-                    print(f"[WARN] admin dashboard: failed to fetch '{key}': {type(e).__name__}: {e}")
-                    return key, []
+                with get_connection() as connection:
+                    return key, _get_admin_dashboard_collection(
+                        connection,
+                        key,
+                        include_images=False,
+                    )
 
             # Keep headroom in the ten-connection pool for user actions while
             # still parallelizing the cold dashboard build.
@@ -11161,16 +11163,28 @@ def get_admin_dashboard_snapshot(request: FastAPIRequest) -> dict[str, Any]:
                     try:
                         key, value = future.result()
                         items[key] = value
-                    except Exception:
+                    except Exception as error:
                         key = futures[future]
-                        items[key] = []
+                        print(
+                            f"[WARN] admin dashboard: failed to fetch '{key}': "
+                            f"{type(error).__name__}: {error}"
+                        )
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Dashboard data is temporarily unavailable. Please try again.",
+                        ) from error
 
             result = {"items": items}
             _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, result)
             return result
+    except HTTPException:
+        raise
     except Exception as error:
         print(f"[ERROR] Admin dashboard snapshot failed: {type(error).__name__}: {error}")
-        return {"items": {k: [] for k in _ADMIN_DASHBOARD_KEYS}}
+        raise HTTPException(
+            status_code=503,
+            detail="Dashboard data is temporarily unavailable. Please try again.",
+        ) from error
 
 
 def _validate_internal_task_assignment_limits(items: list[Any]) -> None:

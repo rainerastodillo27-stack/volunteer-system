@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   ActivityIndicator,
@@ -246,8 +246,12 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [itemDraft, setItemDraft] = useState<PlanningItemDraft>(createEmptyPlanningItemDraft('planner-projects', new Date()));
   const [calendarDraft, setCalendarDraft] = useState<PlanningCalendarDraft>(createEmptyPlanningCalendarDraft());
+  const plannerLoadGenerationRef = useRef(0);
+  const deletedPlanningItemIdsRef = useRef<Set<string>>(new Set());
+  const deletedPlanningCalendarIdsRef = useRef<Set<string>>(new Set());
 
   const loadPlannerData = async () => {
+    const requestGeneration = ++plannerLoadGenerationRef.current;
     try {
       // Load essential data first so UI can render quickly
       const [calendars, items, allProjects] = await Promise.all([
@@ -256,8 +260,18 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
         getAllProjects(),
       ]);
 
-      setPlanningCalendars(calendars);
-      setPlanningItems(items);
+      if (requestGeneration !== plannerLoadGenerationRef.current) {
+        return;
+      }
+
+      const visibleCalendars = calendars.filter(
+        calendar => !deletedPlanningCalendarIdsRef.current.has(calendar.id)
+      );
+      const visibleItems = items.filter(
+        item => !deletedPlanningItemIdsRef.current.has(item.id)
+      );
+      setPlanningCalendars(visibleCalendars);
+      setPlanningItems(visibleItems);
       setProjects(allProjects);
 
       // Defer heavier collection (partner applications)
@@ -265,11 +279,13 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       setTimeout(async () => {
         try {
           const applications = await getAllPartnerProjectApplications();
-          setPartnerProjectApplications(applications);
+          if (requestGeneration === plannerLoadGenerationRef.current) {
+            setPartnerProjectApplications(applications);
+          }
         } catch {}
       }, 50);
       setSelectedCalendarIds(currentSelection => {
-        const validIds = calendars.map(calendar => calendar.id);
+        const validIds = visibleCalendars.map(calendar => calendar.id);
         if (currentSelection.length === 0) {
           return validIds;
         }
@@ -279,12 +295,16 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
       });
       setLoadError(null);
     } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load the planning calendar.'),
-      });
+      if (requestGeneration === plannerLoadGenerationRef.current) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load the planning calendar.'),
+        });
+      }
     } finally {
-      setLoading(false);
+      if (requestGeneration === plannerLoadGenerationRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -470,6 +490,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
     }
 
     setSaving(true);
+    plannerLoadGenerationRef.current += 1;
     const timestamp = new Date().toISOString();
     const previousPlanningItems = planningItems;
     const savedItem: AdminPlanningItem = {
@@ -524,6 +545,8 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
     const executeDelete = async () => {
       const previousPlanningItems = planningItems;
       setSaving(true);
+      deletedPlanningItemIdsRef.current.add(targetItemId);
+      plannerLoadGenerationRef.current += 1;
       setPlanningItems(currentItems => currentItems.filter(item => item.id !== targetItemId));
 
       try {
@@ -532,6 +555,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
         Alert.alert('Deleted', `"${targetItemTitle}" was deleted.`);
         void loadPlannerData();
       } catch (error) {
+        deletedPlanningItemIdsRef.current.delete(targetItemId);
         setPlanningItems(previousPlanningItems);
         Alert.alert(
           getRequestErrorTitle(error),
@@ -562,6 +586,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
     }
 
     setSaving(true);
+    plannerLoadGenerationRef.current += 1;
     const timestamp = new Date().toISOString();
     const previousPlanningCalendars = planningCalendars;
     const previousSelectedCalendarIds = selectedCalendarIds;
@@ -617,6 +642,8 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
         .map(calendar => calendar.id);
 
       setSaving(true);
+      deletedPlanningCalendarIdsRef.current.add(calendarId);
+      plannerLoadGenerationRef.current += 1;
       setPlanningCalendars(currentCalendars =>
         currentCalendars.filter(calendar => calendar.id !== calendarId)
       );
@@ -631,6 +658,7 @@ export default function AdminPlanningCalendarScreen({ navigation }: any) {
         Alert.alert('Deleted', `"${targetCalendarName}" was deleted.`);
         void loadPlannerData();
       } catch (error) {
+        deletedPlanningCalendarIdsRef.current.delete(calendarId);
         setPlanningCalendars(previousPlanningCalendars);
         setSelectedCalendarIds(previousSelectedCalendarIds);
         Alert.alert(

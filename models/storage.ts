@@ -2932,19 +2932,9 @@ export async function setStorageItem<T>(key: string, value: T): Promise<void> {
     projectsSnapshotCache.clear();
     notifyStorageChanged([key]);
   } catch (error) {
-    if (key === STORAGE_KEYS.USERS) {
-      // Never fall back to storing a plaintext credential on the device.
-      throw error;
-    }
-    if (isExpectedRemoteStorageError(error) || isAbortLikeError(error)) {
-      await setLocalStorageItem(key, value);
-      markSharedStorageValueChanged(key);
-      setSharedStorageCacheValue(key, value);
-      projectsSnapshotCache.clear();
-      notifyStorageChanged([key]);
-      return;
-    }
-
+    // Shared data must never be reported as saved when the API write failed.
+    // Writing the failed value only to local storage creates a split-brain
+    // state where it can reappear on another screen or after a later refresh.
     console.error(`Error saving shared ${key} to backend:`, error);
     throw error;
   }
@@ -3556,29 +3546,6 @@ function mergeProjectAndEventRecords(
   });
 
   return attachParentProjectImageFallback(Array.from(mergedById.values()));
-}
-
-function removeProjectIdsFromVolunteerHistory(
-  volunteers: Volunteer[] | null | undefined,
-  removedProjectIds: Set<string>
-): Volunteer[] {
-  return (volunteers || []).map(volunteer => ({
-    ...volunteer,
-    pastProjects: (volunteer.pastProjects || []).filter(projectId => !removedProjectIds.has(projectId)),
-  }));
-}
-
-function removeProjectIdsFromPlanningCalendars(
-  calendars: AdminPlanningCalendar[] | null | undefined,
-  removedProjectIds: Set<string>
-): AdminPlanningCalendar[] {
-  return (calendars || []).map(calendar => ({
-    ...calendar,
-    planningItems: (calendar.planningItems || []).filter(
-      item => !item.linkedProjectId || !removedProjectIds.has(item.linkedProjectId)
-    ),
-    updatedAt: new Date().toISOString(),
-  }));
 }
 
 export async function getAllEvents(): Promise<Project[]> {
@@ -4679,103 +4646,12 @@ export async function deleteProject(projectId: string): Promise<void> {
     STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ];
 
-  try {
-    await deleteRemoteProjectRecord(projectId);
-    invalidateSharedStorageCache(changedKeys);
-    projectsSnapshotCache.clear();
-    notifyStorageChanged(changedKeys);
-    return;
-  } catch (error) {
-    console.warn('Direct project delete failed; falling back to storage cleanup:', error);
-  }
-
-  const [
-    projects,
-    programs,
-    events,
-    statusUpdates,
-    partnerApplications,
-    partnerReports,
-    volunteerJoinRecords,
-    volunteerMatches,
-    volunteerTimeLogs,
-    projectGroupMessages,
-    volunteers,
-    adminPlanningCalendars,
-  ] =
-    await Promise.all([
-      getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
-      getStorageItem<Project[]>(STORAGE_KEYS.PROGRAMS),
-      getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
-      getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
-      getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
-      getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
-      getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
-      getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
-      getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
-      getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES),
-      getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS),
-      getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS),
-    ]);
-
-  const relatedProjectIds = new Set([
-    projectId,
-    ...((events || [])
-      .filter(event => event.parentProjectId === projectId)
-      .map(event => event.id)),
-  ]);
-
-  await Promise.all([
-    setStorageItem(
-      STORAGE_KEYS.PROJECTS,
-      (projects || []).filter(project => project.id !== projectId)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PROGRAMS,
-      (programs || []).filter(project => project.id !== projectId)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.EVENTS,
-      (events || []).filter(event => !relatedProjectIds.has(event.id))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.STATUS_UPDATES,
-      (statusUpdates || []).filter(update => !relatedProjectIds.has(update.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-      (partnerApplications || []).filter(application => !relatedProjectIds.has(application.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_REPORTS,
-      (partnerReports || []).filter(report => !relatedProjectIds.has(report.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-      (volunteerJoinRecords || []).filter(record => !relatedProjectIds.has(record.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_MATCHES,
-      (volunteerMatches || []).filter(match => !relatedProjectIds.has(match.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-      (volunteerTimeLogs || []).filter(log => !relatedProjectIds.has(log.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-      (projectGroupMessages || []).filter(message => !relatedProjectIds.has(message.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEERS,
-      removeProjectIdsFromVolunteerHistory(volunteers, relatedProjectIds)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-      removeProjectIdsFromPlanningCalendars(adminPlanningCalendars, relatedProjectIds)
-    ),
-  ]);
+  // The API performs the transactional cascade. Do not fall back to reading
+  // and rewriting whole client-side collections: a stale browser cache can
+  // resurrect records that the server already deleted.
+  await deleteRemoteProjectRecord(projectId);
   invalidateSharedStorageCache([STORAGE_KEYS.PROGRAMS, ...changedKeys]);
+  projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.PROGRAMS, ...changedKeys]);
 }
 
@@ -4795,91 +4671,12 @@ export async function deleteEvent(eventId: string): Promise<void> {
     STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
   ];
 
-  try {
-    await deleteRemoteEventRecord(eventId);
-    invalidateSharedStorageCache(changedKeys);
-    projectsSnapshotCache.clear();
-    notifyStorageChanged(changedKeys);
-    return;
-  } catch (error) {
-    console.warn('Direct event delete failed; falling back to storage cleanup:', error);
-  }
-
-  const [
-    projects,
-    events,
-    statusUpdates,
-    partnerApplications,
-    partnerReports,
-    volunteerJoinRecords,
-    volunteerMatches,
-    volunteerTimeLogs,
-    projectGroupMessages,
-    volunteers,
-    adminPlanningCalendars,
-  ] =
-    await Promise.all([
-      getStorageItem<Project[]>(STORAGE_KEYS.PROJECTS),
-      getStorageItem<Project[]>(STORAGE_KEYS.EVENTS),
-      getStorageItem<StatusUpdate[]>(STORAGE_KEYS.STATUS_UPDATES),
-      getStorageItem<PartnerProjectApplication[]>(STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS),
-      getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS),
-      getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS),
-      getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES),
-      getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS),
-      getStorageItem<ProjectGroupMessage[]>(STORAGE_KEYS.PROJECT_GROUP_MESSAGES),
-      getStorageItem<Volunteer[]>(STORAGE_KEYS.VOLUNTEERS),
-      getStorageItem<AdminPlanningCalendar[]>(STORAGE_KEYS.ADMIN_PLANNING_CALENDARS),
-    ]);
-  const relatedEventIds = new Set([eventId]);
-
-  await Promise.all([
-    setStorageItem(
-      STORAGE_KEYS.PROJECTS,
-      (projects || []).filter(project => project.id !== eventId)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.EVENTS,
-      (events || []).filter(event => !relatedEventIds.has(event.id))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.STATUS_UPDATES,
-      (statusUpdates || []).filter(update => !relatedEventIds.has(update.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-      (partnerApplications || []).filter(application => !relatedEventIds.has(application.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PARTNER_REPORTS,
-      (partnerReports || []).filter(report => !relatedEventIds.has(report.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
-      (volunteerJoinRecords || []).filter(record => !relatedEventIds.has(record.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_MATCHES,
-      (volunteerMatches || []).filter(match => !relatedEventIds.has(match.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
-      (volunteerTimeLogs || []).filter(log => !relatedEventIds.has(log.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
-      (projectGroupMessages || []).filter(message => !relatedEventIds.has(message.projectId))
-    ),
-    setStorageItem(
-      STORAGE_KEYS.VOLUNTEERS,
-      removeProjectIdsFromVolunteerHistory(volunteers, relatedEventIds)
-    ),
-    setStorageItem(
-      STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-      removeProjectIdsFromPlanningCalendars(adminPlanningCalendars, relatedEventIds)
-    ),
-  ]);
+  // The API performs the transactional cascade. Do not fall back to reading
+  // and rewriting whole client-side collections, for the same stale-cache
+  // resurrection reason as project deletion.
+  await deleteRemoteEventRecord(eventId);
   invalidateSharedStorageCache(changedKeys);
+  projectsSnapshotCache.clear();
   notifyStorageChanged(changedKeys);
 }
 

@@ -3425,6 +3425,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const shouldRestoreListScrollRef = React.useRef(false);
   const lastProgramSuiteNavKeyRef = React.useRef(route?.params?.programSuiteNavKey);
   const lastRouteNavTimestampRef = React.useRef((route?.params as any)?.navTimestamp);
+  const projectsLoadGenerationRef = React.useRef(0);
+  const programTracksLoadGenerationRef = React.useRef(0);
+  const deletedProjectIdsRef = React.useRef<Set<string>>(new Set());
+  const deletedProgramIdsRef = React.useRef<Set<string>>(new Set());
 
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
 
@@ -4330,6 +4334,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       iconColor: '#DC2626',
       loadingText: 'Deleting...',
       onConfirm: async () => {
+        deletedProjectIdsRef.current.add(project.id);
+        projectsLoadGenerationRef.current += 1;
         try {
           setProjects(currentProjects => currentProjects.filter(item => item.id !== project.id));
           setSelectedProject(currentProject => currentProject?.id === project.id ? null : currentProject);
@@ -4340,6 +4346,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             await deleteProject(project.id);
           }
         } catch (err) {
+          deletedProjectIdsRef.current.delete(project.id);
           void loadProjects();
           showConfirm({
             title: 'Error',
@@ -4491,6 +4498,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Loads all projects and refreshes the currently selected project reference.
 
   const loadProjects = async (forceRefresh = false) => {
+    const requestGeneration = ++projectsLoadGenerationRef.current;
     const showInitialLoadingState = projects.length === 0;
     if (showInitialLoadingState) {
       setIsProjectsLoading(true);
@@ -4510,7 +4518,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         getAllProgramTracks({ includeImages: true }).catch(() => null),
       ]);
 
-      const allProjects = snapshot.projects || [];
+      if (requestGeneration !== projectsLoadGenerationRef.current) {
+        return [];
+      }
+
+      const allProjects = (snapshot.projects || []).filter(
+        project => !deletedProjectIdsRef.current.has(project.id)
+      );
 
       setProjects(allProjects);
 
@@ -4526,11 +4540,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           ? { ...track, imageUrl: mediaTrack.imageUrl }
           : track;
       });
+      const visibleSnapshotTracks = hydratedSnapshotTracks.filter(
+        track => !deletedProgramIdsRef.current.has(track.id)
+      );
+      const visibleProgramTracks = (programTracksWithImages || [])
+        .filter(track => Boolean(track?.id))
+        .filter(track => !deletedProgramIdsRef.current.has(track.id));
       setProgramTracks(
-        hydratedSnapshotTracks.length > 0
-          ? hydratedSnapshotTracks
-          : (programTracksWithImages && programTracksWithImages.length > 0)
-            ? programTracksWithImages.filter(track => Boolean(track?.id)).map(track => ({ ...track }))
+        visibleSnapshotTracks.length > 0
+          ? visibleSnapshotTracks
+          : visibleProgramTracks.length > 0
+            ? visibleProgramTracks.map(track => ({ ...track }))
             : deriveProgramTracksFromProjects(allProjects)
       );
 
@@ -4552,7 +4572,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-        return allProjects.find(project => project.id === currentSelectedProject.id) || currentSelectedProject;
+        return allProjects.find(project => project.id === currentSelectedProject.id) || null;
 
       });
 
@@ -4661,19 +4681,26 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Loads custom program tracks for dynamic program sections.
 
   const loadProgramTracks = async () => {
+    const requestGeneration = ++programTracksLoadGenerationRef.current;
 
     try {
 
       const tracks = await getAllProgramTracks({ includeImages: true });
 
+      if (requestGeneration !== programTracksLoadGenerationRef.current) {
+        return;
+      }
+
+      const visibleTracks = tracks.filter(track => !deletedProgramIdsRef.current.has(track.id));
+
       // Do not let a stale/temporarily empty compatibility read erase the
       // tracks already delivered by the project snapshot.
-      if (tracks.length > 0) {
+      if (visibleTracks.length > 0) {
         setProgramTracks(currentTracks => {
           const currentTracksById = new Map(
             currentTracks.map(track => [String(track.id), track])
           );
-          return tracks.map(track => {
+          return visibleTracks.map(track => {
             const currentTrack = currentTracksById.get(String(track.id));
             return track.imageUrl || !currentTrack?.imageUrl
               ? track
@@ -5132,6 +5159,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const doDelete = async () => {
 
       setActionLoadingKey(`deleteProgram-${trackId}`);
+      deletedProgramIdsRef.current.add(trackId);
+      programTracksLoadGenerationRef.current += 1;
 
       // Remove the card immediately while the database cascade finishes.
       // The list is restored by the error refresh if the request fails.
@@ -5145,6 +5174,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         showTaskSaveNotice(`Program "${trackTitle}" was deleted successfully.`, 1500);
 
       } catch (error) {
+
+        deletedProgramIdsRef.current.delete(trackId);
 
         // On error, reload to ensure correct state and show error
         await loadProgramTracks();
@@ -5997,48 +6028,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
   const deleteProjectLikeRecord = async (project: Project) => {
-
-    const deletePrimary = async () => {
-
-      if (project.isEvent) {
-
-        await deleteEvent(project.id);
-
-        return;
-
-      }
-
-      await deleteProject(project.id);
-
-    };
-
-
-
-    const deleteFallback = async () => {
-
-      if (project.isEvent) {
-
-        await deleteProject(project.id);
-
-        return;
-
-      }
-
+    // Project and event deletion are separate server-side transactional
+    // routes. Never retry the other route: a transient failure must not
+    // delete or rewrite a different record type.
+    if (project.isEvent) {
       await deleteEvent(project.id);
-
-    };
-
-
-
-    try {
-
-      await deletePrimary();
-
-    } catch {
-
-      await deleteFallback();
-
+      return;
     }
+
+    await deleteProject(project.id);
 
   };
 
@@ -6087,6 +6085,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const previousProjects = projects;
 
       setActionLoadingKey(`deleteEvent-${event.id}`);
+      deletedProjectIdsRef.current.add(event.id);
+      projectsLoadGenerationRef.current += 1;
 
       setProjects(currentProjects => currentProjects.filter(project => project.id !== event.id));
 
@@ -6110,6 +6110,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       } catch (error) {
 
+        deletedProjectIdsRef.current.delete(event.id);
         setProjects(previousProjects);
 
         setSelectedProject(previousSelectedProject);
@@ -8019,6 +8020,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       try {
 
+        deletedProjectIdsRef.current.add(projectToDelete.id);
+        projectsLoadGenerationRef.current += 1;
+
         // Optimistically remove from UI
 
         setProjects(currentProjects => currentProjects.filter(project => project.id !== projectToDelete.id));
@@ -8048,6 +8052,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         showTaskSaveNotice(`${projectToDelete.isEvent ? 'Event' : 'Project'} "${projectToDelete.title}" removed successfully.`, 1500);
 
       } catch (error) {
+
+        deletedProjectIdsRef.current.delete(projectToDelete.id);
 
         // On error, reload to restore correct state
 
@@ -8769,6 +8775,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const doDelete = async () => {
 
       const previousProjects = projects;
+      deletedProjectIdsRef.current.add(project.id);
+      projectsLoadGenerationRef.current += 1;
 
       try {
 
@@ -8794,6 +8802,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       } catch (error) {
 
+        deletedProjectIdsRef.current.delete(project.id);
         setProjects(previousProjects);
 
         await loadProjects();
