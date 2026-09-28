@@ -7841,25 +7841,49 @@ def validate_dswd_accreditation(accreditation_no: str) -> dict[str, Any]:
 
     try:
         _require_postgres()
-        # Check against database only after the input has passed validation.
+        # Check against the database only after the input has passed validation.
+        # Older production databases do not have the optional accreditation
+        # registry table, so fall back to the canonical partners mirror rather
+        # than turning this read-only validation route into a 503.
         with get_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT is_assigned
-                    FROM dswd_accreditation_numbers
-                    WHERE accreditation_no = %s
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_name = 'dswd_accreditation_numbers'
+                    """
+                )
+                has_registry_table = cursor.fetchone() is not None
+
+                if has_registry_table:
+                    cursor.execute(
+                        """
+                        SELECT is_assigned
+                        FROM dswd_accreditation_numbers
+                        WHERE accreditation_no = %s
+                        """,
+                        (normalized_value,),
+                    )
+                    result = cursor.fetchone()
+                    if not result:
+                        return {"valid": False, "reason": "Accreditation number not found in database"}
+                    if bool(result[0]):
+                        return {"valid": False, "reason": "Accreditation number already assigned"}
+                    return {"valid": True}
+
+                cursor.execute(
+                    """
+                    SELECT 1
+                    FROM public.partners
+                    WHERE upper(trim(coalesce(dswd_accreditation_no, ''))) = %s
+                    LIMIT 1
                     """,
                     (normalized_value,),
                 )
-
-                result = cursor.fetchone()
-                if not result:
-                    return {"valid": False, "reason": "Accreditation number not found in database"}
-
-                if bool(result[0]):
+                if cursor.fetchone() is not None:
                     return {"valid": False, "reason": "Accreditation number already assigned"}
-
                 return {"valid": True}
     except Exception as error:
         print(f"[WARN] DSWD accreditation validation unavailable: {type(error).__name__}", flush=True)
