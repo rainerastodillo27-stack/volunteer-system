@@ -7939,26 +7939,21 @@ def get_projects_snapshot(
             if bool(project.get("isEvent"))
         ]
         return result
+    except HTTPException:
+        raise
     except Exception as error:
         import sys
         import traceback
         print(f"[ERROR] Snapshot failed: {type(error).__name__}: {error}", flush=True)
         traceback.print_exc()
         print(f"[ERROR] Snapshot failed: {type(error).__name__}: {error}", file=sys.stderr, flush=True)
-        # Return valid empty response
-        return {
-            "projects": [],
-            "events": [],
-            "statusUpdates": [],
-            "programTracks": [],
-            "volunteerProfile": None,
-            "volunteerMatches": [],
-            "timeLogs": [],
-            "partnerApplications": [],
-            "volunteerJoinRecords": [],
-            "totalProjects": 0,
-            "hasMore": False,
-        }
+        # Do not turn a database/cache failure into a successful empty
+        # dashboard. The client can then show a retryable load error instead
+        # of reporting that valid programs/events do not exist.
+        raise HTTPException(
+            status_code=503,
+            detail="Project data is temporarily unavailable. Please retry.",
+        ) from error
 
 
 @app.get("/volunteers/by-user/{user_id}")

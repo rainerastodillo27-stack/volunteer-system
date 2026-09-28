@@ -497,6 +497,46 @@ function isTopLevelProgramRecord(project: Project, activeProgramTracks: ProgramT
 
 }
 
+// Programs are stored as top-level project records. Keep the workspace usable
+// if a delayed legacy program read returns an empty list after the authoritative
+// projects snapshot has already loaded.
+function deriveProgramTracksFromProjects(projects: Project[]): ProgramTrack[] {
+  const topLevelPrograms = projects.filter(
+    project => !project.isEvent && !project.parentProjectId && String(project.id || '').trim()
+  );
+
+  if (topLevelPrograms.length > 0) {
+    return topLevelPrograms.map(program => ({
+      id: program.id,
+      title: program.title,
+      description: program.description,
+      location: program.location,
+      locationRegion: program.locationRegion || program.location?.region,
+      locationCity: program.locationCity || program.location?.city,
+      icon: program.icon,
+      color: program.color,
+      imageUrl: program.imageUrl,
+      sortOrder: 0,
+      isActive: true,
+      createdAt: program.createdAt,
+      updatedAt: program.updatedAt,
+    }));
+  }
+
+  const seenModules = new Set<string>();
+  return projects
+    .filter(project => !project.isEvent)
+    .map(project => String(project.programModule || project.category || '').trim())
+    .filter(module => module && !seenModules.has(module) && seenModules.add(module))
+    .map(module => ({
+      id: module,
+      title: module,
+      description: '',
+      sortOrder: 0,
+      isActive: true,
+    }));
+}
+
 
 
 function isApprovedProposalLikeProject(
@@ -4379,7 +4419,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const refresh = async () => {
 
-        await refreshLight();
+        // A focus refresh must bypass the short client snapshot cache. The
+        // previous behavior could keep a transient empty response on screen
+        // even though the database already contained projects and events.
+        await refreshLight(true);
 
         // schedule deferred loads without blocking render - increased timeout for better UX
 
@@ -4466,7 +4509,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       setProjects(allProjects);
 
-      setProgramTracks(snapshot.programTracks || []);
+      const snapshotTracks = snapshot.programTracks || [];
+      setProgramTracks(
+        snapshotTracks.length > 0
+          ? snapshotTracks
+          : deriveProgramTracksFromProjects(allProjects)
+      );
 
       if (Array.isArray(snapshot.volunteerJoinRecords)) {
 
@@ -4598,9 +4646,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const tracks = await getAllProgramTracks();
+      const tracks = await getAllProgramTracks({ includeImages: false });
 
-      setProgramTracks(tracks);
+      // Do not let a stale/temporarily empty compatibility read erase the
+      // tracks already delivered by the project snapshot.
+      if (tracks.length > 0) {
+        setProgramTracks(tracks);
+      }
 
     } catch (error) {
 
@@ -16763,7 +16815,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     () =>
 
-      programTracks
+      (programTracks.length > 0 ? programTracks : deriveProgramTracksFromProjects(projects))
 
         .filter(track => track.isActive !== false)
 
@@ -16777,7 +16829,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         ),
 
-    [programTracks]
+    [programTracks, projects]
 
   );
 

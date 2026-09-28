@@ -767,12 +767,21 @@ export default function ProfileScreen() {
       return;
     }
 
+    const isAdmin = user.role === 'admin';
     const isPartner = user.role === 'partner';
-    confirmDialogRef.current?.show({
-      title: isPartner ? 'Save partner profile changes?' : 'Save volunteer profile changes?',
-      message: isPartner
+    const profileChangesTitle = isAdmin
+      ? 'Save admin profile changes?'
+      : isPartner
+        ? 'Save partner profile changes?'
+        : 'Save volunteer profile changes?';
+    const profileChangesMessage = isAdmin
+      ? 'Your account and password updates will be saved.'
+      : isPartner
         ? 'Your account, organization details, and valid ID photo updates will be saved.'
-        : 'Your account, volunteer registration, and document updates will be saved.',
+        : 'Your account, volunteer registration, and document updates will be saved.';
+    confirmDialogRef.current?.show({
+      title: profileChangesTitle,
+      message: profileChangesMessage,
       confirmText: 'Save Changes',
       loadingText: 'Saving…',
       cancelText: 'Keep Editing',
