@@ -119,12 +119,6 @@ def _get_raw_database_url() -> str:
     return os.getenv("SUPABASE_DB_URL", "").strip()
 
 
-# Reads an optional fallback Supabase Postgres URL from the environment.
-def _get_raw_fallback_database_url() -> str:
-    load_environment()
-    return os.getenv("SUPABASE_DB_URL_FALLBACK", "").strip()
-
-
 # Returns true when the Supabase Postgres URL points at the pooler endpoint.
 def _is_pooler_database_url(database_url: str) -> bool:
     try:
@@ -172,7 +166,6 @@ def _to_session_pooler_database_url(database_url: str) -> str | None:
 # Returns prioritized candidate Postgres endpoints for local failover.
 def _get_database_url_candidates() -> list[str]:
     primary_url = _get_raw_database_url()
-    fallback_url = _get_raw_fallback_database_url()
     candidates: list[str] = []
 
     def add_candidate(value: str) -> None:
@@ -190,9 +183,6 @@ def _get_database_url_candidates() -> list[str]:
         if session_url:
             add_candidate(session_url)
         add_candidate(primary_url)
-
-    if fallback_url:
-        add_candidate(fallback_url)
 
     return candidates
 
