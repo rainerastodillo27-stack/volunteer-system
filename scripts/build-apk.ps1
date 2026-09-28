@@ -18,7 +18,10 @@ Write-Host "  EAS CLI found" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "[2/5] Checking EAS authentication..." -ForegroundColor Yellow
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $whoami = (& eas whoami 2>&1 | Out-String).Trim()
+$ErrorActionPreference = $previousErrorActionPreference
 if ($whoami -match "Not logged in") {
     Write-Host "  Please log in to EAS." -ForegroundColor Yellow
     & eas login

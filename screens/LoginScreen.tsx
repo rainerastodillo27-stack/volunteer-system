@@ -323,6 +323,7 @@ export default function LoginScreen() {
   const stackSelectionCards = screenWidth < 600;
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(true);
   const [loginError, setLoginError] = useState<{
@@ -2298,10 +2299,23 @@ export default function LoginScreen() {
                           setPassword(value);
                           if (loginError) setLoginError(null);
                         }}
-                        secureTextEntry
+                        secureTextEntry={!showPassword}
                         editable={!loading}
                         autoCapitalize="none"
                       />
+                      <TouchableOpacity
+                        style={styles.passwordToggleButton}
+                        onPress={() => setShowPassword((visible) => !visible)}
+                        disabled={loading}
+                        accessibilityRole="button"
+                        accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                      >
+                        <MaterialIcons
+                          name={showPassword ? "visibility-off" : "visibility"}
+                          size={20}
+                          color="#64748b"
+                        />
+                      </TouchableOpacity>
                     </View>
                   </View>
 
@@ -2371,20 +2385,35 @@ export default function LoginScreen() {
                   editable={!loading}
                 />
 
-                <TextInput
-                  style={[styles.input, isCompactLayout && styles.compactInput]}
-                  placeholder="NVC Password (not Google password)"
-                  placeholderTextColor="#999"
-                  value={password}
-                  onChangeText={(value) => {
-                    setPassword(value);
-                    if (loginError) {
-                      setLoginError(null);
-                    }
-                  }}
-                  secureTextEntry
-                  editable={!loading}
-                />
+                <View style={[styles.passwordInputRow, isCompactLayout && styles.passwordInputRowCompact]}>
+                  <TextInput
+                    style={[styles.input, isCompactLayout && styles.compactInput, styles.passwordInputWithToggle]}
+                    placeholder="NVC Password (not Google password)"
+                    placeholderTextColor="#999"
+                    value={password}
+                    onChangeText={(value) => {
+                      setPassword(value);
+                      if (loginError) {
+                        setLoginError(null);
+                      }
+                    }}
+                    secureTextEntry={!showPassword}
+                    editable={!loading}
+                  />
+                  <TouchableOpacity
+                    style={styles.passwordToggleButton}
+                    onPress={() => setShowPassword((visible) => !visible)}
+                    disabled={loading}
+                    accessibilityRole="button"
+                    accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                  >
+                    <MaterialIcons
+                      name={showPassword ? "visibility-off" : "visibility"}
+                      size={20}
+                      color="#64748b"
+                    />
+                  </TouchableOpacity>
+                </View>
 
                 {loginError ? (
                   <InlineLoadError
@@ -4504,6 +4533,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.96)",
     paddingHorizontal: 12,
     height: 48,
+    position: "relative",
   },
   inputLeftIcon: {
     marginRight: 8,
@@ -4514,6 +4544,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#0f172a",
     fontFamily: "'Nunito', sans-serif",
+    paddingRight: 34,
+  },
+  passwordToggleButton: {
+    position: "absolute",
+    top: 0,
+    right: 8,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 4,
+  },
+  passwordInputRow: {
+    position: "relative",
+    width: "100%",
+    marginBottom: 15,
+  },
+  passwordInputRowCompact: {
+    marginBottom: 12,
+  },
+  passwordInputWithToggle: {
+    width: "100%",
+    marginBottom: 0,
+    paddingRight: 52,
   },
   loginSubmitButton: {
     backgroundColor: "rgba(148, 163, 184, 0.58)",
