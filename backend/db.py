@@ -29,19 +29,22 @@ _POSTGRES_CONNECTION_POOL: Any = None
 
 
 def _get_pool_min_size() -> int:
-    raw_value = os.getenv("DB_POOL_MIN_SIZE", "2").strip()
+    # The VPS runs multiple API workers against a Supabase session pool.
+    # Keep the default footprint small enough that workers cannot exhaust the
+    # provider's shared connection limit before DB_POOL_MAX_SIZE is configured.
+    raw_value = os.getenv("DB_POOL_MIN_SIZE", "1").strip()
     try:
         return max(1, int(raw_value))
     except ValueError:
-        return 2
+        return 1
 
 
 def _get_pool_max_size() -> int:
-    raw_value = os.getenv("DB_POOL_MAX_SIZE", "10").strip()
+    raw_value = os.getenv("DB_POOL_MAX_SIZE", "3").strip()
     try:
         return max(1, int(raw_value))
     except ValueError:
-        return 10
+        return 3
 
 
 """Shared Postgres connection helpers for the backend API and seed scripts."""
