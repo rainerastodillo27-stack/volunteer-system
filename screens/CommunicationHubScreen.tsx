@@ -1404,7 +1404,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       // larger than a direct-message screen needs.  Do not let that work
       // compete with account or conversation loading until its tab is opened.
       const snapshotRequest = activeSection === 'projects'
-        ? getProjectsScreenSnapshot(user, undefined, false, false /* images not needed for messaging */)
+        ? getProjectsScreenSnapshot(user, undefined, true, false /* images not needed for messaging */)
         : Promise.resolve({
             projects: [] as Project[],
             partnerApplications: [] as PartnerProjectApplication[],

@@ -69,7 +69,7 @@ export default function MappingScreen({ navigation }: any) {
   );
 
   // Loads map data and narrows project visibility based on the active role.
-  const loadProjects = useCallback(async () => {
+  const loadProjects = useCallback(async (forceRefresh = false) => {
     try {
       // Load cover photos too because the selected-project panel displays them.
       const snapshot = await getProjectsScreenSnapshot(
@@ -81,7 +81,7 @@ export default function MappingScreen({ navigation }: any) {
           'volunteerProfile',
           'volunteerMatches',
         ],
-        false,
+        forceRefresh,
         true,
       );
       const allPartners = await getAllPartners();
@@ -129,7 +129,7 @@ export default function MappingScreen({ navigation }: any) {
       // Load secondary data immediately without the artificial delay
       try {
         const [allReports, allVolunteers] = await Promise.all([
-          getAllPartnerReports(),
+          getAllPartnerReports({ forceRefresh }),
           getAllVolunteers(),
         ]);
         setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
@@ -156,12 +156,12 @@ export default function MappingScreen({ navigation }: any) {
   useFocusEffect(
     useCallback(() => {
       setMapViewKey(current => current + 1);
-      void loadProjects();
+      void loadProjects(true);
 
       return subscribeToStorageChanges(
         ['projects', 'events', 'volunteers', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
         () => {
-          void loadProjects();
+          void loadProjects(true);
         }
       );
     }, [loadProjects])

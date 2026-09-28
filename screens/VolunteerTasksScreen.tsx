@@ -707,7 +707,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
   useFocusEffect(
     React.useCallback(() => {
-      void loadVolunteerTasksCoalesced();
+      // A native client can miss the assignment event while backgrounded.
+      // Force the authoritative snapshot whenever My Tasks is revisited.
+      void loadVolunteerTasksCoalesced(true);
     }, [loadVolunteerTasksCoalesced])
   );
 
@@ -721,7 +723,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     return subscribeToStorageChanges(
       ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
       async () => {
-        await loadVolunteerTasksCoalesced();
+        await loadVolunteerTasksCoalesced(true);
       },
       REALTIME_STORAGE_CHANGE_OPTIONS
     );
@@ -737,7 +739,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
     const refreshWhenVisible = () => {
       if (!document.hidden) {
-        void loadVolunteerTasksCoalesced();
+        void loadVolunteerTasksCoalesced(true);
       }
     };
 

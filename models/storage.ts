@@ -2592,7 +2592,10 @@ export async function getDashboardSnapshot(): Promise<{
 // Loads the combined data set required by the partner dashboard screen.
 // OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
 // Core collections fetched immediately, supplemental data loaded on-demand.
-export async function getPartnerDashboardSnapshot(includeImages: boolean = false): Promise<{
+export async function getPartnerDashboardSnapshot(
+  includeImages: boolean = false,
+  forceRefresh: boolean = false,
+): Promise<{
   users: User[];
   partners: Partner[];
   projects: Project[];
@@ -2610,23 +2613,39 @@ export async function getPartnerDashboardSnapshot(includeImages: boolean = false
 }> {
   await ensurePartnerOwnershipLinks();
 
+  const coreKeys = [
+    STORAGE_KEYS.USERS,
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.PROGRAMS,
+    STORAGE_KEYS.PROGRAM_TRACKS,
+    STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.PARTNERS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.STATUS_UPDATES,
+    STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
+    STORAGE_KEYS.PARTNER_REPORTS,
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
+  ];
+  const supplementalKeys = [
+    STORAGE_KEYS.VOLUNTEER_MATCHES,
+    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+  ];
+
+  // Partner screens are often revisited after an administrator approves or
+  // deletes a proposal. Realtime invalidation is the fast path, but a mobile
+  // client can miss a socket event while backgrounded. A focused screen that
+  // explicitly asks for fresh data must clear both memory and persisted cache
+  // before reading the shared collections again.
+  if (forceRefresh) {
+    invalidateSharedStorageCache([...coreKeys, ...supplementalKeys]);
+  }
+
   // CORE LOAD: Essential data for partner dashboard (minimizes egress)
   // Fetch dashboard and supplemental collections together so a cold screen load
   // is limited by one batch instead of waiting for a second request wave.
   const [coreItems, supplementalItems] = await Promise.all([
-    getStorageItemsFast([
-      STORAGE_KEYS.USERS,
-      STORAGE_KEYS.PROJECTS,
-      STORAGE_KEYS.PROGRAMS,
-      STORAGE_KEYS.PROGRAM_TRACKS,
-      STORAGE_KEYS.EVENTS,
-      STORAGE_KEYS.PARTNERS,
-      STORAGE_KEYS.VOLUNTEERS,
-      STORAGE_KEYS.STATUS_UPDATES,
-      STORAGE_KEYS.PARTNER_PROJECT_APPLICATIONS,
-      STORAGE_KEYS.PARTNER_REPORTS,
-      STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
-    ]),
+    getStorageItemsFast(coreKeys),
     getStorageItemsFast([
       STORAGE_KEYS.VOLUNTEER_MATCHES,
       STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
@@ -4986,11 +5005,17 @@ export async function getVolunteerTimeLogs(
 // Returns every volunteer time log stored in the system.
 export async function getAllVolunteerTimeLogs(options?: {
   includeImages?: boolean;
+  forceRefresh?: boolean;
 }): Promise<VolunteerTimeLog[]> {
   // Attendance/list screens only need timestamps and status. Photo bytes are
   // requested explicitly by report, gallery, and detail flows.
   const includeImages = options?.includeImages === true;
-  const logs = (await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, includeImages)) || [];
+  if (options?.forceRefresh) {
+    invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEER_TIME_LOGS]);
+  }
+  const logs = (options?.forceRefresh
+    ? await getStorageItem<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, includeImages)
+    : await getStorageItemFast<VolunteerTimeLog[]>(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, includeImages)) || [];
   return logs.sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 }
 
@@ -6454,9 +6479,15 @@ export async function getPartnerReportsByUser(partnerUserId: string): Promise<Pa
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getAllPartnerReports(options?: {
   includeImages?: boolean;
+  forceRefresh?: boolean;
 }): Promise<PartnerReport[]> {
   const includeImages = options?.includeImages !== false;
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages) || [];
+  if (options?.forceRefresh) {
+    invalidateSharedStorageCache([STORAGE_KEYS.PARTNER_REPORTS]);
+  }
+  const reports = (options?.forceRefresh
+    ? await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages)
+    : await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages)) || [];
   return dedupeReports(reports).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
@@ -6464,10 +6495,15 @@ export async function getAllPartnerReports(options?: {
 // OPTIMIZED: Use cached getStorageItemFast instead of slow getStorageItem
 export async function getImpactHubReportsByUser(
   userId: string,
-  options?: { includeImages?: boolean },
+  options?: { includeImages?: boolean; forceRefresh?: boolean },
 ): Promise<PartnerReport[]> {
   const includeImages = options?.includeImages !== false;
-  const reports = await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages) || [];
+  if (options?.forceRefresh) {
+    invalidateSharedStorageCache([STORAGE_KEYS.PARTNER_REPORTS]);
+  }
+  const reports = (options?.forceRefresh
+    ? await getStorageItem<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages)
+    : await getStorageItemFast<PartnerReport[]>(STORAGE_KEYS.PARTNER_REPORTS, includeImages)) || [];
   return dedupeReports(reports)
     .filter(report => report.submitterUserId === userId || report.partnerUserId === userId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

@@ -147,7 +147,7 @@ export default function PartnerProjectsScreen({ route }: any) {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
     if (!user) {
       setProjects([]);
       setPartnerApplications([]);
@@ -162,7 +162,7 @@ export default function PartnerProjectsScreen({ route }: any) {
       const snapshot = await getProjectsScreenSnapshot(
         user,
         ['projects', 'partnerApplications'],
-        false,
+        forceRefresh,
         false,
       );
       setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects || []));
@@ -172,7 +172,7 @@ export default function PartnerProjectsScreen({ route }: any) {
       // Show the approved-project list first. Cover photos are fetched after
       // the first render so a large image payload cannot block the partner's
       // project dashboard on a slow mobile connection.
-      void getProjectsScreenSnapshot(user, ['projects'], false, true)
+      void getProjectsScreenSnapshot(user, ['projects'], forceRefresh, true)
         .then(imageSnapshot => setProjects(imageSnapshot.projects || []))
         .catch(error => console.warn('[PartnerProjectsScreen] Project images skipped:', error));
 
@@ -202,10 +202,10 @@ export default function PartnerProjectsScreen({ route }: any) {
 
   useFocusEffect(
     useCallback(() => {
-      void loadData();
+      void loadData(true);
       return subscribeToStorageChanges(
         ['projects', 'events', 'partnerProjectApplications', 'volunteerProjectJoins'],
-        () => loadData(),
+        () => loadData(true),
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
@@ -215,7 +215,7 @@ export default function PartnerProjectsScreen({ route }: any) {
     useCallback(() => {
       return subscribeToStorageChanges(
         ['volunteerTimeLogs'],
-        () => loadData(),
+        () => loadData(true),
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
@@ -318,7 +318,7 @@ export default function PartnerProjectsScreen({ route }: any) {
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
-    void loadData();
+    void loadData(true);
   }, [loadData]);
 
   const selectedProjectMetrics = useMemo(

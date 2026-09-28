@@ -116,7 +116,7 @@ export default function PartnerProgramManagementScreen() {
     }
 
     try {
-      const snapshot = await getPartnerDashboardSnapshot(true);
+      const snapshot = await getPartnerDashboardSnapshot(true, true);
       setPrograms(
         (snapshot.programs || []).filter(program => !program.isEvent && !program.parentProjectId)
       );
@@ -140,10 +140,10 @@ export default function PartnerProgramManagementScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadData();
+      void loadData(true);
       return subscribeToStorageChanges(
         ['projects', 'events', 'programs', 'partnerProjectApplications'],
-        () => loadData(),
+        () => loadData(true),
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])

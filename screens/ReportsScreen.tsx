@@ -683,14 +683,14 @@ export default function ReportsScreen({ navigation, route }: any) {
     toastTimerRef.current = setTimeout(() => setToast(null), 4500);
   }, []);
 
-  const loadProjects = useCallback(async () => {
+  const loadProjects = useCallback(async (forceRefresh = false) => {
     if (user?.role === 'volunteer' && user.id) {
       const snapshot = await getProjectsScreenSnapshot(user, [
         'projects',
         'timeLogs',
         'volunteerProfile',
         'volunteerProjectJoins',
-      ], false, false);
+      ], forceRefresh, false);
       setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications([]);
       setVolunteerProfileId(snapshot.volunteerProfile?.id || null);
@@ -713,7 +713,7 @@ export default function ReportsScreen({ navigation, route }: any) {
       void getProjectsScreenSnapshot(
         user,
         ['projects', 'timeLogs', 'volunteerProjectJoins'],
-        false,
+        forceRefresh,
         true,
       )
         .then(mediaSnapshot => {
@@ -736,7 +736,7 @@ export default function ReportsScreen({ navigation, route }: any) {
     }
 
     if (user?.role === 'partner' && user.id) {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], false, false /* reports */);
+      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'partnerApplications'], forceRefresh, false /* reports */);
       setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerProfileId(null);
@@ -750,7 +750,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         'projects',
         'partnerApplications',
         'volunteerJoinRecords',
-      ], false, false /* reports */);
+      ], forceRefresh, false /* reports */);
       setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects));
       setPartnerApplications(snapshot.partnerApplications || []);
       setVolunteerProfileId(null);
@@ -764,7 +764,7 @@ export default function ReportsScreen({ navigation, route }: any) {
     setVolunteerTimeLogs([]);
     setVolunteerJoinRecords([]);
     setPartnerApplications([]);
-    const allProjects = await getAllProjects(false /* reports don't need images */);
+    const allProjects = await getAllProjects(false /* reports don't need images */, { forceRefresh });
     setProjects(allProjects);
     return allProjects;
   }, [user]);
@@ -803,14 +803,14 @@ export default function ReportsScreen({ navigation, route }: any) {
     }
 
     try {
-      const allProjects = await loadProjects();
+      const allProjects = await loadProjects(true);
       // Report lists only need metadata. Full attachments/media are fetched
       // when a report or the Photos view is explicitly opened.
       const includeReportImages = false;
       const rawReports =
         user.role === 'admin' || user.role === 'partner'
-          ? await getAllPartnerReports({ includeImages: includeReportImages })
-          : await getImpactHubReportsByUser(user.id, { includeImages: includeReportImages });
+          ? await getAllPartnerReports({ includeImages: includeReportImages, forceRefresh: true })
+          : await getImpactHubReportsByUser(user.id, { includeImages: includeReportImages, forceRefresh: true });
 
       const normalizedReports =
         rawReports
@@ -828,8 +828,8 @@ export default function ReportsScreen({ navigation, route }: any) {
       // the report list. Load those metrics after the report screen is usable.
       if (user.role === 'admin' || user.role === 'partner') {
         void Promise.all([
-          getAllVolunteerTimeLogs({ includeImages: false }),
-          getAllVolunteerProjectJoinRecords(),
+          getAllVolunteerTimeLogs({ includeImages: false, forceRefresh: true }),
+          getAllVolunteerProjectJoinRecords({ forceRefresh: true }),
         ])
           .then(([allTimeLogs, allJoinRecords]) => {
             setVolunteerTimeLogs(currentLogs => mergeTimeLogsPreservingPhotos(currentLogs, allTimeLogs || []));

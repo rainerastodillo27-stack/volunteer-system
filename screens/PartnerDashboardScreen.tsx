@@ -539,7 +539,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 
-  const loadDashboardData = React.useCallback(async () => {
+  const loadDashboardData = React.useCallback(async (forceRefresh = false) => {
 
     try {
 
@@ -551,7 +551,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 
-      const snapshot = await getPartnerDashboardSnapshot();
+      const snapshot = await getPartnerDashboardSnapshot(false, forceRefresh);
 
       const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
 
@@ -605,7 +605,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     React.useCallback(() => {
 
-      void loadDashboardData();
+      void loadDashboardData(true);
 
       return subscribeToStorageChanges(
 
@@ -625,7 +625,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
         ],
 
-        () => loadDashboardData(),
+        () => loadDashboardData(true),
 
         REALTIME_STORAGE_CHANGE_OPTIONS
 

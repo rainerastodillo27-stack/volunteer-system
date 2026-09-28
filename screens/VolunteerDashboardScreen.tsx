@@ -414,9 +414,11 @@ export default function VolunteerDashboardScreen() {
 
   useFocusEffect(
     React.useCallback(() => {
-      // Reuse the shared snapshot on normal tab switches. Explicit actions
-      // such as joining an event still request a forced refresh below.
-      void loadDashboardData(false);
+      // A native client may have missed a realtime event while backgrounded.
+      // Reconcile the authoritative snapshot whenever the dashboard is
+      // revisited so project, event, and attendance changes are not hidden by
+      // a still-fresh local cache.
+      void loadDashboardData(true);
 
       return subscribeToStorageChanges(
         [
@@ -431,7 +433,7 @@ export default function VolunteerDashboardScreen() {
           'programTracks',
         ],
         () => {
-          void loadDashboardData();
+          void loadDashboardData(true);
         },
         REALTIME_STORAGE_CHANGE_OPTIONS
       );

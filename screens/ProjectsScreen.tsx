@@ -697,7 +697,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
         .catch(error => console.warn('[ProjectsScreen] Project images skipped:', error));
 
       try {
-        setAllPartnerReports(await getAllPartnerReports());
+        setAllPartnerReports(await getAllPartnerReports({ forceRefresh }));
       } catch {
         setAllPartnerReports([]);
       }
@@ -738,7 +738,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   useFocusEffect(
     React.useCallback(() => {
-      void loadProjectsData(user?.role === 'volunteer');
+      // A native client may have missed a realtime event while backgrounded.
+      // Reconcile the authoritative project snapshot whenever this screen is
+      // revisited so approved or deleted projects cannot remain visible.
+      void loadProjectsData(true);
       return subscribeToStorageChanges(
         ['projects', 'events', 'programs', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'partnerReports', 'volunteerMatches'],
         () => {

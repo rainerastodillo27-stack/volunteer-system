@@ -41,7 +41,7 @@ export default function PartnerHomeScreen() {
     
     const loadPartner = async () => {
       try {
-        const snapshot = await getPartnerDashboardSnapshot();
+        const snapshot = await getPartnerDashboardSnapshot(false, true);
         const owned = snapshot.partners.find((p: Partner) => 
           p.ownerUserId === user.id || 
           (p.contactEmail && p.contactEmail.toLowerCase() === user.email?.toLowerCase())
@@ -51,7 +51,10 @@ export default function PartnerHomeScreen() {
     };
     
     loadPartner();
-    const unsub = subscribeToStorageChanges(['partners'], loadPartner);
+    const unsub = subscribeToStorageChanges(
+      ['partners', 'projects', 'events', 'programs', 'partnerProjectApplications'],
+      () => loadPartner()
+    );
     
     return () => unsub?.();
   }, [user]);
