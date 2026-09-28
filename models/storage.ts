@@ -69,6 +69,17 @@ const WEB_MESSAGE_SYNC_KEY = 'volcre:messages:updatedAt';
 // on shared-cache invalidation or its debounce queue.
 const WEB_AUTH_SESSION_KEY = 'volcre:auth-session:v1';
 const API_AUTH_TOKEN_KEY = 'volcre:api-session-token:v1';
+const AUTH_BOOTSTRAP_PATHS = new Set([
+  '/auth/login',
+  '/auth/google',
+  '/auth/logout',
+  '/auth/check-email',
+  '/auth/registration-otp/send',
+  '/auth/registration-otp/verify',
+  '/auth/register',
+  '/auth/password-reset/send',
+  '/auth/password-reset/confirm',
+]);
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   notificationsEnabled: true,
   autoRefreshEnabled: true,
@@ -83,6 +94,30 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 // When set (e.g. to an ngrok URL), this takes priority over the baked-in APK URL.
 let _runtimeCustomBackendUrl: string | null = null;
 let memoryApiAuthToken: string | null = null;
+const authSessionInvalidationListeners = new Set<() => void>();
+
+export function subscribeToAuthSessionInvalidated(listener: () => void): () => void {
+  authSessionInvalidationListeners.add(listener);
+  return () => authSessionInvalidationListeners.delete(listener);
+}
+
+function notifyInvalidAuthSession(path: string): void {
+  if (AUTH_BOOTSTRAP_PATHS.has(path)) {
+    return;
+  }
+
+  // Native clients keep a bearer token in memory/AsyncStorage. Clear it as
+  // soon as the server rejects it so every subsequent request starts clean.
+  void setApiAuthToken(null);
+
+  for (const listener of authSessionInvalidationListeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn('[Auth] Failed to notify invalid-session listener:', error);
+    }
+  }
+}
 
 export function setRuntimeBackendUrl(url: string | null): void {
   _runtimeCustomBackendUrl = url && url.trim() ? url.trim().replace(/\/$/, '') : null;
@@ -1593,6 +1628,10 @@ async function fetchApiResponse(
           response,
           `API request failed: ${response.status}`
         );
+
+        if (response.status === 401) {
+          notifyInvalidAuthSession(path);
+        }
 
         if (canRetryRequest && isRetryableApiStatus(response.status) && attempt < API_REQUEST_MAX_ATTEMPTS - 1) {
           invalidateApiReady();

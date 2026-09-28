@@ -6,6 +6,7 @@ import {
   setCurrentUser as saveCurrentUser,
   getCurrentUser,
   getApiAuthToken,
+  subscribeToAuthSessionInvalidated,
 } from '../models/storage';
 
 // Safe Platform accessor for web environments
@@ -116,6 +117,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const handleInvalidSession = () => {
+      setUser(null);
+      void saveCurrentUser(null);
+    };
+
+    const unsubscribeInvalidSession = subscribeToAuthSessionInvalidated(handleInvalidSession);
+
     // Restore the persistent session on every supported platform. A browser
     // refresh should behave like reopening the app, not like logging out.
     const restoreSession = async () => {
@@ -148,6 +156,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void restoreSession().finally(() => {
       clearTimeout(startupTimeout);
     });
+
+    return () => {
+      unsubscribeInvalidSession();
+    };
   }, []);
 
   // Saves the active user in memory and persistent storage after login.
