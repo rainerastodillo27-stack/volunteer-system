@@ -186,7 +186,10 @@ export default function ProfileScreen() {
       if (synchronizedProfile?.id) {
         const [timeLogs, allJoinRecords] = await Promise.all([
           getVolunteerTimeLogs(synchronizedProfile.id),
-          getAllVolunteerProjectJoinRecords(),
+          // Re-read membership from the backend on profile focus. A phone can
+          // miss the web/admin websocket invalidation while the app is asleep,
+          // leaving the cached join list at zero until its TTL expires.
+          getAllVolunteerProjectJoinRecords({ forceRefresh: true }),
         ]);
         setVolunteerTimeLogs(timeLogs);
         setVolunteerJoinRecords(
@@ -256,7 +259,9 @@ export default function ProfileScreen() {
   // Loads project titles used to display completed volunteer work.
   const loadProjectTitles = useCallback(async () => {
     try {
-      const allProjects = await getAllProjects();
+      // Refresh project/event membership data when returning to Profile so a
+      // join approved on web/admin is reflected on mobile immediately.
+      const allProjects = await getAllProjects(false, { forceRefresh: true });
       setProjects(allProjects);
       setLoadError(null);
     } catch (error) {
@@ -802,6 +807,9 @@ export default function ProfileScreen() {
     timeLogs: volunteerTimeLogs,
   });
   const joinedEventProjects = eventParticipation.joinedEvents;
+  // Joining an event is recorded in volunteerProjectJoins. Time logs are
+  // attendance/check-in records and must not be used for the joined count.
+  const joinedEventsCount = joinedEventProjects.length;
   const completedEvents = [...eventParticipation.completedEvents]
     .sort(
       (left, right) =>
@@ -828,9 +836,9 @@ export default function ProfileScreen() {
     },
     ...(user?.role === 'volunteer'
       ? [
-          {
-            label: 'Events Joined',
-            value: String(joinedEventProjects.length),
+        {
+          label: 'Events Joined',
+          value: String(joinedEventsCount),
           },
         ]
       : []),
@@ -990,7 +998,7 @@ export default function ProfileScreen() {
               </View>
               <View style={styles.statTextWrap}>
                 <Text style={styles.statLabelUpper}>EVENTS JOINED</Text>
-                <Text style={styles.statCountText}>{new Set(volunteerTimeLogs.map(log => log.projectId)).size}</Text>
+                <Text style={styles.statCountText}>{joinedEventsCount}</Text>
                 <Text style={styles.statLabelLower}>Joined Events</Text>
               </View>
             </View>
@@ -1017,37 +1025,39 @@ export default function ProfileScreen() {
       {/* User Account Details */}
       <View style={styles.sectionBlock}>
         <Text style={styles.sectionTitleText}>User Account Details</Text>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Name</Text>
-          <Text style={styles.detailInfoValue}>{user?.name || 'Not provided'}</Text>
-        </View>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Email</Text>
-          <Text style={styles.detailInfoValue}>{user?.email || 'Not provided'}</Text>
-        </View>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Phone</Text>
-          <Text style={styles.detailInfoValue}>{user?.phone || 'Not provided'}</Text>
-        </View>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Social Media</Text>
-          <Text style={styles.detailInfoValue}>
-            {formatSocialMediaInfo(user?.socialMedia || volunteerProfile?.socialMedia || partnerProfiles[0]?.socialMedia) || 'Not provided'}
-          </Text>
-        </View>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Profile Type</Text>
-          <Text style={styles.detailInfoValue}>{user?.userType || 'Not provided'}</Text>
-        </View>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Approval Status</Text>
-          <Text style={styles.detailInfoValue}>{user?.approvalStatus || 'Not provided'}</Text>
-        </View>
-        <View style={styles.detailInfoCard}>
-          <Text style={styles.detailInfoLabel}>Submitted</Text>
-          <Text style={styles.detailInfoValue}>
-            {user?.createdAt ? new Date(user.createdAt).toLocaleString() : 'Not provided'}
-          </Text>
+        <View style={styles.detailInfoGrid}>
+          <View style={styles.detailInfoCard}>
+            <Text style={styles.detailInfoLabel}>Name</Text>
+            <Text style={styles.detailInfoValue}>{user?.name || 'Not provided'}</Text>
+          </View>
+          <View style={styles.detailInfoCard}>
+            <Text style={styles.detailInfoLabel}>Email</Text>
+            <Text style={styles.detailInfoValue}>{user?.email || 'Not provided'}</Text>
+          </View>
+          <View style={styles.detailInfoCard}>
+            <Text style={styles.detailInfoLabel}>Phone</Text>
+            <Text style={styles.detailInfoValue}>{user?.phone || 'Not provided'}</Text>
+          </View>
+          <View style={styles.detailInfoCard}>
+            <Text style={styles.detailInfoLabel}>Social Media</Text>
+            <Text style={styles.detailInfoValue}>
+              {formatSocialMediaInfo(user?.socialMedia || volunteerProfile?.socialMedia || partnerProfiles[0]?.socialMedia) || 'Not provided'}
+            </Text>
+          </View>
+          <View style={styles.detailInfoCard}>
+            <Text style={styles.detailInfoLabel}>Profile Type</Text>
+            <Text style={styles.detailInfoValue}>{user?.userType || 'Not provided'}</Text>
+          </View>
+          <View style={styles.detailInfoCard}>
+            <Text style={styles.detailInfoLabel}>Approval Status</Text>
+            <Text style={styles.detailInfoValue}>{user?.approvalStatus || 'Not provided'}</Text>
+          </View>
+          <View style={[styles.detailInfoCard, styles.detailInfoCardWide]}>
+            <Text style={styles.detailInfoLabel}>Submitted</Text>
+            <Text style={styles.detailInfoValue}>
+              {user?.createdAt ? new Date(user.createdAt).toLocaleString() : 'Not provided'}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -2501,6 +2511,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 10,
     paddingVertical: 9,
+  },
+  detailInfoGrid: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 8,
   },
   detailInfoCardWide: {
     width: '100%',

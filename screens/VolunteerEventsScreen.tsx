@@ -162,7 +162,7 @@ export default function VolunteerEventsScreen() {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'applications'>('all');
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
     if (!user) return;
     try {
       const [snapshot, calendars] = await Promise.all([
@@ -174,7 +174,7 @@ export default function VolunteerEventsScreen() {
             'volunteerMatches',
             'volunteerJoinRecords',
           ],
-          false,
+          forceRefresh,
           false,
         ),
         getAllAdminPlanningCalendars(),
@@ -201,7 +201,7 @@ export default function VolunteerEventsScreen() {
       // them after the event list is visible so a slow mobile connection does
       // not keep the screen blocked. The image refresh preserves the same
       // records and simply fills in their cover photos when available.
-      void getProjectsScreenSnapshot(user, ['projects'], false, true)
+      void getProjectsScreenSnapshot(user, ['projects'], forceRefresh, true)
         .then(imageSnapshot => setRecords(imageSnapshot.projects || []))
         .catch(error => console.warn('[VolunteerEventsScreen] Event images skipped:', error));
       void getAllVolunteers()
@@ -247,10 +247,10 @@ export default function VolunteerEventsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadData();
+      void loadData(true);
       return subscribeToStorageChanges(
         ['projects', 'events', 'volunteerMatches', 'volunteerProjectJoins', 'adminPlanningCalendars'],
-        loadData,
+        () => loadData(true),
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
@@ -283,7 +283,7 @@ export default function VolunteerEventsScreen() {
         ...current.filter(existing => existing.projectId !== event.id),
       ]);
       Alert.alert('Success', `Successfully requested to join "${event.title}"!`);
-      void loadData();
+      void loadData(true);
     } catch (err) {
       Alert.alert('Error', getRequestErrorMessage(err, 'Failed to request join event'));
     } finally {
@@ -318,9 +318,9 @@ export default function VolunteerEventsScreen() {
 
     const match = volunteerMatches.find(m => m.projectId === event.id);
     
-    if (match?.status === 'Requested') return { label: 'Pending', color: '#C97F1F', joinable: false };
     if (isCompleted || match?.status === 'Completed') return { label: 'Completed', color: '#5B564C', joinable: false };
     if (match?.status === 'Matched' || isJoined) return { label: 'Joined', color: '#3F7A54', joinable: false };
+    if (match?.status === 'Requested') return { label: 'Pending', color: '#C97F1F', joinable: false };
 
     // Check if event is full
     const joinedCount = getActiveProjectJoinCount(event, joinRecords, volunteerMatches, allVolunteersList);

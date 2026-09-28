@@ -16,6 +16,7 @@ import {
 import { format, parseISO } from "date-fns";
 import ModernTheme from "../utils/modernTheme";
 import loginBackgroundImage from "../assets/about-us-2020.jpg";
+import mobileLoginBackgroundImage from "../assets/login.png";
 import orientationVideo from "../assets/NVC-Introductory-Video.mp4";
 
 // Safe Platform accessor for web environments
@@ -586,7 +587,6 @@ export default function LoginScreen() {
         if (
           !response.ok ||
           payload?.status !== "ok" ||
-          payload?.mode !== "postgres" ||
           payload?.available === false
         ) {
           throw new Error(
@@ -1955,13 +1955,25 @@ export default function LoginScreen() {
         >
           <View style={styles.webDarkOverlay} />
         </ImageBackground>
-      ) : null}
+      ) : (
+        <ImageBackground
+          source={mobileLoginBackgroundImage}
+          style={styles.mobileBackgroundImage}
+          resizeMode="cover"
+        >
+          <View style={styles.mobileDarkOverlay} />
+        </ImageBackground>
+      )}
 
       <ScrollView
-        style={[styles.container, isWeb && styles.webOuterContainer]}
+        style={[
+          styles.container,
+          isWeb ? styles.webOuterContainer : styles.mobileOuterContainer,
+        ]}
         contentContainerStyle={[
           styles.contentContainer,
           isWeb && styles.webContentContainer,
+          !isWeb && styles.mobileContentContainer,
           isCompactLayout && styles.compactContentContainer,
         ]}
         showsVerticalScrollIndicator={false}
@@ -1999,12 +2011,6 @@ export default function LoginScreen() {
               isWeb && screenWidth < 960 && styles.webCardShellStacked,
             ]}
           >
-            {!isWeb ? (
-              <View style={styles.brandSection}>
-                <AppLogo width={220} />
-              </View>
-            ) : null}
-
             {false ? (
               <View style={styles.webAccessNotice}>
                 <Text style={styles.webAccessNoticeTitle}>
@@ -2018,7 +2024,46 @@ export default function LoginScreen() {
             ) : null}
 
             {!isWeb && !selectedMobileRole ? (
-              <View style={styles.mobilePortalContainer}>
+              <View style={[styles.mobilePortalContainer, styles.mobileGlassPanel]}>
+                <TouchableOpacity
+                  style={styles.mobileStatusDotWrap}
+                  onPress={() => {
+                    Alert.alert(
+                      backendStatus === "online"
+                        ? "Database Connected"
+                        : backendStatus === "offline"
+                          ? "Database Unavailable"
+                          : "Checking Database",
+                      backendMessage,
+                    );
+                  }}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Database status"
+                >
+                  <View
+                    style={[
+                      styles.mobileStatusDot,
+                      backendStatus === "online"
+                        ? styles.mobileStatusDotOnline
+                        : backendStatus === "offline"
+                          ? styles.mobileStatusDotOffline
+                          : styles.mobileStatusDotChecking,
+                    ]}
+                  />
+                </TouchableOpacity>
+
+                <View style={styles.glassHeaderRow}>
+                  <View style={styles.glassLogoWrap}>
+                    <AppLogo width={48} />
+                  </View>
+                  <View style={styles.glassHeaderTitleWrap}>
+                    <Text style={styles.glassHeaderTitle}>NVC CONNECT</Text>
+                    <Text style={styles.glassHeaderSubtitle}>
+                      Partner & Volunteer Log In
+                    </Text>
+                  </View>
+                </View>
+
                 {/* Top Nav Bar */}
                 <View style={styles.mobileTopBar}>
                   <View style={{ flex: 1 }} />
@@ -2165,7 +2210,46 @@ export default function LoginScreen() {
                 </Modal>
               </View>
             ) : !isWeb && selectedMobileRole ? (
-              <View style={styles.mobileLoginContainer}>
+              <View style={[styles.mobileLoginContainer, styles.mobileGlassPanel]}>
+                <TouchableOpacity
+                  style={styles.mobileStatusDotWrap}
+                  onPress={() => {
+                    Alert.alert(
+                      backendStatus === "online"
+                        ? "Database Connected"
+                        : backendStatus === "offline"
+                          ? "Database Unavailable"
+                          : "Checking Database",
+                      backendMessage,
+                    );
+                  }}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Database status"
+                >
+                  <View
+                    style={[
+                      styles.mobileStatusDot,
+                      backendStatus === "online"
+                        ? styles.mobileStatusDotOnline
+                        : backendStatus === "offline"
+                          ? styles.mobileStatusDotOffline
+                          : styles.mobileStatusDotChecking,
+                    ]}
+                  />
+                </TouchableOpacity>
+
+                <View style={styles.glassHeaderRow}>
+                  <View style={styles.glassLogoWrap}>
+                    <AppLogo width={48} />
+                  </View>
+                  <View style={styles.glassHeaderTitleWrap}>
+                    <Text style={styles.glassHeaderTitle}>NVC CONNECT</Text>
+                    <Text style={styles.glassHeaderSubtitle}>
+                      Partner & Volunteer Log In
+                    </Text>
+                  </View>
+                </View>
+
                 {/* Back to portal selector */}
                 <TouchableOpacity
                   style={styles.loginBackNavButton}
@@ -2176,39 +2260,22 @@ export default function LoginScreen() {
                   <Text style={styles.loginBackNavText}>Change portal</Text>
                 </TouchableOpacity>
 
-                {/* Centered Welcome Header */}
-                <View style={styles.loginCenterHeader}>
-                  <View style={styles.loginTopIconSquare}>
-                    <MaterialIcons name="login" size={22} color="#ffffff" />
-                  </View>
-                  <Text style={styles.loginHeaderTitle}>Welcome back</Text>
-                  <Text style={styles.loginHeaderSubtitle}>
-                    Log in to your account
-                  </Text>
-                </View>
-
                 {/* Login Card Form */}
                 <View style={styles.loginBoxCard}>
                   {/* Email / Username field */}
-                  <View style={styles.inputFieldGroup}>
-                    <Text style={styles.inputFieldLabel}>Email</Text>
-                    <View style={styles.inputBoxWithIcon}>
-                      <MaterialIcons name="mail-outline" size={18} color="#94a3b8" style={styles.inputLeftIcon} />
-                      <TextInput
-                        style={styles.cleanTextInput}
-                        placeholder="you@example.com"
-                        placeholderTextColor="#94a3b8"
-                        value={identifier}
-                        onChangeText={(value) => {
-                          setIdentifier(value);
-                          if (loginError) setLoginError(null);
-                        }}
-                        autoCapitalize="none"
-                        keyboardType="email-address"
-                        editable={!loading}
-                      />
-                    </View>
-                  </View>
+                  <TextInput
+                    style={styles.glassInput}
+                    placeholder="Email, Username, or Phone"
+                    placeholderTextColor="#94a3b8"
+                    value={identifier}
+                    onChangeText={(value) => {
+                      setIdentifier(value);
+                      if (loginError) setLoginError(null);
+                    }}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    editable={!loading}
+                  />
 
                   {/* Password field */}
                   <View style={styles.inputFieldGroup}>
@@ -2265,6 +2332,16 @@ export default function LoginScreen() {
                     )}
                   </TouchableOpacity>
 
+                  <TouchableOpacity
+                    onPress={openSignupModal}
+                    activeOpacity={0.8}
+                    style={styles.glassSignupTouch}
+                  >
+                    <Text style={styles.glassSignupText}>
+                      Sign up as Volunteer or Partner
+                    </Text>
+                  </TouchableOpacity>
+
                   <View style={styles.googleDivider}>
                     <View style={styles.googleDividerLine} />
                     <Text style={styles.googleDividerText}>OR</Text>
@@ -2275,14 +2352,6 @@ export default function LoginScreen() {
                     onToken={handleGoogleLogin}
                     onError={handleGoogleLoginError}
                   />
-                </View>
-
-                {/* Bottom link: Don't have an account? Create one */}
-                <View style={styles.loginBottomPromptRow}>
-                  <Text style={styles.loginBottomPromptText}>Don't have an account? </Text>
-                  <TouchableOpacity onPress={openSignupModal} activeOpacity={0.8}>
-                    <Text style={styles.loginBottomPromptLink}>Create one</Text>
-                  </TouchableOpacity>
                 </View>
 
               </View>
@@ -3848,7 +3917,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "rgba(5, 20, 12, 0.45)",
   },
+  mobileBackgroundImage: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+  },
+  mobileDarkOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.48)",
+  },
   webOuterContainer: {
+    backgroundColor: "transparent",
+  },
+  mobileOuterContainer: {
     backgroundColor: "transparent",
   },
   contentContainer: {
@@ -4041,6 +4126,123 @@ const styles = StyleSheet.create({
     color: "#475569",
     fontFamily: "'Nunito', sans-serif",
   },
+  mobileGlassPanel: {
+    backgroundColor: "rgba(15, 23, 42, 0.64)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.22)",
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 22,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    elevation: 8,
+    // @ts-ignore React Native Web glass effect
+    backdropFilter: "blur(18px)",
+    // @ts-ignore React Native Web glass effect
+    WebkitBackdropFilter: "blur(18px)",
+  },
+  mobileStatusDotWrap: {
+    position: "absolute",
+    top: -6,
+    left: -6,
+    zIndex: 10,
+    padding: 8,
+  },
+  mobileStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  mobileStatusDotOnline: {
+    backgroundColor: "#62d66f",
+    shadowColor: "#62d66f",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  mobileStatusDotOffline: {
+    backgroundColor: "#ef4444",
+    shadowColor: "#ef4444",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  mobileStatusDotChecking: {
+    backgroundColor: "#eab308",
+    shadowColor: "#eab308",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  glassHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  glassLogoWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+  },
+  glassHeaderTitleWrap: {
+    flex: 1,
+  },
+  glassHeaderTitle: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  glassHeaderSubtitle: {
+    color: "rgba(255, 255, 255, 0.72)",
+    fontSize: 12,
+    marginTop: 2,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  glassInput: {
+    width: "100%",
+    minHeight: 48,
+    borderRadius: 13,
+    backgroundColor: "rgba(255, 255, 255, 0.96)",
+    paddingHorizontal: 15,
+    marginBottom: 12,
+    color: "#0f172a",
+    fontSize: 14,
+    fontFamily: "'Nunito', sans-serif",
+  },
+  glassForgotTouch: {
+    alignSelf: "flex-end",
+    marginTop: -3,
+    marginBottom: 10,
+    paddingVertical: 4,
+  },
+  glassForgotText: {
+    color: "#c7f36b",
+    fontSize: 12,
+    fontWeight: "700",
+    fontFamily: "'Nunito', sans-serif",
+  },
+  glassSignupTouch: {
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  glassSignupText: {
+    color: "#c7f36b",
+    fontSize: 13,
+    fontWeight: "800",
+    fontFamily: "'Nunito', sans-serif",
+  },
   mobilePortalContainer: {
     width: "100%",
     maxWidth: 860,
@@ -4056,7 +4258,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginBottom: 24,
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: "rgba(255, 255, 255, 0.16)",
     width: "100%",
   },
   mobileTopBrand: {
@@ -4090,7 +4292,7 @@ const styles = StyleSheet.create({
   },
   mobileTopHelpText: {
     fontSize: 12,
-    color: "#64748b",
+    color: "rgba(255, 255, 255, 0.78)",
     fontFamily: "'Nunito', sans-serif",
   },
   portalHeroHeader: {
@@ -4110,7 +4312,7 @@ const styles = StyleSheet.create({
   portalHeadline: {
     fontSize: 28,
     fontWeight: "900",
-    color: "#0f172a",
+    color: "#ffffff",
     textAlign: "center",
     marginBottom: 8,
     fontFamily: "'Nunito', sans-serif",
@@ -4119,7 +4321,7 @@ const styles = StyleSheet.create({
   portalSubtext: {
     fontSize: 14,
     lineHeight: 22,
-    color: "#64748b",
+    color: "rgba(255, 255, 255, 0.72)",
     textAlign: "center",
     maxWidth: 520,
     fontFamily: "'Nunito', sans-serif",
@@ -4201,7 +4403,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   portalSignupFooterText: {
-    color: "#166534",
+    color: "#c7f36b",
     fontSize: 14,
     fontWeight: "700",
     fontFamily: "'Nunito', sans-serif",
@@ -4223,15 +4425,15 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 8,
-    backgroundColor: "#f0fdf4",
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
     borderWidth: 1,
-    borderColor: "#dcfce7",
+    borderColor: "rgba(255, 255, 255, 0.22)",
     marginBottom: 20,
   },
   loginBackNavText: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#166534",
+    color: "#ffffff",
     fontFamily: "'Nunito', sans-serif",
   },
   loginCenterHeader: {
@@ -4265,17 +4467,11 @@ const styles = StyleSheet.create({
     fontFamily: "'Nunito', sans-serif",
   },
   loginBoxCard: {
-    backgroundColor: "#ffffff",
-    borderRadius: 20,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    shadowColor: "#0f172a",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
-    elevation: 2,
-    marginBottom: 16,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    padding: 0,
+    borderWidth: 0,
+    marginBottom: 4,
   },
   inputFieldGroup: {
     marginBottom: 16,
@@ -4283,7 +4479,7 @@ const styles = StyleSheet.create({
   inputFieldLabel: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#166534",
+    color: "#ffffff",
     marginBottom: 6,
     fontFamily: "'Nunito', sans-serif",
   },
@@ -4296,16 +4492,16 @@ const styles = StyleSheet.create({
   forgotPasswordLinkText: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#166534",
+    color: "#c7f36b",
     fontFamily: "'Nunito', sans-serif",
   },
   inputBoxWithIcon: {
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: "rgba(255, 255, 255, 0.22)",
     borderRadius: 10,
-    backgroundColor: "#ffffff",
+    backgroundColor: "rgba(255, 255, 255, 0.96)",
     paddingHorizontal: 12,
     height: 48,
   },
@@ -4320,21 +4516,21 @@ const styles = StyleSheet.create({
     fontFamily: "'Nunito', sans-serif",
   },
   loginSubmitButton: {
-    backgroundColor: "#166534",
-    borderRadius: 10,
+    backgroundColor: "rgba(148, 163, 184, 0.58)",
+    borderRadius: 13,
     height: 48,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 8,
   },
   loginSubmitButtonInactive: {
-    backgroundColor: "#a7f3d0",
-    opacity: 0.85,
+    backgroundColor: "rgba(148, 163, 184, 0.38)",
+    opacity: 0.9,
   },
   loginSubmitButtonText: {
     color: "#ffffff",
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
     fontFamily: "'Nunito', sans-serif",
   },
   loginBottomPromptRow: {
@@ -5494,7 +5690,7 @@ const styles = StyleSheet.create({
   passwordResetCard: {
     width: "100%",
     maxWidth: 440,
-    backgroundColor: "#ffffff",
+    backgroundColor: "rgba(255, 255, 255, 0.96)",
     borderRadius: 16,
     padding: 20,
     shadowColor: "#000",
@@ -5521,7 +5717,7 @@ const styles = StyleSheet.create({
   },
   serverModalInputLabel: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#475569",
     marginBottom: 5,
   },
@@ -5538,6 +5734,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: "#166534",
     alignItems: "center",
+    justifyContent: "center",
+  },
+  mobileContentContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 28,
     justifyContent: "center",
   },
   passwordResetPrimaryButtonText: {

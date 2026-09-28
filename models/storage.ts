@@ -4317,7 +4317,10 @@ export async function sendRejectionEmail(
 
 // Partner Storage
 // Inserts or updates a partner organization record.
-export async function savePartner(partner: Partner): Promise<void> {
+export async function savePartner(
+  partner: Partner,
+  options?: { existingPartner?: Partner },
+): Promise<void> {
   if (partner.contactEmail?.trim() && !isValidEmailAddress(partner.contactEmail.trim().toLowerCase())) {
     throw new Error('Please enter a valid partner email address.');
   }
@@ -4325,7 +4328,7 @@ export async function savePartner(partner: Partner): Promise<void> {
     throw new Error('Use a valid 11-digit Philippine mobile number for the partner record.');
   }
 
-  const existingPartner = await getPartner(partner.id);
+  const existingPartner = options?.existingPartner || await getPartner(partner.id);
 
   let ownerUserId = partner.ownerUserId || existingPartner?.ownerUserId;
   if (!ownerUserId && partner.contactEmail?.trim()) {
@@ -4857,7 +4860,18 @@ export async function getProject(id: string): Promise<Project | null> {
 }
 
 // Returns all projects and events from shared storage.
-export async function getAllProjects(includeImages: boolean = false): Promise<Project[]> {
+export async function getAllProjects(
+  includeImages: boolean = false,
+  options?: { forceRefresh?: boolean },
+): Promise<Project[]> {
+  if (options?.forceRefresh) {
+    invalidateSharedStorageCache([
+      STORAGE_KEYS.PROGRAMS,
+      STORAGE_KEYS.PROJECTS,
+      STORAGE_KEYS.EVENTS,
+    ]);
+  }
+
   const [programs, projects, events] = await Promise.all([
     getStorageItemFast<Project[]>(STORAGE_KEYS.PROGRAMS, includeImages),
     getStorageItemFast<Project[]>(STORAGE_KEYS.PROJECTS, includeImages),
@@ -5817,9 +5831,17 @@ export async function saveVolunteerProjectMatch(match: VolunteerProjectMatch): P
 }
 
 // Returns match records for one volunteer profile.
-export async function getVolunteerProjectMatches(volunteerId: string): Promise<VolunteerProjectMatch[]> {
-  const matches =
-    (await getStorageItemFast<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES)) || [];
+export async function getVolunteerProjectMatches(
+  volunteerId: string,
+  options?: { forceRefresh?: boolean }
+): Promise<VolunteerProjectMatch[]> {
+  if (options?.forceRefresh) {
+    invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEER_MATCHES]);
+  }
+
+  const matches = options?.forceRefresh
+    ? (await getStorageItem<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES)) || []
+    : (await getStorageItemFast<VolunteerProjectMatch[]>(STORAGE_KEYS.VOLUNTEER_MATCHES)) || [];
   return matches
     .filter(m => m.volunteerId === volunteerId)
     .sort((a, b) => new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime());
@@ -6050,9 +6072,15 @@ export async function getVolunteerProjectJoinRecords(
     .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
 }
 
-export async function getAllVolunteerProjectJoinRecords(): Promise<VolunteerProjectJoinRecord[]> {
-  const records =
-    (await getStorageItemFast<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS)) || [];
+export async function getAllVolunteerProjectJoinRecords(
+  options?: { forceRefresh?: boolean },
+): Promise<VolunteerProjectJoinRecord[]> {
+  if (options?.forceRefresh) {
+    invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS]);
+  }
+  const records = options?.forceRefresh
+    ? (await getStorageItem<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS)) || []
+    : (await getStorageItemFast<VolunteerProjectJoinRecord[]>(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS)) || [];
   return records
     .map(record => ({
       ...record,
@@ -6313,6 +6341,7 @@ export async function submitPartnerProgramProposal(
   options?: {
     programModule?: string;
     proposalDetails?: PartnerProjectProposalDetails;
+    onMessage?: (message: Message) => void;
   }
 ): Promise<PartnerProjectApplication> {
   const requestedProgramModule = String(options?.programModule || '').trim();
@@ -6324,7 +6353,10 @@ export async function submitPartnerProgramProposal(
         ? buildProgramProposalProjectId(requestedProgramModule)
         : normalizedProjectId;
 
-  const payload = await requestApiJson<{ application?: PartnerProjectApplication | null }>(
+  const payload = await requestApiJson<{
+    application?: PartnerProjectApplication | null;
+    message?: Message | null;
+  }>(
     '/partner-project-applications/request',
     {
       method: 'POST',
@@ -6347,6 +6379,9 @@ export async function submitPartnerProgramProposal(
   }
 
   updatePartnerProjectApplicationCache(payload.application);
+  if (payload.message) {
+    options?.onMessage?.(payload.message);
+  }
 
   return payload.application;
 }
@@ -6477,6 +6512,7 @@ export async function reviewPartnerRegistration(
     validatedBy: reviewedBy,
     validatedAt: now,
     credentialsUnlockedAt: status === 'Approved' ? now : undefined,
+    verificationNotes: rejectionReason?.trim() || partner.verificationNotes,
   };
 
   const linkedUser = await getLinkedUserAccountForPartner(updatedPartner);
@@ -6494,7 +6530,13 @@ export async function reviewPartnerRegistration(
     : Promise.resolve();
 
   // These are independent targeted writes; wait for the slower one only once.
-  await Promise.all([savePartner(updatedPartner), linkedUserUpdate]);
+  // The partner was already fetched above, so avoid a second read before the
+  // targeted partner write. This makes approval/rejection noticeably faster on
+  // mobile connections while preserving the same normalization behavior.
+  await Promise.all([
+    savePartner(updatedPartner, { existingPartner: partner }),
+    linkedUserUpdate,
+  ]);
 
   if (status === 'Approved') {
     void sendAccountApprovalEmailNotification(

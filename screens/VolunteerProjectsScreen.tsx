@@ -147,11 +147,15 @@ function getProgramIcon(programId?: string, iconValue?: string): keyof typeof Ma
   return getProgramVisual(programId).icon;
 }
 
-function getEventStatusLabel(match?: VolunteerProjectMatch, joinedByUser?: boolean): string {
+function getEventStatusLabel(
+  match?: VolunteerProjectMatch,
+  joinedByUser?: boolean,
+  participationStatus?: VolunteerProjectJoinRecord['participationStatus']
+): string {
+  if (participationStatus === 'Completed' || match?.status === 'Completed') return 'Completed';
+  if (participationStatus === 'Active' || match?.status === 'Matched' || joinedByUser) return 'Joined';
   if (match?.status === 'Requested') return 'Pending review';
   if (match?.status === 'Rejected') return 'Request rejected';
-  if (match?.status === 'Matched' || joinedByUser) return 'Joined';
-  if (match?.status === 'Completed') return 'Completed';
   return 'Open to join';
 }
 
@@ -192,7 +196,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     }
   }, [route?.params?.projectId, records, programs]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
     if (!user) return;
     const shouldShowBlockingLoader = !hasLoadedOnceRef.current;
     try {
@@ -205,7 +209,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         const snapshot = await getProjectsScreenSnapshot(
           user,
           ['projects', 'programs', 'programTracks', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords'],
-          false,
+          forceRefresh,
           false,
         );
         const snapshotRecords = snapshot.projects || [];
@@ -258,7 +262,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         void getProjectsScreenSnapshot(
           user,
           ['projects', 'programs', 'programTracks'],
-          false,
+          forceRefresh,
           true,
         )
           .then(imageSnapshot => {
@@ -306,8 +310,11 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
   }, [user]);
 
   useFocusEffect(useCallback(() => {
-    void loadData();
-    return subscribeToStorageChanges(['projects', 'events', 'programs', 'volunteerMatches', 'volunteerProjectJoins'], loadData);
+    void loadData(true);
+    return subscribeToStorageChanges(
+      ['projects', 'events', 'programs', 'volunteerMatches', 'volunteerProjectJoins'],
+      () => loadData(true),
+    );
   }, [loadData]));
 
   const projectsOnly = useMemo(() => {
@@ -466,10 +473,23 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     [volunteerMatches]
   );
 
+  const joinRecordByProjectId = useMemo(
+    () => new Map(joinRecords.map(record => [record.projectId, record])),
+    [joinRecords]
+  );
+
   const screenStats = useMemo(() => {
     const eventRecords = records.filter(project => project.isEvent);
     const pendingCount = volunteerMatches.filter(match => match.status === 'Requested').length;
-    const joinedCount = volunteerMatches.filter(match => match.status === 'Matched' || match.status === 'Completed').length;
+    const joinedEventIds = new Set([
+      ...joinRecords
+        .filter(record => record.participationStatus === 'Active' || record.participationStatus === 'Completed')
+        .map(record => record.projectId),
+      ...volunteerMatches
+        .filter(match => match.status === 'Matched' || match.status === 'Completed')
+        .map(match => match.projectId),
+    ]);
+    const joinedCount = joinedEventIds.size;
 
     return {
       programCount: programGroups.length,
@@ -478,7 +498,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       pendingCount,
       joinedCount,
     };
-  }, [programGroups.length, projectsOnly.length, records, volunteerMatches]);
+  }, [joinRecords, programGroups.length, projectsOnly.length, records, volunteerMatches]);
 
   const nextOpenEvent = useMemo(() => {
     const now = Date.now();
@@ -486,8 +506,13 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       .filter(project => project.isEvent)
       .filter(event => {
         const match = matchByProjectId.get(event.id);
-        // Rejected matches should NOT hide the event — the volunteer can re-apply
-        if (match && match.status !== 'Rejected') return false;
+        const joinRecord = joinRecordByProjectId.get(event.id);
+        // Rejected matches should NOT hide the event — the volunteer can re-apply.
+        if (
+          (match && match.status !== 'Rejected') ||
+          joinRecord?.participationStatus === 'Active' ||
+          joinRecord?.participationStatus === 'Completed'
+        ) return false;
         return true;
       })
       .filter(event => {
@@ -495,7 +520,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         return Number.isNaN(start) || start >= now;
       })
       .sort(sortByDate)[0] || null;
-  }, [matchByProjectId, records]);
+  }, [joinRecordByProjectId, matchByProjectId, records]);
 
   const handleJoin = async (eventId: string) => {
     if (!user?.id) return;
@@ -598,11 +623,15 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
 
   const renderEventCard = (event: Project) => {
     const match = matchByProjectId.get(event.id);
-    const joinedByUser = (event.joinedUserIds || []).includes(user?.id || '');
+    const joinRecord = joinRecordByProjectId.get(event.id);
+    const joinedByUser =
+      (event.joinedUserIds || []).includes(user?.id || '') ||
+      joinRecord?.participationStatus === 'Active' ||
+      joinRecord?.participationStatus === 'Completed';
     const isJoined = (match?.status === 'Matched' || match?.status === 'Completed') || joinedByUser;
-    const isPending = match?.status === 'Requested';
+    const isPending = !isJoined && match?.status === 'Requested';
     const visual = getProgramVisual(event.programModule || event.category);
-    const statusLabel = getEventStatusLabel(match, joinedByUser);
+    const statusLabel = getEventStatusLabel(match, joinedByUser, joinRecord?.participationStatus);
     const isLoading = loadingProjectId === event.id;
 
     // Check if event is completed or cancelled

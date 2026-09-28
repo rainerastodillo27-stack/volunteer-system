@@ -44,6 +44,7 @@ import { navigateToAvailableRoute } from '../utils/navigation';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { requestPhotoPrivacyConsent } from '../utils/photoConsent';
+import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import {
   getStableImageSource,
   mergeProjectRecordsPreservingMedia,
@@ -680,7 +681,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
   const loadProjectsData = useCallback(async (forceRefresh = false) => {
     const startedAt = perfNow();
     try {
-      const snapshot = await getProjectsScreenSnapshot(user, ['projects', 'volunteerProfile'], forceRefresh, false);
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'volunteerProfile', 'volunteerMatches', 'volunteerJoinRecords', 'timeLogs'],
+        forceRefresh,
+        false,
+      );
       applySnapshot(snapshot);
 
       // Project cards can render with their normal placeholders while the
@@ -732,7 +738,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
   useFocusEffect(
     React.useCallback(() => {
-      void loadProjectsData();
+      void loadProjectsData(user?.role === 'volunteer');
       return subscribeToStorageChanges(
         ['projects', 'events', 'programs', 'volunteers', 'volunteerProjectJoins', 'volunteerTimeLogs', 'partnerProjectApplications', 'partnerReports', 'volunteerMatches'],
         () => {
@@ -755,15 +761,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
       // Check if event is full before allowing join
       if (selectedProject.isEvent) {
         const volunteersNeeded = selectedProject.volunteersNeeded || 0;
-        const currentVolunteers = selectedProject.volunteers?.length || 0;
-        const pendingJoinRequests = volunteerMatches.filter(
-          match => match.projectId === projectId && match.status === 'Requested'
-        ).length;
-        const approvedJoinRequests = volunteerJoinRecords.filter(
-          record => record.projectId === projectId
-        ).length;
-        
-        const totalSlotsTaken = currentVolunteers + pendingJoinRequests + approvedJoinRequests;
+        const totalSlotsTaken = getActiveProjectJoinCount(
+          selectedProject,
+          volunteerJoinRecords,
+          volunteerMatches,
+          allVolunteers,
+        );
         
         if (totalSlotsTaken >= volunteersNeeded && volunteersNeeded > 0) {
           Alert.alert(
@@ -1482,6 +1485,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
       return false;
     }
 
+    const joinRecord = volunteerJoinRecordByProjectId.get(project.id);
+    const hasConfirmedJoin =
+      joinRecord?.participationStatus === 'Active' ||
+      joinRecord?.participationStatus === 'Completed';
     const joinedUsers = project.joinedUserIds || [];
     const volunteerId = volunteerProfile?.id;
     const isVolunteerAssigned = (project.internalTasks || []).some(
@@ -1491,9 +1498,10 @@ export default function ProjectsScreen({ navigation, route }: any) {
     return (
       (user?.id ? joinedUsers.includes(user.id) : false) ||
       (volunteerId ? project.volunteers.includes(volunteerId) : false) ||
-      isVolunteerAssigned
+      isVolunteerAssigned ||
+      hasConfirmedJoin
     );
-  }, [user?.id, volunteerProfile?.id]);
+  }, [user?.id, volunteerProfile?.id, volunteerJoinRecordByProjectId]);
 
   const getVolunteerEventActionState = useCallback((project: Project) => {
     const displayStatus = getProjectDisplayStatus(project);
@@ -1551,14 +1559,12 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
     // Check if event has reached capacity
     const volunteersNeeded = project.volunteersNeeded || 0;
-    const currentVolunteers = project.volunteers?.length || 0;
-    const pendingJoinRequests = volunteerMatches.filter(
-      match => match.projectId === project.id && match.status === 'Requested'
-    ).length;
-    const approvedJoinRequests = volunteerJoinRecords.filter(
-      record => record.projectId === project.id
-    ).length;
-    const totalSlotsTaken = currentVolunteers + pendingJoinRequests + approvedJoinRequests;
+    const totalSlotsTaken = getActiveProjectJoinCount(
+      project,
+      volunteerJoinRecords,
+      volunteerMatches,
+      allVolunteers,
+    );
     const isEventFull = project.isEvent && volunteersNeeded > 0 && totalSlotsTaken >= volunteersNeeded;
 
     const statusMessage = completedParticipation

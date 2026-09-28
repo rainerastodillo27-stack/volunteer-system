@@ -15,6 +15,8 @@ import {
 
   StyleSheet,
 
+  StatusBar,
+
   Text,
 
   TextInput,
@@ -304,9 +306,10 @@ function getLocalHiddenMessagesKey(userId: string): string {
   return `${LOCAL_HIDDEN_MESSAGES_KEY_PREFIX}${encodeURIComponent(userId)}`;
 }
 
-// WebSocket delivery is immediate. This is only a low-frequency fallback when
-// a device briefly loses its socket, not a second-by-second database poll.
-const DIRECT_BACKEND_MESSAGE_POLL_MS = 20000;
+// WebSocket delivery is immediate. This is a short fallback only for a device
+// that briefly loses its socket. It must force a fresh conversation read so a
+// cached thread cannot hide a newly-created proposal/review card.
+const DIRECT_BACKEND_MESSAGE_POLL_MS = 5000;
 
 
 
@@ -436,6 +439,29 @@ function isRetiredNvcAdminAccount(candidate: User): boolean {
     normalizedEmail === 'nvc@gmail.com' ||
     normalizedEmail === 'admin@nvc.org'
   );
+}
+
+function getMessagingDisplayName(
+  candidate?: { name?: string | null; role?: string | null; email?: string | null } | null,
+): string {
+  const name = String(candidate?.name || "").trim();
+  const email = String(candidate?.email || "").trim().toLowerCase();
+  const normalizedName = name.toLowerCase();
+  const role = String(candidate?.role || "").trim().toLowerCase();
+
+  if (
+    role === "admin" &&
+    (normalizedName === "nvc" ||
+      normalizedName === "nvc admin account" ||
+      normalizedName === "nvc administrator" ||
+      email === "nvc@gmail.com" ||
+      email === "admin@nvc.org")
+  ) {
+    return "NVC Administrator";
+  }
+
+  if (name) return name;
+  return role === "admin" ? "NVC Administrator" : "NVC Member";
 }
 
 function parseProposalCardContent(content?: string): any | null {
@@ -820,6 +846,17 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
   }, []);
 
   const isWide = !isMobileMode && width >= 1024;
+
+  // Android's non-translucent status bar already reserves the top inset. Keep
+  // the extra top spacing only for iOS, where screen content can extend under
+  // the status bar.
+  const mobileHeaderTopInset = Platform.OS === 'ios' ? insets.top : 0;
+  const mobileHeaderLayoutStyle = !isWide
+    ? {
+        paddingTop: mobileHeaderTopInset,
+        height: 64 + mobileHeaderTopInset,
+      }
+    : undefined;
 
   const isTablet = !isMobileMode && width >= 768;
 
@@ -1919,7 +1956,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       const backendMessagePoll = setInterval(() => {
 
-        void refreshStoredDirectMessages(false);
+        void refreshStoredDirectMessages(true);
 
       }, DIRECT_BACKEND_MESSAGE_POLL_MS);
 
@@ -3255,6 +3292,39 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       await submitPartnerProgramProposal(proposalIntent.projectId || 'new', user, {
         programModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
         proposalDetails,
+        onMessage: submittedMessage => {
+          const otherUserId = submittedMessage.senderId === messageUserId
+            ? submittedMessage.recipientId
+            : submittedMessage.senderId;
+          if (!otherUserId) return;
+
+          invalidateMessageCache(messageUserId, otherUserId);
+          const mergedMessages = mergeChatMessageLists(directMessagesRef.current, [submittedMessage]);
+          directMessagesRef.current = mergedMessages;
+          setDirectMessages(mergedMessages);
+          setConversations(current => {
+            const existingConversation = current.find(item => item.user.id === otherUserId);
+            const nextConversations = current.map(item => (
+              item.user.id === otherUserId
+                ? { ...item, lastMessage: submittedMessage }
+                : item
+            ));
+            if (!existingConversation) {
+              const otherUser = allUsersRef.current.find(candidate => candidate.id === otherUserId);
+              if (otherUser) {
+                nextConversations.push({ user: otherUser, lastMessage: submittedMessage, unreadCount: 0 });
+              }
+            }
+            return nextConversations.sort(
+              (left, right) =>
+                new Date(right.lastMessage?.timestamp || 0).getTime() -
+                new Date(left.lastMessage?.timestamp || 0).getTime()
+            );
+          });
+          if (selectedUserRef.current?.id === otherUserId) {
+            setMessages(current => mergeChatMessageLists(current as Message[], [submittedMessage]));
+          }
+        },
       });
 
       console.log('✅ Proposal submitted successfully, refreshing messages...');
@@ -3630,7 +3700,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     if (senderId === messageUserId || senderId === user?.id) {
       return {
         id: senderId,
-        name: user?.name || 'You',
+        name: user?.name ? getMessagingDisplayName(user) : 'You',
         profilePhoto: user?.profilePhoto,
       };
     }
@@ -3638,15 +3708,26 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
     const selectedConversationUser = selectedUser?.id === senderId ? selectedUser : null;
     const knownUser = selectedConversationUser || allUsers.find(candidate => candidate.id === senderId);
     if (knownUser) {
-      return knownUser;
+      return {
+        ...knownUser,
+        name: getMessagingDisplayName(knownUser),
+      };
     }
 
     const projectMember = selectedProjectChat?.members.find(member => member.id === senderId);
     if (projectMember) {
-      return projectMember;
+      return {
+        ...projectMember,
+        name: getMessagingDisplayName(projectMember),
+      };
     }
 
-    return { id: senderId, name: 'NVC Member' };
+    return {
+      id: senderId,
+      name: user?.role === 'volunteer' || user?.role === 'partner'
+        ? 'NVC Administrator'
+        : 'NVC Member',
+    };
   }, [allUsers, messageUserId, selectedProjectChat?.members, selectedUser, user]);
 
   const renderMessageSenderIdentity = (senderId: string, showIdentity: boolean) => {
@@ -4068,11 +4149,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         <View style={styles.detail}>
 
+          <StatusBar barStyle="dark-content" backgroundColor="#ffffff" translucent={false} />
+
           <View
             style={[
               styles.detailHeader,
               !isWide && styles.detailHeaderMobile,
-              !isWide && { paddingTop: insets.top, height: 64 + insets.top },
+              mobileHeaderLayoutStyle,
             ]}
           >
 
@@ -4624,11 +4707,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         <View style={styles.detail}>
 
+          <StatusBar barStyle="dark-content" backgroundColor="#ffffff" translucent={false} />
+
           <View
             style={[
               styles.detailHeader,
               !isWide && styles.detailHeaderMobile,
-              !isWide && { paddingTop: insets.top, height: 64 + insets.top },
+              mobileHeaderLayoutStyle,
             ]}
           >
 
@@ -5061,7 +5146,9 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
 
 
-    const title = selectedUser?.name || selectedProjectChat?.project.title;
+    const title = selectedUser
+      ? getMessagingDisplayName(selectedUser)
+      : selectedProjectChat?.project.title;
 
     const subtitle = selectedUser
 
@@ -5085,11 +5172,13 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
       <View style={styles.detail}>
 
+        <StatusBar barStyle="dark-content" backgroundColor="#ffffff" translucent={false} />
+
         <View
           style={[
             styles.detailHeader,
             !isWide && styles.detailHeaderMobile,
-            !isWide && { paddingTop: insets.top, height: 64 + insets.top },
+            mobileHeaderLayoutStyle,
           ]}
         >
 

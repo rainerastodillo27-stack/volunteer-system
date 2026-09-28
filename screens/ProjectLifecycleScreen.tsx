@@ -3832,6 +3832,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [eventWorkspaceTab, setEventWorkspaceTab] = useState<'Attendance' | 'Tasks'>('Attendance');
 
   const [selectedEventMatches, setSelectedEventMatches] = useState<VolunteerProjectMatch[]>([]);
+  const volunteerApplicationsLoadRequestRef = React.useRef(0);
 
   const [reviewActionLoadingId, setReviewActionLoadingId] = useState<string | null>(null);
 
@@ -11803,72 +11804,57 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-  const handleOpenVolunteerApplications = async (projectId: string) => {
+  const handleOpenVolunteerApplications = (projectId: string) => {
+    setEventWorkspaceTab('Attendance');
 
-    try {
-
-      setEventWorkspaceTab('Attendance');
-
-      const selected = projects.find(project => project.id === projectId) || null;
-
-      const projectIds = new Set<string>([projectId]);
-
-      if (selected?.parentProjectId) {
-
-        projectIds.add(String(selected.parentProjectId).trim());
-
-      }
-
-      const targetTitle = String(selected?.title || '').trim().toLowerCase();
-
-      projects.forEach(project => {
-
-        if (String(project.title || '').trim().toLowerCase() === targetTitle) {
-
-          projectIds.add(String(project.id || '').trim());
-
-          if (project.parentProjectId) {
-
-            projectIds.add(String(project.parentProjectId).trim());
-
-          }
-
-        }
-
-      });
-
-      const matches = (await getAllVolunteerProjectMatches()).filter(match =>
-
-        projectIds.has(String(match.projectId || '').trim())
-
-      );
-
-      setSelectedEventMatches(matches || []);
-
-
-
-      // Default to first match if available
-
-      if (matches && matches.length > 0) {
-
-        setSelectedMatch(matches[0]);
-
-      } else {
-
-        setSelectedMatch(null);
-
-      }
-
-
-
-      setShowVolunteerApplicationsModal(true);
-
-    } catch (error) {
-
-      Alert.alert('Error', getRequestErrorMessage(error, 'Failed to load volunteer matches.'));
-
+    const selected = projects.find(project => project.id === projectId) || null;
+    const projectIds = new Set<string>([projectId]);
+    if (selected?.parentProjectId) {
+      projectIds.add(String(selected.parentProjectId).trim());
     }
 
+    const targetTitle = String(selected?.title || '').trim().toLowerCase();
+    projects.forEach(project => {
+      if (String(project.title || '').trim().toLowerCase() === targetTitle) {
+        projectIds.add(String(project.id || '').trim());
+        if (project.parentProjectId) {
+          projectIds.add(String(project.parentProjectId).trim());
+        }
+      }
+    });
+
+    // The selected project already has its matches loaded while its detail
+    // view is open. Render those immediately instead of blocking the modal
+    // on a full volunteerMatches collection fetch.
+    const cachedMatches = volunteerMatches.filter(match =>
+      projectIds.has(String(match.projectId || '').trim())
+    );
+    setSelectedEventMatches(cachedMatches);
+    setSelectedMatch(cachedMatches[0] || null);
+    setShowVolunteerApplicationsModal(true);
+
+    // Refresh related/legacy project ids in the background. This preserves
+    // compatibility with older records without delaying the first paint.
+    const requestId = ++volunteerApplicationsLoadRequestRef.current;
+    void getAllVolunteerProjectMatches()
+      .then(allMatches => {
+        if (requestId !== volunteerApplicationsLoadRequestRef.current) {
+          return;
+        }
+        const matches = allMatches.filter(match =>
+          projectIds.has(String(match.projectId || '').trim())
+        );
+        setSelectedEventMatches(matches);
+        setSelectedMatch(current => {
+          if (current) {
+            return matches.find(match => match.id === current.id) || matches[0] || null;
+          }
+          return matches[0] || null;
+        });
+      })
+      .catch(error => {
+        console.warn('Failed to refresh volunteer matches in the background:', error);
+      });
   };
 
 

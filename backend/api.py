@@ -220,7 +220,11 @@ def _set_browser_session_cookie(response: Response, request: FastAPIRequest, tok
 def _apply_security_headers(response, request: FastAPIRequest):
     """Apply response hardening without assuming TLS is already configured."""
     is_attachment_response = request.url.path.startswith("/attachments/")
-    if request.url.path.startswith("/auth/") or request.url.path == "/db-health":
+    if (
+        request.url.path.startswith("/auth/")
+        or request.url.path == "/health"
+        or request.url.path == "/db-health"
+    ):
         response.headers.setdefault("Cache-Control", "no-store")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     # Attachment URLs are opaque capability URLs consumed by browser/native
@@ -5238,14 +5242,31 @@ def _build_projects_snapshot(
                 else _strip_lightweight_media("volunteers", volunteer)
             )
         if volunteer is not None:
+            volunteer_identifiers = {
+                str(identifier).strip()
+                for identifier in (volunteer.get("id"), volunteer.get("userId"))
+                if str(identifier or "").strip()
+            }
+
+            def get_records_for_volunteer(collection_key: str) -> list[dict[str, Any]]:
+                records_by_id: dict[str, dict[str, Any]] = {}
+                for field_name in ("volunteerId", "volunteerUserId"):
+                    for identifier in volunteer_identifiers:
+                        records = _postgres_get_hot_items_by_field(
+                            connection,
+                            collection_key,
+                            field_name,
+                            identifier,
+                        )
+                        for record in records:
+                            record_id = str(record.get("id") or "").strip()
+                            dedupe_key = record_id or json.dumps(record, sort_keys=True, default=str)
+                            records_by_id[dedupe_key] = record
+                return list(records_by_id.values())
+
             if include_volunteer_matches:
                 snapshot["volunteerMatches"] = _sort_iso_desc(
-                    _postgres_get_hot_items_by_field(
-                        connection,
-                        "volunteerMatches",
-                        "volunteerId",
-                        volunteer["id"],
-                    ),
+                    get_records_for_volunteer("volunteerMatches"),
                     "matchedAt",
                 )
             if include_time_logs:
@@ -5260,12 +5281,7 @@ def _build_projects_snapshot(
                     else _strip_lightweight_media("volunteerTimeLogs", time_logs)
                 )
             if include_join_records:
-                volunteer_join_records = _postgres_get_hot_items_by_field(
-                    connection,
-                    "volunteerProjectJoins",
-                    "volunteerId",
-                    volunteer["id"],
-                )
+                volunteer_join_records = get_records_for_volunteer("volunteerProjectJoins")
                 snapshot["volunteerJoinRecords"] = _sort_iso_desc(
                     [
                         record
@@ -5628,46 +5644,27 @@ def startup() -> None:
 # Returns a lightweight service summary.
 def health():
     configured_mode = get_configured_db_mode()
-    timestamp = datetime.now(timezone.utc).isoformat()
 
     if configured_mode != "postgres":
         return JSONResponse(
             status_code=503,
-            content={
-                "status": "error",
-                "configured_mode": configured_mode,
-                "detail": "Supabase Postgres is not configured for this backend.",
-                "timestamp": timestamp,
-            },
+            content={"status": "error"},
         )
 
     # This endpoint is used by startup scripts and frontend readiness checks.
     # Keep it process-local; /db-health performs the live database probe.
-    return {
-        "status": "ok",
-        "configured_mode": configured_mode,
-        "mode": "postgres",
-        "timestamp": timestamp,
-    }
+    return {"status": "ok"}
 
 
 @app.get("/db-health", response_model=None)
 # Returns only non-sensitive database status for readiness checks.
 def db_health(force: bool = False):
-    configured_mode = get_configured_db_mode()
-    available, error = get_postgres_status(force_refresh=force)
-    timestamp = datetime.now(timezone.utc).isoformat()
+    available, _error = get_postgres_status(force_refresh=force)
 
     status_code = 200 if available else 503
     payload = {
         "status": "ok" if available else "error",
-        "configured_mode": configured_mode,
-        "mode": get_db_mode(),
         "available": available,
-        # Never return database URLs, usernames, passwords, candidate hosts,
-        # or raw driver errors from a public readiness endpoint.
-        "error": "Database unavailable." if not available else None,
-        "timestamp": timestamp,
     }
 
     return JSONResponse(status_code=status_code, content=payload)
@@ -5907,8 +5904,8 @@ _PROPOSAL_CARD_PREFIX = "___PROPOSAL_CARD___:"
 async def _create_proposal_submission_message(
     application: dict[str, Any],
     sender_id: str,
-) -> None:
-    """Persist and publish a proposal card without blocking the submit response."""
+) -> dict[str, Any] | None:
+    """Persist and publish a proposal card before the submit response returns."""
     def persist_message() -> dict[str, Any]:
         ensure_message_storage_once()
         from uuid import uuid4
@@ -5955,8 +5952,10 @@ async def _create_proposal_submission_message(
         message_data = await asyncio.to_thread(persist_message)
         _invalidate_collection_cache(["messages"])
         asyncio.create_task(connection_manager.broadcast_message_event(message_data))
+        return message_data
     except Exception as error:
         print(f"[ERROR] Error creating proposal message: {error}")
+        return None
 
 
 def _proposal_card_payload(content: Any) -> dict[str, Any] | None:
@@ -8509,10 +8508,14 @@ async def request_partner_project_join(
                     _invalidate_collection_cache(["partnerProjectApplications"])
                     _projects_snapshot_cache.clear()
                     asyncio.create_task(connection_manager.broadcast_storage_event(["partnerProjectApplications"]))
-                    asyncio.create_task(
-                        _create_proposal_submission_message(refreshed_application, payload.partnerUserId)
+                    submission_message = await _create_proposal_submission_message(
+                        refreshed_application,
+                        payload.partnerUserId,
                     )
-                    return {"application": refreshed_application}
+                    response: dict[str, Any] = {"application": refreshed_application}
+                    if submission_message is not None:
+                        response["message"] = submission_message
+                    return response
 
         application = {
             "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{secrets.token_hex(4)}",
@@ -8543,11 +8546,11 @@ async def request_partner_project_join(
     _projects_snapshot_cache.clear()
     
     asyncio.create_task(connection_manager.broadcast_storage_event(["partnerProjectApplications"]))
-    asyncio.create_task(
-        _create_proposal_submission_message(application, payload.partnerUserId)
-    )
-    
-    return {"application": application}
+    submission_message = await _create_proposal_submission_message(application, payload.partnerUserId)
+    response: dict[str, Any] = {"application": application}
+    if submission_message is not None:
+        response["message"] = submission_message
+    return response
 
 
 @app.patch("/partner-project-applications/{application_id}/details")

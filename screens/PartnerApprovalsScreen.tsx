@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -17,7 +17,7 @@ import { format } from 'date-fns';
 import { Partner } from '../models/types';
 import {
   getAllPartners,
-  savePartner,
+  reviewPartnerRegistration,
   subscribeToStorageChanges,
 } from '../models/storage';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,89 +36,133 @@ export default function PartnerApprovalsScreen({ navigation }: any) {
   const [rejectionNotes, setRejectionNotes] = useState('');
   const [approvalNotes, setApprovalNotes] = useState('');
   const [action, setAction] = useState<'approve' | 'reject' | null>(null);
+  const [processingAction, setProcessingAction] = useState<string | null>(null);
+  const hasLoadedPartnersRef = useRef(false);
+  const loadPartnersRequestRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (!isAdmin) return;
-    loadPartners();
+    void loadPartners();
 
     const unsubscribe = subscribeToStorageChanges(['partners'], () => {
-      loadPartners();
+      void loadPartners({ showBlockingLoader: false });
     });
 
     return () => unsubscribe?.();
   }, [isAdmin]);
 
-  const loadPartners = async () => {
-    setLoading(true);
+  const loadPartners = async ({ showBlockingLoader = !hasLoadedPartnersRef.current } = {}) => {
+    if (loadPartnersRequestRef.current) {
+      return loadPartnersRequestRef.current;
+    }
+
+    const request = (async () => {
+      if (showBlockingLoader) {
+        setLoading(true);
+      }
+
+      try {
+        const allPartners = await getAllPartners();
+        setPartnersPending(allPartners.filter(p => p.status === 'Pending'));
+        setPartnersApproved(allPartners.filter(p => p.status === 'Approved'));
+        setPartnersRejected(allPartners.filter(p => p.status === 'Rejected'));
+        setLoadError(null);
+        hasLoadedPartnersRef.current = true;
+      } catch (error) {
+        setLoadError({
+          title: getRequestErrorTitle(error),
+          message: getRequestErrorMessage(error, 'Failed to load partners.'),
+        });
+      } finally {
+        if (showBlockingLoader) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    loadPartnersRequestRef.current = request;
     try {
-      const allPartners = await getAllPartners();
-      const pending = allPartners.filter(p => p.status === 'Pending');
-      const approved = allPartners.filter(p => p.status === 'Approved');
-      const rejected = allPartners.filter(p => p.status === 'Rejected');
-      setPartnersPending(pending);
-      setPartnersApproved(approved);
-      setPartnersRejected(rejected);
-      setLoadError(null);
-    } catch (error) {
-      setLoadError({
-        title: getRequestErrorTitle(error),
-        message: getRequestErrorMessage(error, 'Failed to load partners.'),
-      });
+      await request;
     } finally {
-      setLoading(false);
+      if (loadPartnersRequestRef.current === request) {
+        loadPartnersRequestRef.current = null;
+      }
     }
   };
 
+  const applyPartnerUpdate = (updatedPartner: Partner) => {
+    const updateBucket = (partners: Partner[], status: Partner['status']) => {
+      const withoutUpdatedPartner = partners.filter(partner => partner.id !== updatedPartner.id);
+      return updatedPartner.status === status
+        ? [...withoutUpdatedPartner, updatedPartner]
+        : withoutUpdatedPartner;
+    };
+
+    setPartnersPending(current => updateBucket(current, 'Pending'));
+    setPartnersApproved(current => updateBucket(current, 'Approved'));
+    setPartnersRejected(current => updateBucket(current, 'Rejected'));
+  };
+
   const handleApprove = async () => {
-    if (!selectedPartner || !user?.id) return;
+    if (!selectedPartner || !user?.id || processingAction) return;
+
+    const partnerBeingReviewed = selectedPartner;
+    const actionKey = `approve:${partnerBeingReviewed.id}`;
+    setProcessingAction(actionKey);
 
     try {
-      const updatedPartner: Partner = {
-        ...selectedPartner,
-        status: 'Approved',
-        validatedBy: user.id,
-        validatedAt: new Date().toISOString(),
-        verificationNotes: approvalNotes.trim() || `Approved by admin on ${new Date().toLocaleString()}`,
-      };
-
-      await savePartner(updatedPartner);
+      const updatedPartner = await reviewPartnerRegistration(
+        partnerBeingReviewed.id,
+        'Approved',
+        user.id,
+        approvalNotes.trim() || undefined,
+      );
+      applyPartnerUpdate(updatedPartner);
       setShowModal(false);
       setSelectedPartner(null);
       setApprovalNotes('');
       setAction(null);
       Alert.alert('Success', 'Partner has been approved.');
-      await loadPartners();
+      void loadPartners({ showBlockingLoader: false });
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to approve partner.');
+      void loadPartners({ showBlockingLoader: false });
+    } finally {
+      setProcessingAction(null);
     }
   };
 
   const handleReject = async () => {
-    if (!selectedPartner || !user?.id) return;
+    if (!selectedPartner || !user?.id || processingAction) return;
 
     if (!rejectionNotes.trim()) {
       Alert.alert('Required', 'Please provide a rejection reason.');
       return;
     }
 
-    try {
-      const updatedPartner: Partner = {
-        ...selectedPartner,
-        status: 'Rejected',
-        validatedBy: user.id,
-        validatedAt: new Date().toISOString(),
-        verificationNotes: `Rejected: ${rejectionNotes.trim()}`,
-      };
+    const partnerBeingReviewed = selectedPartner;
+    const actionKey = `reject:${partnerBeingReviewed.id}`;
+    setProcessingAction(actionKey);
 
-      await savePartner(updatedPartner);
+    try {
+      const updatedPartner = await reviewPartnerRegistration(
+        partnerBeingReviewed.id,
+        'Rejected',
+        user.id,
+        `Rejected: ${rejectionNotes.trim()}`,
+      );
+      applyPartnerUpdate(updatedPartner);
       setShowModal(false);
       setSelectedPartner(null);
       setRejectionNotes('');
       setAction(null);
       Alert.alert('Success', 'Partner has been rejected.');
-      await loadPartners();
+      void loadPartners({ showBlockingLoader: false });
     } catch (error) {
       Alert.alert('Error', error instanceof Error ? error.message : 'Failed to reject partner.');
+      void loadPartners({ showBlockingLoader: false });
+    } finally {
+      setProcessingAction(null);
     }
   };
 
@@ -138,7 +182,12 @@ export default function PartnerApprovalsScreen({ navigation }: any) {
     setShowModal(true);
   };
 
-  const PartnerCard = ({ partner, onApprove, onReject }: { partner: Partner; onApprove: () => void; onReject: () => void }) => (
+  const PartnerCard = ({ partner, onApprove, onReject }: { partner: Partner; onApprove: () => void; onReject: () => void }) => {
+    const approveBusy = processingAction === `approve:${partner.id}`;
+    const rejectBusy = processingAction === `reject:${partner.id}`;
+    const actionBusy = Boolean(processingAction);
+
+    return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
         <View style={styles.cardTitle}>
@@ -192,18 +241,19 @@ export default function PartnerApprovalsScreen({ navigation }: any) {
 
       {partner.status === 'Pending' && (
         <View style={styles.cardActions}>
-          <TouchableOpacity style={[styles.btn, styles.btnApprove]} onPress={onApprove}>
-            <MaterialIcons name="check-circle" size={18} color="#fff" />
-            <Text style={styles.btnText}>Approve</Text>
+          <TouchableOpacity style={[styles.btn, styles.btnApprove, actionBusy && styles.btnDisabled]} onPress={onApprove} disabled={actionBusy}>
+            {approveBusy ? <ActivityIndicator size="small" color="#fff" /> : <MaterialIcons name="check-circle" size={18} color="#fff" />}
+            <Text style={styles.btnText}>{approveBusy ? 'Approving...' : 'Approve'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnReject]} onPress={onReject}>
-            <MaterialIcons name="cancel" size={18} color="#fff" />
-            <Text style={styles.btnText}>Reject</Text>
+          <TouchableOpacity style={[styles.btn, styles.btnReject, actionBusy && styles.btnDisabled]} onPress={onReject} disabled={actionBusy}>
+            {rejectBusy ? <ActivityIndicator size="small" color="#fff" /> : <MaterialIcons name="cancel" size={18} color="#fff" />}
+            <Text style={styles.btnText}>{rejectBusy ? 'Rejecting...' : 'Reject'}</Text>
           </TouchableOpacity>
         </View>
       )}
     </View>
-  );
+    );
+  };
 
   if (!isAdmin) {
     return (
@@ -281,10 +331,18 @@ export default function PartnerApprovalsScreen({ navigation }: any) {
         )}
       </ScrollView>
 
-      <Modal visible={showModal} animationType="slide" onRequestClose={() => setShowModal(false)}>
+      <Modal
+        visible={showModal}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!processingAction) {
+            setShowModal(false);
+          }
+        }}
+      >
         <View style={styles.modal}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowModal(false)}>
+            <TouchableOpacity onPress={() => setShowModal(false)} disabled={Boolean(processingAction)}>
               <MaterialIcons name="close" size={24} color="#1e293b" />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>{action === 'approve' ? 'Approve Partner' : 'Reject Partner'}</Text>
@@ -310,18 +368,25 @@ export default function PartnerApprovalsScreen({ navigation }: any) {
                     placeholder={action === 'approve' ? 'Add any approval notes...' : 'Please explain why this partner is being rejected...'}
                     value={action === 'approve' ? approvalNotes : rejectionNotes}
                     onChangeText={action === 'approve' ? setApprovalNotes : setRejectionNotes}
+                    editable={!processingAction}
                   />
                 </View>
 
                 <View style={styles.modalActions}>
-                  <TouchableOpacity style={[styles.btn, styles.btnCancel]} onPress={() => setShowModal(false)}>
+                  <TouchableOpacity style={[styles.btn, styles.btnCancel, processingAction && styles.btnDisabled]} onPress={() => setShowModal(false)} disabled={Boolean(processingAction)}>
                     <Text style={styles.btnCancelText}>Cancel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.btn, action === 'approve' ? styles.btnApprove : styles.btnReject]}
+                    style={[styles.btn, action === 'approve' ? styles.btnApprove : styles.btnReject, processingAction && styles.btnDisabled]}
                     onPress={action === 'approve' ? handleApprove : handleReject}
+                    disabled={Boolean(processingAction)}
                   >
-                    <Text style={styles.btnText}>{action === 'approve' ? 'Approve' : 'Reject'}</Text>
+                    {processingAction ? <ActivityIndicator size="small" color="#fff" /> : null}
+                    <Text style={styles.btnText}>
+                      {processingAction
+                        ? action === 'approve' ? 'Approving...' : 'Rejecting...'
+                        : action === 'approve' ? 'Approve' : 'Reject'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </>
@@ -358,6 +423,7 @@ const styles = StyleSheet.create({
   btn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: ModernTheme.spacing[2.5], borderRadius: ModernTheme.borderRadius.md, gap: ModernTheme.spacing[2], ...ModernTheme.shadows.xs },
   btnApprove: { backgroundColor: ModernTheme.colors.primary[600] },
   btnReject: { backgroundColor: ModernTheme.colors.error },
+  btnDisabled: { opacity: 0.65 },
   btnCancel: { backgroundColor: ModernTheme.colors.neutral[200] },
   btnText: { color: ModernTheme.colors.text.inverse, fontSize: ModernTheme.typography.fontSize.md, fontWeight: ModernTheme.typography.fontWeight.semibold },
   btnCancelText: { color: ModernTheme.colors.text.primary, fontSize: ModernTheme.typography.fontSize.md, fontWeight: ModernTheme.typography.fontWeight.semibold },

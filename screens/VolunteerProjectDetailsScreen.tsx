@@ -85,7 +85,7 @@ export default function VolunteerProjectDetailsScreen({
     });
   }, [navigation, project?.isEvent]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
     if (!projectId || !user?.id) {
       setLoading(false);
       return;
@@ -114,12 +114,12 @@ export default function VolunteerProjectDetailsScreen({
 
       const [projectData, matches, partnersList, projectsList, allJoins, volunteersList] = await Promise.all([
         getProject(projectId),
-        getVolunteerProjectMatches(volunteerId).catch(() => []),
+        getVolunteerProjectMatches(volunteerId, { forceRefresh }).catch(() => []),
         getAllPartners().catch(() => []),
         // The selected project is loaded by getProject; this list is only for
         // resolving its parent and does not need uploaded images.
-        getAllProjects(false).catch(() => []),
-        getAllVolunteerProjectJoinRecords().catch(() => []),
+        getAllProjects(false, { forceRefresh }).catch(() => []),
+        getAllVolunteerProjectJoinRecords({ forceRefresh }).catch(() => []),
         getAllVolunteers().catch(() => []),
       ]);
 
@@ -146,17 +146,17 @@ export default function VolunteerProjectDetailsScreen({
 
       if (reloadQueuedRef.current) {
         reloadQueuedRef.current = false;
-        void loadData();
+        void loadData(true);
       }
     }
   }, [projectId, user?.id]);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
+      loadData(true);
       return subscribeToStorageChanges(
         ['projects', 'events', 'volunteerMatches', 'volunteerProjectJoins'],
-        loadData,
+        () => loadData(true),
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
@@ -222,14 +222,22 @@ export default function VolunteerProjectDetailsScreen({
   }
 
   const currentMatch = volunteerMatches.find((m) => m.projectId === project.id);
+  const currentJoinRecord = joinRecords.find(record =>
+    record.projectId === project.id &&
+    (record.volunteerUserId === user?.id || record.volunteerId === volunteerProfile?.id)
+  );
   const joinedByUser =
     (project.joinedUserIds || []).includes(user?.id || '') ||
     Boolean(volunteerProfile?.id && (project.volunteers || []).includes(volunteerProfile.id));
+  const hasConfirmedJoin =
+    currentJoinRecord?.participationStatus === 'Active' ||
+    currentJoinRecord?.participationStatus === 'Completed';
   const isJoined =
     currentMatch?.status === 'Matched' ||
     currentMatch?.status === 'Completed' ||
-    joinedByUser;
-  const isPending = currentMatch?.status === 'Requested';
+    joinedByUser ||
+    hasConfirmedJoin;
+  const isPending = !isJoined && currentMatch?.status === 'Requested';
   const wasRejected = currentMatch?.status === 'Rejected';
 
   const partnerInfo = partners.find((p) => p.id === project.partnerId) || null;
