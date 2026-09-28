@@ -2487,9 +2487,17 @@ def _validate_storage_items(key: str, value: Any) -> list[dict[str, Any]]:
     return normalized_items
 
 
-def _get_special_storage_collection(connection: Any, key: str) -> list[dict[str, Any]]:
+def _get_special_storage_collection(
+    connection: Any,
+    key: str,
+    include_images: bool = True,
+) -> list[dict[str, Any]]:
     if key == "programTracks":
-        programs = get_postgres_hot_storage_collection(connection, "programs") or []
+        programs = get_postgres_hot_storage_collection(
+            connection,
+            "programs",
+            include_images=include_images,
+        ) or []
         tracks: list[dict[str, Any]] = []
         for p in programs:
             p_id = str(p.get("id") or "").strip()
@@ -3290,7 +3298,7 @@ def _get_cached_collection(
                 )
             return value if include_images else _strip_lightweight_media(key, value)
         if key in SPECIAL_STORAGE_KEYS:
-            value = _get_special_storage_collection(connection, key)
+            value = _get_special_storage_collection(connection, key, include_images=include_images)
             return value if include_images else _strip_lightweight_media(key, value)
         return None
 
@@ -3312,7 +3320,7 @@ def _get_cached_collection(
                 include_images=include_images,
             )
     elif key in SPECIAL_STORAGE_KEYS:
-        value = _get_special_storage_collection(connection, key)
+        value = _get_special_storage_collection(connection, key, include_images=include_images)
     else:
         value = None
 

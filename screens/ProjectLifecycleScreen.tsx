@@ -4498,22 +4498,40 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const snapshot = await getProjectsScreenSnapshot(
-        user,
-        ['projects', 'programTracks', 'volunteerJoinRecords'],
-        forceRefresh,
-        false,
-      );
+      const [snapshot, programTracksWithImages] = await Promise.all([
+        getProjectsScreenSnapshot(
+          user,
+          ['projects', 'programTracks', 'volunteerJoinRecords'],
+          forceRefresh,
+          false,
+        ),
+        // Keep the project/event snapshot lightweight, but load the cover
+        // images needed by the program cards separately.
+        getStorageItem<ProgramTrack[]>('programTracks', true).catch(() => null),
+      ]);
 
       const allProjects = snapshot.projects || [];
 
       setProjects(allProjects);
 
       const snapshotTracks = snapshot.programTracks || [];
+      const tracksWithImagesById = new Map(
+        (programTracksWithImages || [])
+          .filter(track => Boolean(track?.id))
+          .map(track => [String(track.id), track])
+      );
+      const hydratedSnapshotTracks = snapshotTracks.map(track => {
+        const mediaTrack = tracksWithImagesById.get(String(track.id));
+        return mediaTrack?.imageUrl
+          ? { ...track, imageUrl: mediaTrack.imageUrl }
+          : track;
+      });
       setProgramTracks(
-        snapshotTracks.length > 0
-          ? snapshotTracks
-          : deriveProgramTracksFromProjects(allProjects)
+        hydratedSnapshotTracks.length > 0
+          ? hydratedSnapshotTracks
+          : (programTracksWithImages && programTracksWithImages.length > 0)
+            ? programTracksWithImages.filter(track => Boolean(track?.id)).map(track => ({ ...track }))
+            : deriveProgramTracksFromProjects(allProjects)
       );
 
       if (Array.isArray(snapshot.volunteerJoinRecords)) {
