@@ -64,7 +64,9 @@ export default function PartnerHomeScreen() {
   };
 
   const handleSubmitProposal = () => {
-    navigation.navigate('Dashboard');
+    // The proposal form lives in Program Management. The previous route sent
+    // partners to the dashboard, which made the home-card button appear broken.
+    navigation.navigate('Programs');
   };
 
   const handleLearnMore = () => {
@@ -243,7 +245,7 @@ export default function PartnerHomeScreen() {
         <View style={styles.giveCard}>
           <Text style={styles.giveTitle}>Share with us</Text>
           <Text style={styles.giveDesc}>
-            Submit your program proposal for review.
+            Submit your project proposal for review.
           </Text>
           <View style={styles.giveActions}>
             <TouchableOpacity
@@ -251,7 +253,7 @@ export default function PartnerHomeScreen() {
               onPress={handleSubmitProposal}
               activeOpacity={0.85}
             >
-              <Text style={styles.btnSolidText}>Submit proposal</Text>
+              <Text style={styles.btnSolidText}>Submit project proposal</Text>
             </TouchableOpacity>
           </View>
         </View>
