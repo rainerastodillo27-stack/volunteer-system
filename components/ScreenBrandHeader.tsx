@@ -291,7 +291,14 @@ export default function ScreenBrandHeader({
                 <Text style={styles.notificationEmptyText}>All caught up!</Text>
               </View>
             ) : (
-              <ScrollView style={styles.notificationList} contentContainerStyle={styles.notificationListContent} scrollEnabled>
+              <ScrollView
+                style={[
+                  styles.notificationList,
+                  notifications.length > 0 ? styles.notificationListWithItems : null,
+                ]}
+                contentContainerStyle={styles.notificationListContent}
+                scrollEnabled
+              >
                 {notifications.map((item) => (
                   <TouchableOpacity
                     key={item.id}
@@ -493,6 +500,11 @@ const styles = StyleSheet.create({
   notificationList: {
     flex: 1,
     maxHeight: 350,
+  },
+  // Keep a single native notification row visible instead of allowing the
+  // ScrollView to collapse while its footer still reports the count.
+  notificationListWithItems: {
+    minHeight: 84,
   },
   notificationListContent: {
     paddingVertical: 8,

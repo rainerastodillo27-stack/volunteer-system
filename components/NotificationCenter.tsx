@@ -98,7 +98,10 @@ export function NotificationCenterProvider({
                 <Text style={styles.emptyText}>All caught up!</Text>
               </View>
             ) : (
-              <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+              <ScrollView
+                style={[styles.list, notifications.length > 0 ? styles.listWithNotifications : null]}
+                contentContainerStyle={styles.listContent}
+              >
                 {notifications.map((message) => (
                   <TouchableOpacity
                     key={message.id}
@@ -184,6 +187,11 @@ const styles = StyleSheet.create({
   list: {
     flexGrow: 0,
     maxHeight: 350,
+  },
+  // On native, a flex-less ScrollView can measure to zero height when the
+  // modal contains only one notification. Keep the row visible and tappable.
+  listWithNotifications: {
+    minHeight: 84,
   },
   listContent: {
     paddingVertical: 8,
