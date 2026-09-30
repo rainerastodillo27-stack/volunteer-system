@@ -530,6 +530,7 @@ RELATIONAL_TABLE_DDL = [
       id text primary key,
       volunteer_id text,
       project_id text,
+      occurrence_date text,
       time_in text,
       time_out text,
       note text,
@@ -543,6 +544,7 @@ RELATIONAL_TABLE_DDL = [
     )
     """,
     "alter table volunteer_time_logs add column if not exists attendance_photo text",
+    "alter table volunteer_time_logs add column if not exists occurrence_date text",
     "alter table volunteer_time_logs add column if not exists attendance_confirmed_at text",
     "alter table volunteer_time_logs add column if not exists attendance_checked_at text",
     "alter table volunteer_time_logs add column if not exists attendance_checked_by text",
@@ -949,6 +951,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("id", False),
             ("volunteer_id", False),
             ("project_id", False),
+            ("occurrence_date", False),
             ("time_in", False),
             ("time_out", False),
             ("note", False),
@@ -1185,6 +1188,7 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
     "volunteerTimeLogs": {
         "volunteerId": "volunteer_id",
         "projectId": "project_id",
+        "occurrenceDate": "occurrence_date",
         "timeIn": "time_in",
         "timeOut": "time_out",
         "attendancePhoto": "attendance_photo",
@@ -1708,6 +1712,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("id"),
             item.get("volunteerId"),
             item.get("projectId"),
+            item.get("occurrenceDate"),
             item.get("timeIn"),
             item.get("timeOut"),
             item.get("note"),
@@ -2104,6 +2109,7 @@ def _row_to_item(
             "id": row_id,
             "volunteerId": row["volunteer_id"],
             "projectId": row["project_id"],
+            "occurrenceDate": row["occurrence_date"],
             "timeIn": row["time_in"],
             "timeOut": row["time_out"],
             "note": row["note"],
@@ -2283,6 +2289,7 @@ def ensure_volunteer_time_logs_table_shape(connection: Any) -> None:
                       {primary_key_column} text primary key,
                       volunteer_id text,
                       project_id text,
+                      occurrence_date text,
                       time_in text,
                       time_out text,
                       note text,
@@ -2323,6 +2330,7 @@ def ensure_volunteer_time_logs_table_shape(connection: Any) -> None:
                 pass
             for stmt in [
                 "alter table volunteer_time_logs add column if not exists attendance_photo text",
+                "alter table volunteer_time_logs add column if not exists occurrence_date text",
                 "alter table volunteer_time_logs add column if not exists attendance_confirmed_at text",
                 "alter table volunteer_time_logs add column if not exists attendance_checked_at text",
                 "alter table volunteer_time_logs add column if not exists attendance_checked_by text",

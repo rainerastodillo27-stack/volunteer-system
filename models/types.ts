@@ -313,6 +313,8 @@ export interface VolunteerTimeLog {
   id: string;
   volunteerId: string;
   projectId: string;
+  /** Local calendar date of the recurring event occurrence. */
+  occurrenceDate?: string;
   timeIn: string;
   timeOut?: string;
   note?: string;

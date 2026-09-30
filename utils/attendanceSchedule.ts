@@ -13,6 +13,115 @@ function getValidDate(value?: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+export type EventRepeat = 'Does not repeat' | 'Daily' | 'Weekly' | 'Monthly';
+
+type RecurringEvent = {
+  isEvent?: boolean;
+  startDate?: string;
+  endDate?: string;
+  repeat?: string;
+};
+
+export function normalizeEventRepeat(value?: string): EventRepeat {
+  switch (String(value || '').trim().toLowerCase()) {
+    case 'daily':
+      return 'Daily';
+    case 'weekly':
+      return 'Weekly';
+    case 'monthly':
+      return 'Monthly';
+    default:
+      return 'Does not repeat';
+  }
+}
+
+function getDaysInMonth(year: number, monthIndex: number): number {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+/**
+ * Returns whether an event has a scheduled occurrence on the supplied local
+ * calendar date. The event's end date is the series end date for recurring
+ * events, matching the backend reminder scheduler.
+ */
+export function isEventOccurrenceToday(
+  event: RecurringEvent,
+  now: Date = new Date(),
+): boolean {
+  if (!event.isEvent) {
+    return true;
+  }
+
+  const start = getValidDate(event.startDate);
+  if (!start) {
+    return true;
+  }
+
+  const end = getValidDate(event.endDate) || start;
+  const todayKey = getLocalDateKey(now);
+  const startKey = getLocalDateKey(start);
+  const endKey = getLocalDateKey(end < start ? start : end);
+
+  if (!todayKey || todayKey < startKey || todayKey > endKey) {
+    return false;
+  }
+
+  const repeat = normalizeEventRepeat(event.repeat);
+  if (repeat === 'Does not repeat') {
+    return todayKey === startKey;
+  }
+
+  if (repeat === 'Daily') {
+    return true;
+  }
+
+  if (repeat === 'Weekly') {
+    return now.getDay() === start.getDay();
+  }
+
+  const scheduledDay = Math.min(
+    start.getDate(),
+    getDaysInMonth(now.getFullYear(), now.getMonth()),
+  );
+  return now.getDate() === scheduledDay;
+}
+
+/** Returns the next scheduled occurrence on or after the supplied date. */
+export function getNextEventOccurrenceDate(
+  event: RecurringEvent,
+  now: Date = new Date(),
+): Date | null {
+  if (!event.isEvent) {
+    return null;
+  }
+
+  const start = getValidDate(event.startDate);
+  if (!start) {
+    return null;
+  }
+
+  const end = getValidDate(event.endDate) || start;
+  const finalDate = new Date(end < start ? start : end);
+  finalDate.setHours(23, 59, 59, 999);
+
+  const candidate = new Date(now);
+  candidate.setHours(12, 0, 0, 0);
+  const startDate = new Date(start);
+  startDate.setHours(12, 0, 0, 0);
+  if (candidate < startDate) {
+    candidate.setTime(startDate.getTime());
+  }
+
+  for (let guard = 0; guard < 10000 && candidate <= finalDate; guard += 1) {
+    if (isEventOccurrenceToday(event, candidate)) {
+      return new Date(candidate);
+    }
+    candidate.setDate(candidate.getDate() + 1);
+  }
+
+  return null;
+}
+
 // Returns the calendar date used by the attendance picker and backend. The
 // event start value is retained for call-site compatibility, but attendance
 // records are reported on the local date when they were confirmed.

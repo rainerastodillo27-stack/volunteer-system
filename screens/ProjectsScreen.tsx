@@ -46,6 +46,11 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 import { requestPhotoPrivacyConsent } from '../utils/photoConsent';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import {
+  getNextEventOccurrenceDate,
+  hasEventStartedForToday,
+  isEventOccurrenceToday,
+} from '../utils/attendanceSchedule';
+import {
   getStableImageSource,
   mergeProjectRecordsPreservingMedia,
 } from '../utils/projectMap';
@@ -222,21 +227,6 @@ function getReportBeneficiariesServed(report: PartnerReport): number {
 
 function formatImpactCount(value: number): string {
   return value.toLocaleString('en-US');
-}
-
-function hasEventStartedForToday(startValue?: string, now: Date = new Date()): boolean {
-  if (!startValue) {
-    return true;
-  }
-
-  const startDate = new Date(startValue);
-  if (Number.isNaN(startDate.getTime())) {
-    return true;
-  }
-
-  const attendanceStart = new Date(startDate);
-  attendanceStart.setHours(9, 0, 0, 0);
-  return now >= attendanceStart;
 }
 
 function getLocalDateKey(value?: string, now: Date = new Date()): string {
@@ -953,6 +943,18 @@ export default function ProjectsScreen({ navigation, route }: any) {
 
     if (project.isEvent) {
       const startDate = project.startDate ? new Date(project.startDate) : null;
+      if (!isEventOccurrenceToday(project)) {
+        const nextOccurrence = getNextEventOccurrenceDate(project);
+        const nextOccurrenceLabel = nextOccurrence
+          ? format(nextOccurrence, 'MMM d, yyyy')
+          : 'the next scheduled occurrence';
+        Alert.alert(
+          'Attendance unavailable',
+          `There is no event occurrence scheduled for today. Next attendance: ${nextOccurrenceLabel}.`
+        );
+        return;
+      }
+
       if (startDate && !Number.isNaN(startDate.getTime()) && !hasEventStartedForToday(project.startDate)) {
         Alert.alert(
           'Event not started',
@@ -1522,6 +1524,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const hasConfirmedToday = Boolean(activeLogByProjectId.get(project.id));
 
     const startDate = project.startDate ? new Date(project.startDate) : null;
+    const eventScheduledToday = !project.isEvent || isEventOccurrenceToday(project);
+    const nextOccurrence = !eventScheduledToday ? getNextEventOccurrenceDate(project) : null;
+    const nextOccurrenceLabel = nextOccurrence
+      ? format(nextOccurrence, 'MMM d, yyyy')
+      : 'the next scheduled occurrence';
     const eventHasNotStarted = project.isEvent ? !hasEventStartedForToday(project.startDate) : false;
     const canTimeIn =
       isAssigned &&
@@ -1530,7 +1537,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
       !isPendingApproval &&
       !isClosedStatus &&
       !isOnHold &&
-      !eventHasNotStarted;
+      !eventHasNotStarted &&
+      eventScheduledToday;
 
     const joinButtonLabel = completedParticipation
       ? 'Task Completed'
@@ -1576,6 +1584,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
       ? isAssigned
         ? hasConfirmedToday
           ? 'Your attendance is already confirmed for today.'
+          : !eventScheduledToday
+          ? `No attendance is scheduled today. Next attendance: ${nextOccurrenceLabel}.`
           : eventHasNotStarted && startDate
           ? `Assigned. Attendance confirmation becomes available at 9:00 AM on ${format(startDate, 'MMM d')}.`
           : 'Admin assigned you to this event. You can confirm attendance now.'
@@ -1608,6 +1618,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       statusMessage,
       wasRejected,
       eventHasNotStarted,
+      eventScheduledToday,
     };
   }, [activeLogByProjectId, isJoined, volunteerJoinRecordByProjectId, volunteerMatchByProjectId, volunteerProfile?.id]);
 

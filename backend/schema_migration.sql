@@ -307,6 +307,7 @@ CREATE TABLE public.volunteer_time_logs (
   volunteer_time_logs_id text NOT NULL,
   volunteer_id text,
   project_id text,
+  occurrence_date text,
   time_in text,
   time_out text,
   note text,

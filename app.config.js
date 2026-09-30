@@ -148,6 +148,12 @@ module.exports = () => {
       version: '1.0.0',
       orientation: 'portrait',
       assetBundlePatterns: ['**/*'],
+      web: {
+        favicon: './assets/nvc-app-icon.png',
+        name: 'NVC Foundation Connect',
+        shortName: 'NVC',
+        themeColor: '#0f8a4b',
+      },
       ios: {
         supportsTablet: true,
         config: mobileGoogleMapsApiKey

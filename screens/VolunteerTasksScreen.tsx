@@ -18,7 +18,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import Svg, { Circle, Path, G } from 'react-native-svg';
-import { getAttendanceWindowKey, hasEventStartedForToday } from '../utils/attendanceSchedule';
+import {
+  getAttendanceWindowKey,
+  getNextEventOccurrenceDate,
+  hasEventStartedForToday,
+  isEventOccurrenceToday,
+} from '../utils/attendanceSchedule';
 
 function EmptyTasksIllustration() {
   return (
@@ -129,6 +134,7 @@ type TaskEventAttendanceState = {
   eventHasEnded: boolean;
   hasConfirmedToday: boolean;
   hasMarkedToday: boolean;
+  eventScheduledToday: boolean;
   helperText: string;
 };
 
@@ -380,6 +386,14 @@ function getTrackedTaskStatus(
     };
   }
 
+  if (project.isEvent && !isEventOccurrenceToday(project)) {
+    return {
+      status: 'Assigned',
+      updatedAt: task.updatedAt,
+      statusTrackingNote: 'No attendance is scheduled today. The task will be available on the next event occurrence.',
+    };
+  }
+
   const latestCompletedLog = timeLogs
     .sort(
       (left, right) =>
@@ -436,6 +450,15 @@ function getTaskEventAttendanceState(
     log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === todayKey
   );
   const hasMarkedToday = Boolean(todayLog?.attendanceCheckedAt);
+  const eventScheduledToday = isEventOccurrenceToday(project);
+  const nextOccurrence = !eventScheduledToday ? getNextEventOccurrenceDate(project) : null;
+  const nextOccurrenceLabel = nextOccurrence
+    ? nextOccurrence.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : 'the next scheduled occurrence';
   const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
   const lifecycleStatus = getProjectDisplayStatus(project);
   const eventHasEnded =
@@ -443,13 +466,15 @@ function getTaskEventAttendanceState(
     lifecycleStatus === 'Completed' ||
     lifecycleStatus === 'Cancelled';
   const canConfirmAttendance =
-    isAssigned && !hasConfirmedToday && !eventHasNotStarted && !eventHasEnded;
+    isAssigned && eventScheduledToday && !hasConfirmedToday && !eventHasNotStarted && !eventHasEnded;
 
   let helperText = 'Attendance confirmation is ready for this attendance window.';
   if (!isAssigned) {
     helperText = 'You need an assigned task before attendance opens for this event.';
   } else if (eventHasEnded) {
     helperText = 'Attendance is closed because the event timeline already ended.';
+  } else if (!eventScheduledToday) {
+    helperText = `No attendance is scheduled today. Next attendance: ${nextOccurrenceLabel}.`;
   } else if (hasConfirmedToday) {
     helperText = hasMarkedToday
       ? 'Attendance was marked by the admin or field officer and is now recorded as verified.'
@@ -466,6 +491,7 @@ function getTaskEventAttendanceState(
     eventHasEnded,
     hasConfirmedToday,
     hasMarkedToday,
+    eventScheduledToday,
     helperText,
   };
 }
