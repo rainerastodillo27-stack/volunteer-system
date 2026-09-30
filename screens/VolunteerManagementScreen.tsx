@@ -101,6 +101,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   const [selectedVolunteer, setSelectedVolunteer] = useState<Volunteer | null>(null);
   const selectedVolunteerIdRef = useRef<string | null>(null);
   const selectedVolunteerRecordRef = useRef<Volunteer | null>(null);
+  const deletedVolunteerIdsRef = useRef<Set<string>>(new Set());
   const volunteerLoadGenerationRef = useRef(0);
   const projectLoadGenerationRef = useRef(0);
   const timeLogLoadGenerationRef = useRef(0);
@@ -215,7 +216,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       if (requestGeneration !== volunteerLoadGenerationRef.current) {
         return;
       }
-      setVolunteers(allVolunteers);
+      const visibleVolunteers = allVolunteers.filter(
+        volunteer => !deletedVolunteerIdsRef.current.has(volunteer.id)
+      );
+      setVolunteers(visibleVolunteers);
       setLoadError(null);
       setSelectedVolunteer(currentSelectedVolunteer => {
         if (!currentSelectedVolunteer) {
@@ -223,7 +227,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
         }
 
         return (
-          allVolunteers.find(volunteer => volunteer.id === currentSelectedVolunteer.id) ||
+          visibleVolunteers.find(volunteer => volunteer.id === currentSelectedVolunteer.id) ||
           null
         );
       });
@@ -464,14 +468,18 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     }
     if (!selectedVolunteer) return;
 
-    const trimmedReason = rejectionReason.trim();
-    if (!trimmedReason) {
+    const enteredReason = rejectionReason.trim();
+    if (Platform.OS !== 'web' && !enteredReason) {
       setRejectionError('Please provide a reason before rejecting the application.');
       return;
     }
+    const trimmedReason = enteredReason || 'Application rejected by administrator.';
 
     const adminId = user?.id || '';
     const previousVolunteers = volunteers;
+    if (selectedVolunteer.userId) {
+      deletedVolunteerIdsRef.current.add(selectedVolunteer.id);
+    }
     setIsRejecting(true);
     setRejectionError(null);
 
@@ -532,6 +540,9 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       setActionNotice(`Application for ${selectedUser?.name || selectedVolunteer.name} has been rejected and removed from the system.${emailNotice}`);
 
     } catch (error) {
+      if (selectedVolunteer.userId) {
+        deletedVolunteerIdsRef.current.delete(selectedVolunteer.id);
+      }
       setVolunteers(previousVolunteers);
       Alert.alert(
         getRequestErrorTitle(error),
@@ -1575,7 +1586,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                   </View>
                   <View>
                     <Text style={{ fontSize: 18, fontWeight: '800', color: '#0f172a' }}>Reject Volunteer Application</Text>
-                    <Text style={{ fontSize: 12, color: '#64748b' }}>Provide a reason explaining why the application is rejected.</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>
+                      {Platform.OS === 'web'
+                        ? 'Confirm that you want to reject this application.'
+                        : 'Provide a reason explaining why the application is rejected.'}
+                    </Text>
                   </View>
                 </View>
                 <TouchableOpacity onPress={closeRejectModal} disabled={isRejecting} style={{ padding: 4 }}>
@@ -1599,79 +1614,83 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                 </View>
               )}
 
-              {/* Quick Reason Suggestions */}
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 }}>
-                Common Reasons (tap to apply):
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-                {[
-                  'Incomplete application details / missing requirements',
-                  'Location outside active service coverage area',
-                  'Does not meet eligibility or age criteria',
-                  'Schedule and availability mismatch',
-                  'Duplicate application submission',
-                ].map(reasonOption => (
-                  <TouchableOpacity
-                    key={reasonOption}
-                    onPress={() => {
-                      setRejectionReason(reasonOption);
-                      setRejectionError(null);
-                    }}
-                    style={{
-                      backgroundColor: rejectionReason === reasonOption ? '#fee2e2' : '#f1f5f9',
-                      borderWidth: 1,
-                      borderColor: rejectionReason === reasonOption ? '#f87171' : '#e2e8f0',
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      borderRadius: 8,
-                    }}
-                  >
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: rejectionReason === reasonOption ? '#b91c1c' : '#475569' }}>
-                      {reasonOption}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {/* Rejection Reason Input */}
-              <View style={{ marginBottom: 6 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>
-                    Reason for rejection <Text style={{ color: '#dc2626' }}>*</Text>
+              {Platform.OS !== 'web' && (
+                <>
+                  {/* Quick Reason Suggestions */}
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 }}>
+                    Common Reasons (tap to apply):
                   </Text>
-                  <Text style={{ fontSize: 11, color: '#94a3b8' }}>Required</Text>
-                </View>
-                <TextInput
-                  style={{
-                    backgroundColor: '#ffffff',
-                    borderWidth: 1,
-                    borderColor: rejectionError ? '#ef4444' : '#cbd5e1',
-                    borderRadius: 10,
-                    padding: 12,
-                    minHeight: 90,
-                    textAlignVertical: 'top',
-                    fontSize: 13,
-                    color: '#0f172a',
-                  }}
-                  placeholder="Type or edit the specific reason for rejecting this volunteer application..."
-                  placeholderTextColor="#94a3b8"
-                  multiline={true}
-                  numberOfLines={4}
-                  value={rejectionReason}
-                  onChangeText={text => {
-                    setRejectionReason(text);
-                    if (text.trim()) setRejectionError(null);
-                  }}
-                />
-              </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+                    {[
+                      'Incomplete application details / missing requirements',
+                      'Location outside active service coverage area',
+                      'Does not meet eligibility or age criteria',
+                      'Schedule and availability mismatch',
+                      'Duplicate application submission',
+                    ].map(reasonOption => (
+                      <TouchableOpacity
+                        key={reasonOption}
+                        onPress={() => {
+                          setRejectionReason(reasonOption);
+                          setRejectionError(null);
+                        }}
+                        style={{
+                          backgroundColor: rejectionReason === reasonOption ? '#fee2e2' : '#f1f5f9',
+                          borderWidth: 1,
+                          borderColor: rejectionReason === reasonOption ? '#f87171' : '#e2e8f0',
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 8,
+                        }}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: rejectionReason === reasonOption ? '#b91c1c' : '#475569' }}>
+                          {reasonOption}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
 
-              {rejectionError ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 10 }}>
-                  <MaterialIcons name="error-outline" size={15} color="#dc2626" />
-                  <Text style={{ fontSize: 12, color: '#dc2626', fontWeight: '600' }}>{rejectionError}</Text>
-                </View>
-              ) : (
-                <View style={{ height: 10 }} />
+                  {/* Rejection Reason Input */}
+                  <View style={{ marginBottom: 6 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>
+                        Reason for rejection <Text style={{ color: '#dc2626' }}>*</Text>
+                      </Text>
+                      <Text style={{ fontSize: 11, color: '#94a3b8' }}>Required</Text>
+                    </View>
+                    <TextInput
+                      style={{
+                        backgroundColor: '#ffffff',
+                        borderWidth: 1,
+                        borderColor: rejectionError ? '#ef4444' : '#cbd5e1',
+                        borderRadius: 10,
+                        padding: 12,
+                        minHeight: 90,
+                        textAlignVertical: 'top',
+                        fontSize: 13,
+                        color: '#0f172a',
+                      }}
+                      placeholder="Type or edit the specific reason for rejecting this volunteer application..."
+                      placeholderTextColor="#94a3b8"
+                      multiline={true}
+                      numberOfLines={4}
+                      value={rejectionReason}
+                      onChangeText={text => {
+                        setRejectionReason(text);
+                        if (text.trim()) setRejectionError(null);
+                      }}
+                    />
+                  </View>
+
+                  {rejectionError ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 10 }}>
+                      <MaterialIcons name="error-outline" size={15} color="#dc2626" />
+                      <Text style={{ fontSize: 12, color: '#dc2626', fontWeight: '600' }}>{rejectionError}</Text>
+                    </View>
+                  ) : (
+                    <View style={{ height: 10 }} />
+                  )}
+                </>
               )}
 
               {/* Buttons */}

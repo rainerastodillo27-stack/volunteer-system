@@ -75,6 +75,7 @@ export default function UserManagementScreen() {
   const [showExportPreview, setShowExportPreview] = useState(false);
   const [showActionMenuUser, setShowActionMenuUser] = useState<User | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
   const loadVersionRef = useRef(0);
   const deletedUserIdsRef = useRef<Set<string>>(new Set());
 
@@ -102,6 +103,10 @@ export default function UserManagementScreen() {
   // Load user data
   const loadUsers = useCallback(async (forceRefresh = false) => {
     const requestVersion = ++loadVersionRef.current;
+    if (forceRefresh) {
+      setIsLoadingAccounts(true);
+      setLoadError(null);
+    }
     try {
       if (forceRefresh) {
         clearStorageCache(['users', 'partners', 'volunteers']);
@@ -157,6 +162,10 @@ export default function UserManagementScreen() {
         title: getRequestErrorTitle(error),
         message: getRequestErrorMessage(error, 'Failed to load users.'),
       });
+    } finally {
+      if (requestVersion === loadVersionRef.current) {
+        setIsLoadingAccounts(false);
+      }
     }
   }, []);
 
@@ -757,7 +766,12 @@ export default function UserManagementScreen() {
             </View>
           </View>
 
-          {paginatedUsers.map(account => {
+          {isLoadingAccounts ? (
+            <View style={styles.emptyTableState}>
+              <ActivityIndicator size="small" color="#15803d" />
+              <Text style={styles.emptyTableText}>Refreshing accounts…</Text>
+            </View>
+          ) : paginatedUsers.map(account => {
             const partner = getLinkedPartnerForUser(account);
                     const isPending = account.approvalStatus?.toLowerCase() === 'pending';
 
@@ -881,7 +895,7 @@ export default function UserManagementScreen() {
             );
           })}
 
-          {paginatedUsers.length === 0 && (
+          {!isLoadingAccounts && paginatedUsers.length === 0 && (
             <View style={styles.emptyTableState}>
               <MaterialIcons name="person-search" size={36} color="#cbd5e1" />
               <Text style={styles.emptyTableText}>No accounts found matching search or filters.</Text>

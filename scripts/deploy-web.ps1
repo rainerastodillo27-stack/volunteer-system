@@ -39,14 +39,14 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 4. Extract and restart on VPS
+# 4. Extract the static frontend bundle on the VPS
 Write-Host ""
-Write-Host "[4/4] Extracting web files and restarting web server..." -ForegroundColor Yellow
-$remoteCmd = "cd $RemoteDir && tar -xzf dist.tar.gz && rm -f dist.tar.gz && pm2 restart all"
+Write-Host "[4/4] Extracting web files (Nginx serves the static bundle directly)..." -ForegroundColor Yellow
+$remoteCmd = "cd $RemoteDir && tar -xzf dist.tar.gz && rm -f dist.tar.gz"
 ssh "$User@$Server" $remoteCmd
 if ($LASTEXITCODE -ne 0) {
     Remove-Item dist.tar.gz -Force -ErrorAction SilentlyContinue
-    Write-Host "  [!] VPS web restart failed." -ForegroundColor Red
+    Write-Host "  [!] VPS web bundle extraction failed." -ForegroundColor Red
     exit 1
 }
 
