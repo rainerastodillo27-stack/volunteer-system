@@ -12791,18 +12791,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                          <TouchableOpacity
-
-                            onPress={() => handleViewVolunteerMatch(match)}
-
-                            style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6, marginLeft: 8 }}
-
-                          >
-
-                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>View</Text>
-
-                          </TouchableOpacity>
-
                         </View>
 
                       </TouchableOpacity>
@@ -12908,24 +12896,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             <Text style={{ fontSize: 10, fontWeight: '800', color: '#137333' }}>APPROVED</Text>
 
                           </View>
-
-                          <TouchableOpacity
-
-                            onPress={() => handleViewVolunteerMatch(match)}
-
-                            activeOpacity={0.75}
-
-                            accessibilityRole="button"
-
-                            accessibilityLabel={`View ${name}`}
-
-                            style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6 }}
-
-                          >
-
-                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>View</Text>
-
-                          </TouchableOpacity>
 
                           {isAdmin ? (
                             <TouchableOpacity
@@ -13041,18 +13011,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             <Text style={{ fontSize: 10, fontWeight: '800', color: '#c5221f' }}>DECLINED</Text>
 
                           </View>
-
-                          <TouchableOpacity
-
-                            onPress={() => handleViewVolunteerMatch(match)}
-
-                            style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6 }}
-
-                          >
-
-                            <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569' }}>View</Text>
-
-                          </TouchableOpacity>
 
                         </View>
 
