@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   ActivityIndicator,
@@ -146,9 +146,13 @@ export default function PartnerProjectsScreen({ route }: any) {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
+  const loadGenerationRef = useRef(0);
 
   const loadData = useCallback(async (forceRefresh = false) => {
+    const requestGeneration = ++loadGenerationRef.current;
+
     if (!user) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       setProjects([]);
       setPartnerApplications([]);
       setVolunteerTimeLogs([]);
@@ -165,6 +169,7 @@ export default function PartnerProjectsScreen({ route }: any) {
         forceRefresh,
         false,
       );
+      if (requestGeneration !== loadGenerationRef.current) return;
       setProjects(current => mergeProjectRecordsPreservingMedia(current, snapshot.projects || []));
       setPartnerApplications(snapshot.partnerApplications || []);
       setLoadError(null);
@@ -173,7 +178,11 @@ export default function PartnerProjectsScreen({ route }: any) {
       // the first render so a large image payload cannot block the partner's
       // project dashboard on a slow mobile connection.
       void getProjectsScreenSnapshot(user, ['projects'], forceRefresh, true)
-        .then(imageSnapshot => setProjects(imageSnapshot.projects || []))
+        .then(imageSnapshot => {
+          if (requestGeneration === loadGenerationRef.current) {
+            setProjects(imageSnapshot.projects || []);
+          }
+        })
         .catch(error => console.warn('[PartnerProjectsScreen] Project images skipped:', error));
 
       // Project cards are usable without the full attendance-photo history.
@@ -183,6 +192,7 @@ export default function PartnerProjectsScreen({ route }: any) {
         getAllVolunteerProjectJoinRecords(),
       ])
         .then(([allVolunteerTimeLogs, allVolunteerJoinRecords]) => {
+          if (requestGeneration !== loadGenerationRef.current) return;
           setVolunteerTimeLogs(allVolunteerTimeLogs || []);
           setVolunteerJoinRecords(allVolunteerJoinRecords || []);
         })
@@ -190,13 +200,16 @@ export default function PartnerProjectsScreen({ route }: any) {
           console.warn('[PartnerProjectsScreen] Attendance metrics load skipped:', error);
         });
     } catch (error) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       setLoadError({
         title: getRequestErrorTitle(error, 'Unable to load projects'),
         message: getRequestErrorMessage(error, 'Failed to load your tracked partner projects.'),
       });
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (requestGeneration === loadGenerationRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [user]);
 
@@ -313,8 +326,12 @@ export default function PartnerProjectsScreen({ route }: any) {
 
     if (projectMetrics.some(entry => entry.project.id === targetProjectId)) {
       setSelectedProjectId(targetProjectId);
+      // Consume deep-link project parameters after opening them once. Tab
+      // routes keep their params, so leaving this value set can reopen the
+      // modal on later refreshes even when the partner did not tap a project.
+      navigation.setParams({ projectId: undefined });
     }
-  }, [projectMetrics, route?.params?.projectId]);
+  }, [navigation, projectMetrics, route?.params?.projectId]);
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
@@ -329,7 +346,7 @@ export default function PartnerProjectsScreen({ route }: any) {
     [projectMetrics, selectedProjectId]
   );
 
-  if (loading) {
+  if (loading && projects.length === 0 && partnerApplications.length === 0) {
     return (
       <View style={styles.centerState}>
         <ActivityIndicator size="large" color="#166534" />

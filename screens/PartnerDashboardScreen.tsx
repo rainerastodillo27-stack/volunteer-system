@@ -509,6 +509,10 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const [selectedProposalDate, setSelectedProposalDate] = useState(new Date());
 
+  // Focus and realtime refreshes can overlap. Ignore an older response so it
+  // cannot overwrite a newly approved proposal with pre-approval data.
+  const dashboardLoadGenerationRef = React.useRef(0);
+
 
 
   const isOwnedByCurrentPartner = React.useCallback(
@@ -543,6 +547,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const loadDashboardData = React.useCallback(async (forceRefresh = false) => {
 
+    const requestGeneration = ++dashboardLoadGenerationRef.current;
+
     try {
 
       if (!user?.id) {
@@ -554,6 +560,10 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
       const snapshot = await getPartnerDashboardSnapshot(false, forceRefresh);
+
+      if (requestGeneration !== dashboardLoadGenerationRef.current) {
+        return;
+      }
 
       const ownedPartners = snapshot.partners.filter(isOwnedByCurrentPartner);
 
@@ -585,6 +595,10 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     } catch (error) {
 
+      if (requestGeneration !== dashboardLoadGenerationRef.current) {
+        return;
+      }
+
       setLoadError({
 
         title: getRequestErrorTitle(error),
@@ -595,7 +609,9 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     } finally {
 
-      setLoading(false);
+      if (requestGeneration === dashboardLoadGenerationRef.current) {
+        setLoading(false);
+      }
 
     }
 

@@ -161,8 +161,11 @@ export default function VolunteerEventsScreen() {
   const [showSortModal, setShowSortModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'applications'>('all');
+  const loadGenerationRef = useRef(0);
 
   const loadData = useCallback(async (forceRefresh = false) => {
+    const requestGeneration = ++loadGenerationRef.current;
+
     if (!user) return;
     try {
       const [snapshot, calendars] = await Promise.all([
@@ -179,6 +182,7 @@ export default function VolunteerEventsScreen() {
         ),
         getAllAdminPlanningCalendars(),
       ]);
+      if (requestGeneration !== loadGenerationRef.current) return;
       const items = (calendars || [])
         .flatMap(calendar => calendar.planningItems || [])
         .sort(
@@ -202,10 +206,18 @@ export default function VolunteerEventsScreen() {
       // not keep the screen blocked. The image refresh preserves the same
       // records and simply fills in their cover photos when available.
       void getProjectsScreenSnapshot(user, ['projects'], forceRefresh, true)
-        .then(imageSnapshot => setRecords(imageSnapshot.projects || []))
+        .then(imageSnapshot => {
+          if (requestGeneration === loadGenerationRef.current) {
+            setRecords(imageSnapshot.projects || []);
+          }
+        })
         .catch(error => console.warn('[VolunteerEventsScreen] Event images skipped:', error));
       void getAllVolunteers()
-        .then(volunteersList => setAllVolunteersList(volunteersList || []))
+        .then(volunteersList => {
+          if (requestGeneration === loadGenerationRef.current) {
+            setAllVolunteersList(volunteersList || []);
+          }
+        })
         .catch(error => console.warn('[VolunteerEventsScreen] Volunteer directory skipped:', error));
 
       // Fetch Google Calendar items in the background. This can be slow or
@@ -226,22 +238,33 @@ export default function VolunteerEventsScreen() {
           const res = await fetch(url);
           if (res.ok) {
             const data = await res.json();
-            setGoogleEvents(data.items || []);
+            if (requestGeneration === loadGenerationRef.current) {
+              setGoogleEvents(data.items || []);
+            }
           } else {
-            setGoogleEvents([]);
+            if (requestGeneration === loadGenerationRef.current) {
+              setGoogleEvents([]);
+            }
           }
         } else {
-          setGoogleEvents([]);
+          if (requestGeneration === loadGenerationRef.current) {
+            setGoogleEvents([]);
+          }
         }
         } catch (err) {
           console.warn('[VolunteerEventsScreen] Google Calendar fetch error:', err);
-          setGoogleEvents([]);
+          if (requestGeneration === loadGenerationRef.current) {
+            setGoogleEvents([]);
+          }
         }
       })();
     } catch (error) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       console.error('[VolunteerEventsScreen] Failed to load events data:', error);
     } finally {
-      setLoading(false);
+      if (requestGeneration === loadGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [user]);
 

@@ -12839,11 +12839,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     return (
 
-                      <TouchableOpacity
+                      <View
 
                         key={match.id}
-
-                        onPress={() => handleViewVolunteerMatch(match)}
 
                         style={{
 
@@ -12871,6 +12869,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       >
 
+                        <TouchableOpacity
+                          onPress={() => handleViewVolunteerMatch(match)}
+                          activeOpacity={0.75}
+                          accessibilityRole="button"
+                          accessibilityLabel={`View ${name}`}
+                          style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                        >
                         <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
 
                           <View style={{ width: 20, height: 20, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 4, marginRight: 12, justifyContent: 'center', alignItems: 'center', backgroundColor: selectedMatch?.id === match.id ? '#166534' : '#ffffff' }} {...({} as any)}>
@@ -12892,6 +12897,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           </View>
 
                         </View>
+                        </TouchableOpacity>
 
 
 
@@ -12906,6 +12912,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           <TouchableOpacity
 
                             onPress={() => handleViewVolunteerMatch(match)}
+
+                            activeOpacity={0.75}
+
+                            accessibilityRole="button"
+
+                            accessibilityLabel={`View ${name}`}
 
                             style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#f1f5f9', borderRadius: 6 }}
 
@@ -12940,7 +12952,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         </View>
 
-                      </TouchableOpacity>
+                      </View>
 
                     );
 

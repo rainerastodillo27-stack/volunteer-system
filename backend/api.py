@@ -4542,7 +4542,6 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
         return set()
 
     project_ids: set[str] = set()
-    approved_program_modules: set[str] = set()
     applications = _postgres_get_hot_items_by_field(
         connection,
         "partnerProjectApplications",
@@ -4554,20 +4553,15 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
         if str(application.get("status") or "").strip() == "Approved":
             project_id = str(application.get("projectId") or "").strip()
             if project_id:
-                if project_id.startswith("program:"):
-                    module = project_id[len("program:"):].strip()
-                    if module:
-                        approved_program_modules.add(module.casefold())
-                else:
+                if not project_id.startswith("program:"):
                     project_ids.add(project_id)
 
             proposal_details = application.get("proposalDetails")
             if isinstance(proposal_details, dict):
-                requested_module = str(
-                    proposal_details.get("requestedProgramModule") or ""
-                ).strip()
-                if requested_module:
-                    approved_program_modules.add(requested_module.casefold())
+                for target_key in ("targetProjectId", "targetProgramId", "programId"):
+                    target_id = str(proposal_details.get(target_key) or "").strip()
+                    if target_id and not target_id.startswith("program:"):
+                        project_ids.add(target_id)
 
     partner_records = get_postgres_hot_storage_collection(connection, "partners", include_images=False)
     partner_ids = {
@@ -4581,27 +4575,20 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
         records = get_postgres_hot_storage_collection(connection, key, include_images=False)
         scoped_projects.extend(record for record in records if isinstance(record, dict))
         for project in records:
-            if str(project.get("partnerId") or project.get("partner_id") or "").strip() in partner_ids:
+            record_partner_id = str(
+                project.get("partnerId")
+                or project.get("partner_id")
+                or project.get("partnerUserId")
+                or project.get("partner_user_id")
+                or project.get("proposedById")
+                or project.get("proposed_by_id")
+                or ""
+            ).strip()
+            if record_partner_id in partner_ids or record_partner_id == normalized_user_id:
                 project_id = str(project.get("id") or "").strip()
                 if project_id:
                     project_ids.add(project_id)
 
-            # Keep server-side media authorization in sync with the partner
-            # dashboard's legacy fallback for applications that still carry a
-            # program:<module> placeholder instead of the generated project ID.
-            project_module = str(
-                project.get("programModule") or project.get("program_module") or ""
-            ).strip().casefold()
-            project_category = str(project.get("category") or "").strip().casefold()
-            project_id = str(project.get("id") or "").strip()
-            if project_id and (
-                project_module in approved_program_modules
-                or (
-                    project_id.startswith("project-proposal-")
-                    and project_category in approved_program_modules
-                )
-            ):
-                project_ids.add(project_id)
 
     # Events are children of the approved project through parentProjectId. Some
     # older event records do not carry the partner ownership field, so include
@@ -4680,6 +4667,13 @@ def _scope_storage_collection(
             ]
         if key == "partnerProjectApplications":
             return [item for item in items if str(item.get("partnerUserId") or "").strip() == session_user_id]
+        if key in {"projects", "events", "statusUpdates"}:
+            return [
+                item
+                for item in items
+                if str(item.get("projectId") or item.get("project_id") or item.get("id") or "").strip()
+                in project_ids
+            ]
         if key == "volunteers":
             participant_ids: set[str] = set()
             for project_key in ("projects", "events"):
@@ -5324,6 +5318,18 @@ def _build_projects_snapshot(
         projects = [*programs_from_projects_table, *programs_from_programs_table, *raw_events]
         partner_applications_for_parent_repair = _get_partner_application_parent_repair_records(connection)
         projects = _attach_proposal_parent_project_ids(projects, partner_applications_for_parent_repair)
+
+        if role == "partner" and user_id:
+            # A partner snapshot must contain only that partner's approved
+            # projects and their child events. Public program catalogue rows
+            # remain available through the separate `programs` field, but
+            # shared project/event records must never cross account boundaries.
+            partner_project_ids = _get_partner_project_scope(connection, user_id)
+            projects = [
+                project
+                for project in projects
+                if str(project.get("id") or "").strip() in partner_project_ids
+            ]
 
     _trace(f"[TRACE] _build_projects_snapshot: processed projects after {_time.perf_counter() - t1:.3f}s")
 
@@ -8183,6 +8189,48 @@ def get_volunteer_logs(
                 if str(log.get("projectId") or "").strip() in joined_event_ids
             ]
     return {"logs": logs}
+
+
+@app.get("/partner/reports/media")
+# Returns complete report records for the requested ids, including uploaded
+# photos/attachments. Partner sessions are still limited to their own scoped
+# projects and events by the normal storage access filter.
+def get_partner_report_media(
+    request: FastAPIRequest,
+    report_ids: str = "",
+    include_images: bool = True,
+) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if session.get("role") not in {"admin", "partner"}:
+        raise HTTPException(status_code=403, detail="Only partners and admins can access partner report media.")
+
+    requested_report_ids = list(
+        dict.fromkeys(
+            value.strip()
+            for value in str(report_ids or "").split(",")
+            if value.strip()
+        )
+    )
+    if not requested_report_ids:
+        return {"reports": []}
+
+    _require_postgres()
+    with get_connection() as connection:
+        reports: list[dict[str, Any]] = []
+        for report_id in requested_report_ids:
+            report = _postgres_get_hot_item_by_id(
+                connection,
+                "partnerReports",
+                report_id,
+                include_media=include_images,
+            )
+            if report is None:
+                continue
+            if not _scope_storage_collection(connection, "partnerReports", [report], session):
+                continue
+            reports.append(report)
+
+    return {"reports": reports}
 
 
 @app.get("/partner/volunteer-time-logs/media")

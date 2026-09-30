@@ -172,6 +172,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
   const [showAllEvents, setShowAllEvents] = useState(false);
   const [joinRecords, setJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const hasLoadedOnceRef = useRef(false);
+  const loadGenerationRef = useRef(0);
 
   useEffect(() => {
     const targetProjectId = route?.params?.projectId;
@@ -199,6 +200,8 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
   }, [route?.params?.projectId, records, programs]);
 
   const loadData = useCallback(async (forceRefresh = false) => {
+    const requestGeneration = ++loadGenerationRef.current;
+
     if (!user) return;
     const shouldShowBlockingLoader = !hasLoadedOnceRef.current;
     try {
@@ -214,6 +217,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           forceRefresh,
           false,
         );
+        if (requestGeneration !== loadGenerationRef.current) return;
         const snapshotRecords = snapshot.projects || [];
         const rawProgramTracks = snapshot.programTracks || [];
         const rawPrograms = snapshot.programs || [];
@@ -248,6 +252,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           setVolunteerMatches(snapshot.volunteerMatches);
         } else if (snapshot.volunteerProfile?.id) {
           const matches = await getVolunteerProjectMatches(snapshot.volunteerProfile.id);
+          if (requestGeneration !== loadGenerationRef.current) return;
           setVolunteerMatches(matches);
         } else {
           setVolunteerMatches([]);
@@ -268,6 +273,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           true,
         )
           .then(imageSnapshot => {
+            if (requestGeneration !== loadGenerationRef.current) return;
             setRecords(imageSnapshot.projects || []);
             const imageTracks = imageSnapshot.programTracks || [];
             const imagePrograms = imageSnapshot.programs || [];
@@ -292,8 +298,10 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       } finally {
         // Reserved for future request cancellation; the storage helper owns its timeout.
       }
+      if (requestGeneration !== loadGenerationRef.current) return;
       hasLoadedOnceRef.current = true;
     } catch (error) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       if (isAbortLikeError(error)) {
         console.warn('[VolunteerProjectsScreen] loadData timeout');
         return;
@@ -305,7 +313,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       setVolunteerMatches([]);
       setJoinRecords([]);
     } finally {
-      if (shouldShowBlockingLoader) {
+      if (shouldShowBlockingLoader && requestGeneration === loadGenerationRef.current) {
         setLoading(false);
       }
     }

@@ -6,6 +6,7 @@ import {
   setCurrentUser as saveCurrentUser,
   getCurrentUser,
   getApiAuthToken,
+  clearStorageCache,
   subscribeToAuthSessionInvalidated,
 } from '../models/storage';
 
@@ -119,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleInvalidSession = () => {
       setUser(null);
+      clearStorageCache();
       void saveCurrentUser(null);
     };
 
@@ -175,6 +177,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      // Shared collection caches are persisted locally, but their contents
+      // are role/account-scoped by the API. Clear them when a different
+      // account signs in so the next screen cannot briefly render the prior
+      // partner's projects, events, or reports.
+      clearStorageCache();
       setUser(userData);
       // Finish the local write before reporting login complete so an
       // immediate browser refresh cannot race the session persistence.
@@ -191,6 +198,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const previousUser = user;
     try {
       setUser(null);
+      clearStorageCache();
       await saveCurrentUser(null);
     } catch (error) {
       setUser(previousUser);

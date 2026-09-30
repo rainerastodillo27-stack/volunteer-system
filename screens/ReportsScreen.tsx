@@ -5,6 +5,7 @@ import { Alert, Modal, StyleSheet, FlatList, View, Text, ScrollView, TouchableOp
 import { useAuth } from '../contexts/AuthContext';
 import {
   getAllPartnerReports,
+  getPartnerReportsMedia,
   getPartnerReportById,
   getAllProjects,
   getProjectsScreenSnapshot,
@@ -99,6 +100,13 @@ export interface PartnerProjectReportSummary {
   partnerReports: SubmittedReport[];
   volunteerAccounts: PartnerVolunteerAccountSummary[];
   generatedTitle: string;
+}
+
+export interface PartnerReportAccountFilter {
+  key: string;
+  name: string;
+  email?: string;
+  projectIds: string[];
 }
 
 function friendlyEventFallbackTitle(projectId: string | undefined, isEvent: boolean): string {
@@ -373,28 +381,14 @@ function buildPartnerProjectSummaries(
       .filter(
         application =>
           application.status === 'Approved' &&
-          Boolean(application.projectId) &&
-          !String(application.projectId).startsWith('program:')
+          (Boolean(application.projectId) || Boolean(application.proposalDetails?.targetProjectId))
       )
-      .map(application => String(application.projectId || '').trim())
-      .filter(Boolean)
-  );
-
-  // Also collect approved program modules so we can match projects by programModule
-  // when the application projectId is still a 'program:' placeholder (stale cache).
-  const approvedProgramModules = new Set(
-    partnerApplications
-      .filter(application => application.status === 'Approved')
-      .map(application => {
-        const pid = String(application.projectId || '');
-        if (pid.startsWith('program:')) {
-          return pid.slice('program:'.length).trim();
-        }
-        return (
-          application.proposalDetails?.requestedProgramModule ||
-          ''
-        );
-      })
+      .flatMap(application => [
+        application.projectId,
+        application.proposalDetails?.targetProjectId,
+      ])
+      .map(normalizeProjectId)
+      .filter(projectId => !projectId.startsWith('program:'))
       .filter(Boolean)
   );
 
@@ -428,13 +422,10 @@ function buildPartnerProjectSummaries(
     .filter(project => {
       if (project.isEvent) return false;
       const projectId = normalizeProjectId(project.id);
-      // Match by direct project ID (normal case after approval)
-      if (approvedProjectIds.has(projectId)) return true;
-      // Match by programModule (fallback when cache has stale program: IDs)
-      if (project.programModule && approvedProgramModules.has(project.programModule)) return true;
-      // Match proposal-created projects by ID prefix
-      if (String(project.id).startsWith('project-proposal-') && approvedProgramModules.has(project.category || '')) return true;
-      return false;
+      // Account scope is based on the approved application's exact project ID.
+      // Matching by program/module would expose another partner's projects
+      // whenever both partners work in the same advocacy area.
+      return approvedProjectIds.has(projectId);
     })
     .map(project => {
       const linkedEvents = projects.filter(
@@ -1017,6 +1008,68 @@ export default function ReportsScreen({ navigation, route }: any) {
     [partnerAcceptedEventIds, partnerReportProjectIds, reports, user?.id, user?.role]
   );
 
+  const partnerReportAccounts = useMemo<PartnerReportAccountFilter[]>(() => {
+    const accounts = new Map<string, PartnerReportAccountFilter>();
+    const ensureAccount = (key: unknown, name: unknown, email?: unknown) => {
+      const normalizedKey = String(key || '').trim();
+      if (!normalizedKey) return null;
+      const existing = accounts.get(normalizedKey);
+      if (existing) {
+        if (!existing.name || existing.name === 'Partner') {
+          existing.name = String(name || '').trim() || existing.name;
+        }
+        if (!existing.email && email) existing.email = String(email).trim();
+        return existing;
+      }
+      const created: PartnerReportAccountFilter = {
+        key: normalizedKey,
+        name: String(name || '').trim() || 'Partner',
+        email: email ? String(email).trim() : undefined,
+        projectIds: [],
+      };
+      accounts.set(normalizedKey, created);
+      return created;
+    };
+
+    partnerApplications
+      .filter(application => application.status === 'Approved')
+      .forEach(application => {
+        const account = ensureAccount(application.partnerUserId, application.partnerName, application.partnerEmail);
+        if (!account) return;
+        const applicationProjectIds = [
+          application.projectId,
+          application.proposalDetails?.targetProjectId,
+          (application.proposalDetails as any)?.targetProgramId,
+        ]
+          .map(normalizeProjectId)
+          .filter(Boolean);
+        const matchingSummaries = partnerProjectSummaries.filter(summary =>
+          applicationProjectIds.includes(normalizeProjectId(summary.project.id))
+        );
+        account.projectIds.push(
+          ...applicationProjectIds,
+          ...matchingSummaries.flatMap(summary => [
+            summary.project.id,
+            ...summary.linkedEvents.map(event => event.id),
+          ])
+        );
+      });
+
+    partnerVisibleReports
+      .filter(report => report.submitterRole === 'partner')
+      .forEach(report => {
+        const account = ensureAccount(
+          (report as any).partnerUserId || report.submittedBy,
+          (report as any).partnerName || report.submitterName,
+        );
+        if (account && report.projectId) account.projectIds.push(report.projectId);
+      });
+
+    return Array.from(accounts.values())
+      .map(account => ({ ...account, projectIds: Array.from(new Set(account.projectIds.map(normalizeProjectId).filter(Boolean))) }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [partnerApplications, partnerProjectSummaries, partnerVisibleReports]);
+
   const partnerVolunteerTimeLogs = useMemo(
     () => volunteerTimeLogs.filter(log => partnerAcceptedEventIds.has(normalizeProjectId(log.projectId))),
     [partnerAcceptedEventIds, volunteerTimeLogs]
@@ -1080,6 +1133,25 @@ export default function ReportsScreen({ navigation, route }: any) {
       .catch(error => {
         if (!cancelled) {
           console.warn('[ReportsScreen] Connected event photos skipped:', error);
+          void getAllVolunteerTimeLogs({ includeImages: true, forceRefresh: true })
+            .then(mediaTimeLogs => {
+              if (cancelled) return;
+              const eventIdSet = new Set(mediaProjectIds);
+              setVolunteerTimeLogs(currentLogs => {
+                const mergedById = new Map(currentLogs.map(log => [log.id, log]));
+                mediaTimeLogs
+                  .filter(log => eventIdSet.has(normalizeProjectId(log.projectId)))
+                  .forEach(log => mergedById.set(log.id, log));
+                return Array.from(mergedById.values()).sort(
+                  (left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime()
+                );
+              });
+            })
+            .catch(fallbackError => {
+              if (!cancelled) {
+                console.warn('[ReportsScreen] Attendance photo fallback skipped:', fallbackError);
+              }
+            });
         }
       });
 
@@ -1151,8 +1223,17 @@ export default function ReportsScreen({ navigation, route }: any) {
         );
       });
 
+      let fullReports: PartnerReport[] = [];
+      try {
+        fullReports = await getPartnerReportsMedia(pendingReports.map(report => report.id));
+      } catch (batchError) {
+        console.warn('[ReportsScreen] Batch report media request skipped; using detail fallback:', batchError);
+      }
+
+      const loadedReportIds = new Set(fullReports.map(report => report.id));
+      const fallbackReports = pendingReports.filter(report => !loadedReportIds.has(report.id));
       const results = await Promise.allSettled(
-        pendingReports.map(async report => {
+        fallbackReports.map(async report => {
           let lastError: unknown;
           for (let attempt = 0; attempt < 2; attempt += 1) {
             try {
@@ -1167,16 +1248,17 @@ export default function ReportsScreen({ navigation, route }: any) {
           throw lastError;
         })
       );
-      const fullReports = results.flatMap((result, index) => {
+      const fallbackFullReports = results.flatMap((result, index) => {
         if (result.status === 'fulfilled' && result.value) {
           return [result.value];
         }
         if (result.status === 'rejected') {
-          reportMediaRequestedRef.current.delete(pendingReports[index].id);
+          reportMediaRequestedRef.current.delete(fallbackReports[index].id);
           console.warn('[ReportsScreen] A volunteer report photo could not be loaded after retry.');
         }
         return [];
       });
+      fullReports = [...fullReports, ...fallbackFullReports];
       if (fullReports.length === 0) return;
 
       const fullReportById = new Map(fullReports.map(report => [report.id, report]));
@@ -1544,6 +1626,7 @@ export default function ReportsScreen({ navigation, route }: any) {
         projectSummaries={partnerProjectSummaries}
         isAdminView={user?.role === 'admin'}
         volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
+        partnerAccounts={partnerReportAccounts}
       />
     );
   })();

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import ModernTheme from '../utils/modernTheme';
 import {
   Alert,
@@ -99,6 +99,7 @@ export default function PartnerProgramManagementScreen() {
   const [detailModalProject, setDetailModalProject] = useState<Project | null>(null);
   const [calendarSyncing, setCalendarSyncing] = useState(false);
   const [calendarSyncMessage, setCalendarSyncMessage] = useState<string | null>(null);
+  const loadGenerationRef = useRef(0);
   const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
   const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
     googleAuthConfig.request,
@@ -106,8 +107,12 @@ export default function PartnerProgramManagementScreen() {
   );
 
   const loadData = useCallback(async (showRefresh = false) => {
+    const requestGeneration = ++loadGenerationRef.current;
+
     if (!user) {
-      setLoading(false);
+      if (requestGeneration === loadGenerationRef.current) {
+        setLoading(false);
+      }
       return;
     }
 
@@ -117,6 +122,7 @@ export default function PartnerProgramManagementScreen() {
 
     try {
       const snapshot = await getPartnerDashboardSnapshot(true, true);
+      if (requestGeneration !== loadGenerationRef.current) return;
       setPrograms(
         (snapshot.programs || []).filter(program => !program.isEvent && !program.parentProjectId)
       );
@@ -127,12 +133,13 @@ export default function PartnerProgramManagementScreen() {
       setPlanningCalendars(snapshot.adminPlanningCalendars || []);
       setPlanningItems(snapshot.adminPlanningItems || []);
     } catch (error) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       if (!isAbortLikeError(error)) {
         console.error('PartnerProgramManagementScreen loadData error:', error);
       }
     } finally {
-      setLoading(false);
-      if (showRefresh) {
+      if (requestGeneration === loadGenerationRef.current) {
+        setLoading(false);
         setRefreshing(false);
       }
     }
@@ -140,10 +147,13 @@ export default function PartnerProgramManagementScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadData(true);
+      // Focus and realtime refreshes are background reconciliations. Keep the
+      // current program cards visible instead of showing the pull-to-refresh
+      // spinner every time this tab is opened.
+      void loadData(false);
       return subscribeToStorageChanges(
         ['projects', 'events', 'programs', 'partnerProjectApplications'],
-        () => loadData(true),
+        () => loadData(false),
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
     }, [loadData])
@@ -328,7 +338,9 @@ export default function PartnerProgramManagementScreen() {
     });
   };
 
-  if (loading) {
+  const hasProgramContent = programs.length > 0 || allProjects.length > 0 || partnerApplications.length > 0;
+
+  if (loading && !hasProgramContent) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#166534" />

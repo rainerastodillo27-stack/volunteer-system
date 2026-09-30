@@ -59,6 +59,7 @@ export default function MappingScreen({ navigation }: any) {
   const [locationPromptProject, setLocationPromptProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapViewKey, setMapViewKey] = useState(0);
+  const loadGenerationRef = React.useRef(0);
   const mapRef = React.useRef<MapView | null>(null);
   const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
   const unmappedProjects = React.useMemo(() => getUnmappedProjects(projects), [projects]);
@@ -70,6 +71,8 @@ export default function MappingScreen({ navigation }: any) {
 
   // Loads map data and narrows project visibility based on the active role.
   const loadProjects = useCallback(async (forceRefresh = false) => {
+    const requestGeneration = ++loadGenerationRef.current;
+
     try {
       // Load cover photos too because the selected-project panel displays them.
       const snapshot = await getProjectsScreenSnapshot(
@@ -84,7 +87,9 @@ export default function MappingScreen({ navigation }: any) {
         forceRefresh,
         true,
       );
+      if (requestGeneration !== loadGenerationRef.current) return;
       const allPartners = await getAllPartners();
+      if (requestGeneration !== loadGenerationRef.current) return;
       const mapSourceProjects = withImpactMapFallbackProjects(
         snapshot.projects,
         snapshot.partnerApplications,
@@ -132,6 +137,7 @@ export default function MappingScreen({ navigation }: any) {
           getAllPartnerReports({ forceRefresh }),
           getAllVolunteers(),
         ]);
+        if (requestGeneration !== loadGenerationRef.current) return;
         setPartnerReports(allReports.filter(report => visibleProjectIds.has(report.projectId)));
         setVolunteers(allVolunteers);
       } catch (err) {
@@ -139,8 +145,11 @@ export default function MappingScreen({ navigation }: any) {
       }
       
       setLoadError(null);
-      setLoading(false);
+      if (requestGeneration === loadGenerationRef.current) {
+        setLoading(false);
+      }
     } catch (error) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       console.error('Error loading projects for map:', error);
       setLoadError({
         title: getRequestErrorTitle(error, 'Database Unavailable'),

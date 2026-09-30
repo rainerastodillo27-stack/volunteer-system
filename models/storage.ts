@@ -6509,6 +6509,26 @@ export async function getImpactHubReportsByUser(
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
+// Retrieves complete media-bearing report records in one scoped request.
+// Partner sessions are filtered by the server to their approved projects/events.
+export async function getPartnerReportsMedia(reportIds: string[]): Promise<PartnerReport[]> {
+  const normalizedReportIds = Array.from(
+    new Set(reportIds.map(reportId => String(reportId || '').trim()).filter(Boolean))
+  );
+  if (normalizedReportIds.length === 0) {
+    return [];
+  }
+
+  const params = new URLSearchParams({
+    report_ids: normalizedReportIds.join(','),
+    include_images: 'true',
+  });
+  const payload = await requestApiJson<{ reports?: PartnerReport[] }>(
+    `/partner/reports/media?${params.toString()}`
+  );
+  return dedupeReports(payload.reports || []);
+}
+
 // Retrieves one complete report, including attachments and the uploaded photo.
 // List screens can omit these fields and fetch them only when a report opens.
 export async function getPartnerReportById(reportId: string): Promise<PartnerReport | null> {

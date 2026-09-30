@@ -180,6 +180,7 @@ export default function VolunteerDashboardScreen() {
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
+  const loadGenerationRef = useRef(0);
 
   const [currentDate, setCurrentDate] = useState(new Date(2026, 6, 27));
 
@@ -323,6 +324,8 @@ export default function VolunteerDashboardScreen() {
   };
 
   const loadDashboardData = React.useCallback(async (force = false) => {
+    const requestGeneration = ++loadGenerationRef.current;
+
     if (!user?.id) return;
     try {
       const projectSnapshot = await getProjectsScreenSnapshot(
@@ -340,6 +343,7 @@ export default function VolunteerDashboardScreen() {
         force,
         false // images not needed for dashboard list view
       );
+      if (requestGeneration !== loadGenerationRef.current) return;
 
       setProjects(projectSnapshot.projects || []);
       setVolunteerProfile(projectSnapshot.volunteerProfile);
@@ -393,7 +397,11 @@ export default function VolunteerDashboardScreen() {
       // They must not keep the dashboard spinner visible on a slow mobile
       // connection. Any repair write will still notify subscribed screens.
       void getDashboardTimelineSnapshot()
-        .then(timelineSnapshot => setPlanningItems(timelineSnapshot.planningItems || []))
+        .then(timelineSnapshot => {
+          if (requestGeneration === loadGenerationRef.current) {
+            setPlanningItems(timelineSnapshot.planningItems || []);
+          }
+        })
         .catch(error => console.warn('[VolunteerDashboardScreen] Timeline load skipped:', error));
       void reconcileApprovedVolunteerEventMemberships().catch(error =>
         console.warn('[VolunteerDashboardScreen] Membership reconciliation skipped:', error)
@@ -402,13 +410,18 @@ export default function VolunteerDashboardScreen() {
       // records before the main dashboard is visible.
       void getUnreadMessagesForUser(user.id)
         .then(messages => {
-          setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
+          if (requestGeneration === loadGenerationRef.current) {
+            setUnreadMessages(messages.filter(msg => !msg.read && msg.recipientId === user.id).length);
+          }
         })
         .catch(error => console.warn('[VolunteerDashboardScreen] Unread count skipped:', error));
     } catch (err) {
+      if (requestGeneration !== loadGenerationRef.current) return;
       console.error('Failed to load dashboard:', err);
     } finally {
-      setLoading(false);
+      if (requestGeneration === loadGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [user]);
 

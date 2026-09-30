@@ -19,6 +19,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import Svg, { Circle, Path, G } from 'react-native-svg';
 import type {
+  PartnerReportAccountFilter,
   PartnerProjectReportSummary,
   SubmittedReport,
 } from '../screens/ReportsScreen';
@@ -176,6 +177,7 @@ interface VolunteerReportsDashboardProps {
   isPartnerView?: boolean;
   volunteers?: Volunteer[];
   joinedEventIds?: string[];
+  partnerAccounts?: PartnerReportAccountFilter[];
 }
 
 type PartnerQuarterlyDocument = {
@@ -891,12 +893,14 @@ export function PartnerReportsDashboard({
   refreshing,
   isAdminView = false,
   volunteers = [],
+  partnerAccounts = [],
 }: VolunteerReportsDashboardProps) {
   const [showFullDetailsModal, setShowFullDetailsModal] = useState(false);
   const [showAllPhotosModal, setShowAllPhotosModal] = useState(false);
   const [loadingReportPhotos, setLoadingReportPhotos] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [selectedPhotoFolderId, setSelectedPhotoFolderId] = useState<string | null>(null);
+  const [selectedPartnerAccountKey, setSelectedPartnerAccountKey] = useState<string | null>(null);
   const [downloadPreview, setDownloadPreview] = useState<{
     title: string;
     subtitle: string;
@@ -1002,39 +1006,17 @@ export function PartnerReportsDashboard({
     };
   }, [availableQuarters, selectedQuarterKey]);
 
-  // The partner view is a project-level report hub. It includes the
-  // partner's report plus every volunteer report linked to the approved
-  // project or one of its events for the selected quarter.
-  const quarterReports = useMemo(() => {
-    return reports
-      .filter(r => r.status !== 'Rejected')
-      .filter(r => {
-        const date = new Date(r.submittedAt);
-        return date >= currentQuarter.startDate && date <= currentQuarter.endDate;
-      })
-      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-  }, [currentQuarter, reports]);
-
-  // Keep the generated quarterly document complete even when a report was
-  // first received through a project summary instead of the report-list
-  // request. IDs deduplicate the two sources while preserving volunteer and
-  // partner reports from the selected quarter for both partner and admin views.
-  const quarterlyReportRecords = useMemo(() => {
+  // Keep the report hub complete even when a report was first received through
+  // a project summary instead of the report-list request. IDs deduplicate the
+  // two sources while preserving all volunteer and partner event reports.
+  const allReportRecords = useMemo(() => {
     const recordsById = new Map<string, SubmittedReport>();
     const addReport = (report: SubmittedReport) => {
       if (!report || report.status === 'Rejected') return;
-      const submittedAt = new Date(report.submittedAt).getTime();
-      if (
-        !Number.isFinite(submittedAt) ||
-        submittedAt < currentQuarter.startDate.getTime() ||
-        submittedAt > currentQuarter.endDate.getTime()
-      ) {
-        return;
-      }
       recordsById.set(report.id, report);
     };
 
-    quarterReports.forEach(addReport);
+    reports.forEach(addReport);
     projectSummaries.forEach(summary => {
       summary.partnerReports.forEach(addReport);
       summary.volunteerAccounts.forEach(account => account.reports.forEach(addReport));
@@ -1043,7 +1025,65 @@ export function PartnerReportsDashboard({
     return Array.from(recordsById.values()).sort(
       (left, right) => new Date(right.submittedAt).getTime() - new Date(left.submittedAt).getTime()
     );
-  }, [currentQuarter, projectSummaries, quarterReports]);
+  }, [projectSummaries, reports]);
+
+  const selectedPartnerAccount = useMemo(
+    () => partnerAccounts.find(account => account.key === selectedPartnerAccountKey) || null,
+    [partnerAccounts, selectedPartnerAccountKey]
+  );
+
+  const selectedPartnerProjectIds = useMemo(
+    () => new Set((selectedPartnerAccount?.projectIds || []).map(normalizePartnerReportProjectId).filter(Boolean)),
+    [selectedPartnerAccount]
+  );
+
+  const reportBelongsToSelectedPartner = (report: SubmittedReport) => {
+    if (!selectedPartnerAccount) return true;
+    const projectId = normalizePartnerReportProjectId(report.projectId);
+    if (projectId && selectedPartnerProjectIds.has(projectId)) return true;
+    return [report.submittedBy, (report as any).partnerUserId, report.submitterName]
+      .map(value => String(value || '').trim())
+      .some(value => value && value === selectedPartnerAccount.key);
+  };
+
+  const selectedAccountReportRecords = useMemo(
+    () => allReportRecords.filter(reportBelongsToSelectedPartner),
+    [allReportRecords, selectedPartnerAccount, selectedPartnerProjectIds]
+  );
+
+  const partnerAccountCards = useMemo(
+    () => partnerAccounts.map(account => {
+      const projectIds = new Set((account.projectIds || []).map(normalizePartnerReportProjectId).filter(Boolean));
+      const reportCount = allReportRecords.filter(report => {
+        const reportProjectId = normalizePartnerReportProjectId(report.projectId);
+        return projectIds.has(reportProjectId) ||
+          [report.submittedBy, (report as any).partnerUserId, report.submitterName]
+            .map(value => String(value || '').trim())
+            .some(value => value && value === account.key);
+      }).length;
+      return { ...account, reportCount };
+    }),
+    [allReportRecords, partnerAccounts]
+  );
+
+  useEffect(() => {
+    if (selectedPartnerAccountKey && !partnerAccounts.some(account => account.key === selectedPartnerAccountKey)) {
+      setSelectedPartnerAccountKey(null);
+    }
+  }, [partnerAccounts, selectedPartnerAccountKey]);
+
+  // The download, header, event folders, and photo folders all stay aligned
+  // with the selected quarter. The account filter is applied before this
+  // quarter window so the generated download is account-specific.
+  const quarterlyReportRecords = useMemo(
+    () => selectedAccountReportRecords.filter(report => {
+      const submittedAt = new Date(report.submittedAt).getTime();
+      return Number.isFinite(submittedAt) &&
+        submittedAt >= currentQuarter.startDate.getTime() &&
+        submittedAt <= currentQuarter.endDate.getTime();
+    }),
+    [currentQuarter, selectedAccountReportRecords]
+  );
 
   const [selectedReportFolderId, setSelectedReportFolderId] = useState<string | null>(null);
 
@@ -1062,6 +1102,7 @@ export function PartnerReportsDashboard({
         if (!event.isEvent) return;
         const eventId = normalizePartnerReportProjectId(event.id);
         if (!eventId) return;
+        if (selectedPartnerAccount && !selectedPartnerProjectIds.has(eventId)) return;
         eventsById.set(eventId, canonicalProjects.get(eventId) || event);
       });
     });
@@ -1071,7 +1112,7 @@ export function PartnerReportsDashboard({
       const rightDate = new Date(right.startDate || right.createdAt || 0).getTime();
       return rightDate - leftDate || left.title.localeCompare(right.title);
     });
-  }, [projectSummaries, projects]);
+  }, [projectSummaries, projects, selectedPartnerAccount, selectedPartnerProjectIds]);
 
   const connectedEventIds = useMemo(
     () => new Set(connectedEventProjects.map(event => normalizePartnerReportProjectId(event.id))),
@@ -1564,6 +1605,79 @@ export function PartnerReportsDashboard({
             </ScrollView>
           </View>
         </View>
+
+        {partnerAccountCards.length > 0 ? (
+          <View
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 14,
+              borderWidth: 1,
+              borderColor: '#e2e8f0',
+              padding: isCompactLayout ? 14 : 16,
+              gap: 10,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <View>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>Partner accounts</Text>
+                <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                  Select an account to filter viewed and downloaded reports.
+                </Text>
+              </View>
+              {selectedPartnerAccount ? (
+                <TouchableOpacity
+                  onPress={() => setSelectedPartnerAccountKey(null)}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Show reports for all partner accounts"
+                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#f1f5f9' }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#475569' }}>Show all</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
+              {partnerAccountCards.map(account => {
+                const selected = selectedPartnerAccountKey === account.key;
+                return (
+                  <TouchableOpacity
+                    key={account.key}
+                    onPress={() => {
+                      setSelectedPartnerAccountKey(account.key);
+                      setSelectedReportFolderId(null);
+                      setSelectedPhotoFolderId(null);
+                      setSelectedPhotoIndex(null);
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Filter reports for ${account.name}`}
+                    accessibilityState={{ selected }}
+                    style={{
+                      minWidth: isCompactLayout ? 190 : 220,
+                      padding: 12,
+                      borderRadius: 10,
+                      borderWidth: 1,
+                      borderColor: selected ? '#166534' : '#dbe5df',
+                      backgroundColor: selected ? '#f0fdf4' : '#f8fafc',
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+                      <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: selected ? '#166534' : '#dcfce7', alignItems: 'center', justifyContent: 'center' }}>
+                        <MaterialIcons name="business" size={18} color={selected ? '#ffffff' : '#166534'} />
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#1e293b' }} numberOfLines={1}>{account.name}</Text>
+                        <Text style={{ fontSize: 10, color: '#64748b', marginTop: 3 }} numberOfLines={1}>
+                          {account.reportCount} report{account.reportCount === 1 ? '' : 's'}
+                        </Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        ) : null}
 
         {/* 2. Top Header Card */}
         <View
