@@ -22,7 +22,7 @@ export type NotificationMessage = {
 };
 
 type NotificationCenterContextValue = {
-  openNotifications: (onItemPress?: () => void) => void;
+  openNotifications: (onItemPress?: (message: NotificationMessage) => void) => void;
   notificationCount: number;
 };
 
@@ -46,7 +46,7 @@ export function NotificationCenterProvider({
   onNotificationClick,
 }: NotificationCenterProviderProps) {
   const [visible, setVisible] = useState(false);
-  const onItemPressRef = useRef<(() => void) | undefined>(undefined);
+  const onItemPressRef = useRef<((message: NotificationMessage) => void) | undefined>(undefined);
 
   const notifications = useMemo(
     () => [...unreadMessages].sort((left, right) => {
@@ -62,7 +62,7 @@ export function NotificationCenterProvider({
     onItemPressRef.current = undefined;
   }, []);
 
-  const openNotifications = useCallback((onItemPress?: () => void) => {
+  const openNotifications = useCallback((onItemPress?: (message: NotificationMessage) => void) => {
     onItemPressRef.current = onItemPress;
     setVisible(true);
   }, []);
@@ -71,7 +71,7 @@ export function NotificationCenterProvider({
     void onNotificationClick?.({ type: 'message', data: message });
     const onItemPress = onItemPressRef.current;
     closeNotifications();
-    onItemPress?.();
+    onItemPress?.(message);
   }, [closeNotifications, onNotificationClick]);
 
   return (
@@ -105,6 +105,8 @@ export function NotificationCenterProvider({
                     style={styles.item}
                     onPress={() => handleMessagePress(message)}
                     activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open message from ${message.senderName || message.senderId || 'unknown sender'}`}
                   >
                     <View style={styles.itemIcon}>
                       <MaterialIcons name="mail" size={18} color="#0369a1" />

@@ -254,6 +254,8 @@ export default function ScreenBrandHeader({
             onPress={handleOpenNotificationModal}
             activeOpacity={0.7}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Open notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
           >
             <MaterialIcons name={hasNotifications ? 'notifications-active' : 'notifications-none'} size={24} color="#166534" />
             {hasNotifications && (
@@ -269,7 +271,10 @@ export default function ScreenBrandHeader({
 
       <Modal visible={showNotificationModal} animationType="fade" transparent onRequestClose={handleDismissNotification}>
         <Pressable style={styles.notificationModalOverlay} onPress={handleDismissNotification}>
-          <View style={[styles.notificationModal, glassSurfaceStyle]}>
+          <Pressable
+            style={[styles.notificationModal, glassSurfaceStyle]}
+            onPress={(event) => event.stopPropagation()}
+          >
             <View style={styles.notificationModalHeader}>
               <Text style={styles.notificationModalTitle}>Notifications</Text>
               <TouchableOpacity
@@ -293,6 +298,8 @@ export default function ScreenBrandHeader({
                     style={styles.notificationItem}
                     onPress={() => handleNotificationClick(item)}
                     activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open notification: ${item.title}`}
                   >
                     <View style={[styles.notificationItemIcon, { backgroundColor: getNotificationColor(item.type) + '15' }]}>
                       <MaterialIcons name={getNotificationIcon(item.type)} size={18} color={getNotificationColor(item.type)} />
@@ -317,7 +324,7 @@ export default function ScreenBrandHeader({
                   : 'No notifications'}
               </Text>
             </View>
-          </View>
+          </Pressable>
         </Pressable>
       </Modal>
     </>

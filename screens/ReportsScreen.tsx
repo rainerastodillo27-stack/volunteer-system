@@ -644,6 +644,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [photoLogsRefreshVersion, setPhotoLogsRefreshVersion] = useState(0);
   const reportMediaRequestedRef = useRef<Set<string>>(new Set());
+  const reportMediaAttemptsRef = useRef<Map<string, number>>(new Map());
   const attendanceMediaRequestedRef = useRef(false);
   const [selectedReportType, setSelectedReportType] = useState<'all' | 'volunteer' | 'partner' | null>(null);
   const [showFilteredReports, setShowFilteredReports] = useState(false);
@@ -819,6 +820,7 @@ export default function ReportsScreen({ navigation, route }: any) {
       // A realtime storage update means previously requested media may have
       // changed. Let the Photos view request the new full records again.
       reportMediaRequestedRef.current.clear();
+      reportMediaAttemptsRef.current.clear();
       attendanceMediaRequestedRef.current = false;
       setReports(currentReports => mergeReportsPreservingMedia(currentReports, normalizedReports));
       setPhotoLogsRefreshVersion(version => version + 1);
@@ -1111,7 +1113,7 @@ export default function ReportsScreen({ navigation, route }: any) {
   // Report media is fetched only when the partner dashboard identifies
   // volunteer reports in the currently selected connected-event quarter.
   const handleRequestPartnerReportMedia = useCallback(
-    (reportIds: string[]) => {
+    async (reportIds: string[]): Promise<void> => {
       if (user?.role !== 'partner' && user?.role !== 'admin') {
         return;
       }
@@ -1133,49 +1135,67 @@ export default function ReportsScreen({ navigation, route }: any) {
       const pendingReports = Array.from(requestedIds)
         .map(reportId => mediaSourceById.get(reportId))
         .filter((report): report is SubmittedReport => Boolean(report))
-        .filter(report => !reportMediaRequestedRef.current.has(report.id));
+        .filter(report =>
+          !reportMediaRequestedRef.current.has(report.id) &&
+          (reportMediaAttemptsRef.current.get(report.id) || 0) < 2
+        );
       if (pendingReports.length === 0) {
         return;
       }
 
-      pendingReports.forEach(report => reportMediaRequestedRef.current.add(report.id));
-      void Promise.all(
+      pendingReports.forEach(report => {
+        reportMediaRequestedRef.current.add(report.id);
+        reportMediaAttemptsRef.current.set(
+          report.id,
+          (reportMediaAttemptsRef.current.get(report.id) || 0) + 1
+        );
+      });
+
+      const results = await Promise.allSettled(
         pendingReports.map(async report => {
-          try {
-            return await getPartnerReportById(report.id);
-          } catch (error) {
-            reportMediaRequestedRef.current.delete(report.id);
-            throw error;
-          }
-        })
-      )
-        .then(fullReports => {
-          const fullReportById = new Map(
-            fullReports
-              .filter((report): report is PartnerReport => Boolean(report))
-              .map(report => [report.id, report])
-          );
-          if (fullReportById.size === 0) return;
-          setReports(currentReports => {
-            const normalizedFullReports = Array.from(fullReportById.values()).map(report =>
-              normalizeImpactHubReport(report, projects)
-            );
-            const normalizedById = new Map(
-              normalizedFullReports.map(report => [report.id, report])
-            );
-            const merged = currentReports.map(report => normalizedById.get(report.id) || report);
-            const existingIds = new Set(merged.map(report => report.id));
-            normalizedFullReports.forEach(report => {
-              if (!existingIds.has(report.id)) {
-                merged.push(report);
+          let lastError: unknown;
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              return await getPartnerReportById(report.id);
+            } catch (error) {
+              lastError = error;
+              if (attempt === 0) {
+                await new Promise(resolve => setTimeout(resolve, 500));
               }
-            });
-            return merged;
-          });
+            }
+          }
+          throw lastError;
         })
-        .catch(error => {
-          console.warn('[ReportsScreen] Volunteer report photos skipped:', error);
+      );
+      const fullReports = results.flatMap((result, index) => {
+        if (result.status === 'fulfilled' && result.value) {
+          return [result.value];
+        }
+        if (result.status === 'rejected') {
+          reportMediaRequestedRef.current.delete(pendingReports[index].id);
+          console.warn('[ReportsScreen] A volunteer report photo could not be loaded after retry.');
+        }
+        return [];
+      });
+      if (fullReports.length === 0) return;
+
+      const fullReportById = new Map(fullReports.map(report => [report.id, report]));
+      setReports(currentReports => {
+        const normalizedFullReports = Array.from(fullReportById.values()).map(report =>
+          normalizeImpactHubReport(report, projects)
+        );
+        const normalizedById = new Map(
+          normalizedFullReports.map(report => [report.id, report])
+        );
+        const merged = currentReports.map(report => normalizedById.get(report.id) || report);
+        const existingIds = new Set(merged.map(report => report.id));
+        normalizedFullReports.forEach(report => {
+          if (!existingIds.has(report.id)) {
+            merged.push(report);
+          }
         });
+        return merged;
+      });
     },
     [partnerProjectSummaries, partnerVisibleReports, projects, reports, user?.role]
   );

@@ -17,6 +17,7 @@ export type PartnerTabParamList = {
   Messages:
     | {
         projectId?: string;
+        conversationUserId?: string;
         newProposalModule?: string;
         newProposalProjectId?: string;
         newProposalTitle?: string;

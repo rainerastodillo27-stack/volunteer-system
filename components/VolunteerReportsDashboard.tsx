@@ -65,7 +65,28 @@ const StableVolunteerReportPhoto = React.memo(function StableVolunteerReportPhot
   variant,
 }: VolunteerReportPhotoProps) {
   const [failedUri, setFailedUri] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
+  const retryCountRef = React.useRef(0);
+  const retryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const source = useMemo(() => ({ uri }), [uri]);
+
+  useEffect(() => {
+    retryCountRef.current = 0;
+    setRetryKey(0);
+    setFailedUri(null);
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, [uri]);
+
+  const handleImageError = React.useCallback(() => {
+    if (retryCountRef.current < 2) {
+      retryCountRef.current += 1;
+      retryTimerRef.current = setTimeout(() => setRetryKey(key => key + 1), retryCountRef.current * 500);
+      return;
+    }
+    setFailedUri(uri);
+  }, [uri]);
 
   if (failedUri === uri) {
     return (
@@ -78,11 +99,12 @@ const StableVolunteerReportPhoto = React.memo(function StableVolunteerReportPhot
 
   return (
     <Image
+      key={retryKey}
       source={source}
       style={variant === 'gallery' ? styles.volunteerReportPhotoGallery : styles.volunteerReportPhotoThumbnail}
       resizeMode="cover"
       fadeDuration={0}
-      onError={() => setFailedUri(uri)}
+      onError={handleImageError}
     />
   );
 });
@@ -143,7 +165,7 @@ interface VolunteerReportsDashboardProps {
   volunteerJoinRecords?: VolunteerProjectJoinRecord[];
   onUploadReport?: () => void;
   onViewReport: (report: SubmittedReport) => void;
-  onRequestReportMedia?: (reportIds: string[]) => void;
+  onRequestReportMedia?: (reportIds: string[]) => void | Promise<void>;
   onRequestAttendanceMedia?: () => void;
   mediaRefreshVersion?: number;
   loading: boolean;
@@ -872,6 +894,7 @@ export function PartnerReportsDashboard({
 }: VolunteerReportsDashboardProps) {
   const [showFullDetailsModal, setShowFullDetailsModal] = useState(false);
   const [showAllPhotosModal, setShowAllPhotosModal] = useState(false);
+  const [loadingReportPhotos, setLoadingReportPhotos] = useState(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [selectedPhotoFolderId, setSelectedPhotoFolderId] = useState<string | null>(null);
   const [downloadPreview, setDownloadPreview] = useState<{
@@ -1071,9 +1094,21 @@ export function PartnerReportsDashboard({
     const reportIds = connectedEventReports
       .filter(report => report.submitterRole === 'volunteer')
       .map(report => report.id);
-    if (reportIds.length > 0) {
-      onRequestReportMedia(Array.from(new Set(reportIds)));
-    }
+    if (reportIds.length === 0) return;
+
+    let cancelled = false;
+    setLoadingReportPhotos(true);
+    void Promise.resolve(onRequestReportMedia(Array.from(new Set(reportIds))))
+      .catch(error => {
+        console.warn('[PartnerReportsDashboard] Volunteer report photos skipped:', error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReportPhotos(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [connectedEventReports, onRequestReportMedia]);
 
   // The admin report list is intentionally loaded without image bytes first.
@@ -2125,7 +2160,9 @@ export function PartnerReportsDashboard({
                         {folder.title}
                       </Text>
                       <Text style={{ fontSize: 10, color: '#64748b', marginTop: 4 }}>
-                        {folder.photos.length} photo{folder.photos.length === 1 ? '' : 's'}
+                        {loadingReportPhotos
+                          ? 'Loading photos…'
+                          : `${folder.photos.length} photo${folder.photos.length === 1 ? '' : 's'}`}
                       </Text>
                     </View>
                     <MaterialIcons name="chevron-right" size={20} color="#64748b" />

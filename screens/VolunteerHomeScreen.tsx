@@ -57,7 +57,9 @@ export default function VolunteerHomeScreen() {
   };
 
   const handleNotificationPress = () => {
-    openNotifications(() => navigation.navigate('Messages'));
+    openNotifications((message) => navigation.navigate('Messages', {
+      conversationUserId: message.senderId || message.recipientId,
+    }));
   };
 
   return (
@@ -84,6 +86,8 @@ export default function VolunteerHomeScreen() {
             style={styles.iconBtn}
             onPress={handleNotificationPress}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Open notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
           >
             <MaterialIcons
               name={notificationCount > 0 ? 'notifications-active' : 'notifications-none'}

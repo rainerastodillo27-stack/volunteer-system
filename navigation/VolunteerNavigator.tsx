@@ -32,7 +32,7 @@ export type VolunteerTabParamList = {
   Events: { projectId?: string } | undefined;
   Tasks: undefined;
   Map: undefined;
-  Messages: { projectId?: string } | undefined;
+  Messages: { projectId?: string; conversationUserId?: string } | undefined;
   Reports: { projectId?: string; autoOpenUpload?: boolean } | undefined;
   Profile: undefined;
 };

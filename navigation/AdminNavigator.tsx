@@ -61,7 +61,7 @@ export type AdminTabParamList = {
   } | undefined;
   Volunteers: { volunteerId?: string } | undefined;
   Map: undefined;
-  Messages: { projectId?: string } | undefined;
+  Messages: { projectId?: string; conversationUserId?: string } | undefined;
   Reports: { projectId?: string } | undefined;
   Users: undefined;
   Profile: undefined;
