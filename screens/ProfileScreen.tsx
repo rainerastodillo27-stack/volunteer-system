@@ -1348,9 +1348,7 @@ export default function ProfileScreen() {
           {partnerProfiles.length > 0 ? (
             <View style={styles.partnerGrid}>
               {partnerProfiles.map(partnerProfile => {
-                const statusStr = [partnerProfile.status, partnerProfile.verificationStatus]
-                  .filter(Boolean)
-                  .join(' / ');
+                const statusStr = partnerProfile.status;
                 const partnerDocument = getPartnerValidIdDocument(partnerProfile);
                   
                 const locationStr = partnerProfile.address ||
@@ -1389,8 +1387,10 @@ export default function ProfileScreen() {
                         <MaterialIcons name="card-membership" size={20} color="#166534" />
                       </View>
                       <View style={styles.partnerGridTextWrap}>
-                        <Text style={styles.partnerGridLabel}>DSWD Accreditation No.</Text>
-                        <Text style={styles.partnerGridValue}>{partnerProfile.dswdAccreditationNo || 'Not provided'}</Text>
+                        <Text style={styles.partnerGridLabel}>DSWD Accreditation No. (Optional)</Text>
+                        <Text style={styles.partnerGridValue}>
+                          {partnerProfile.dswdAccreditationNo || 'Not provided (optional)'}
+                        </Text>
                       </View>
                     </View>
 

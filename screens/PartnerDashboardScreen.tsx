@@ -127,6 +127,8 @@ type ProposalFormState = {
 
   requestedProgramModule: AdvocacyFocus;
 
+  previousApplicationId?: string;
+
   proposedTitle: string;
 
   proposedDescription: string;
@@ -707,42 +709,42 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
 
 
-  const programApplicationByModule = useMemo(() => {
+  const programApplicationsByTarget = useMemo(() => {
+    const byProgramId = new Map<string, PartnerProjectApplication>();
+    const legacyByModule = new Map<string, PartnerProjectApplication>();
 
-    const byModule = new Map<string, PartnerProjectApplication>();
+    const keepLatest = (
+      map: Map<string, PartnerProjectApplication>,
+      key: string,
+      application: PartnerProjectApplication,
+    ) => {
+      const existing = map.get(key);
+      if (
+        !existing ||
+        new Date(application.requestedAt).getTime() > new Date(existing.requestedAt).getTime()
+      ) {
+        map.set(key, application);
+      }
+    };
 
     partnerApplications.forEach(application => {
+      const legacyModule = getProgramModuleFromProposalProjectId(application.projectId);
+      const targetProgramId =
+        String(application.proposalDetails?.targetProjectId || '').trim() ||
+        (!legacyModule ? String(application.projectId || '').trim() : '');
 
-      const programModule =
-
-        getProgramModuleFromProposalProjectId(application.projectId) ||
-
-        application.proposalDetails?.requestedProgramModule ||
-
-        '';
-
-      if (programModule) {
-
-        const existing = byModule.get(programModule);
-
-        if (
-
-          !existing ||
-
-          new Date(application.requestedAt).getTime() > new Date(existing.requestedAt).getTime()
-
-        ) {
-
-          byModule.set(programModule, application);
-
-        }
-
+      if (targetProgramId) {
+        keepLatest(byProgramId, targetProgramId, application);
+        return;
       }
 
+      const programModule = legacyModule || application.proposalDetails?.requestedProgramModule || '';
+      if (programModule) {
+        keepLatest(legacyByModule, programModule, application);
+      }
     });
 
-    return byModule;
-
+    return { byProgramId, legacyByModule };
   }, [partnerApplications]);
 
 
@@ -848,25 +850,70 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
     }
   };
 
-  const openProposalForm = async (module: AdvocacyFocus, programId?: string) => {
+  const openProposalForm = async (
+    module: AdvocacyFocus,
+    programId?: string,
+    rejectedApplication?: PartnerProjectApplication,
+  ) => {
     setActiveProposalModule(module);
     setActiveProposalProgramId(programId || null);
     setProposalPreviewMode(false);
     setProposalPreviewApplication(null);
 
-    // Try to load saved draft
     let loaded = false;
-    if (user) {
-      try {
-        const raw = await AsyncStorage.getItem(getDraftKey(user.id, module));
-        if (raw) {
-          const draft = JSON.parse(raw) as ProposalFormState;
-          setProposalForm({ ...draft, requestedProgramModule: module });
-          setHasDraft(true);
-          loaded = true;
+
+    if (rejectedApplication) {
+      if (user) {
+        try {
+          const raw = await AsyncStorage.getItem(getDraftKey(user.id, module));
+          if (raw) {
+            const draft = JSON.parse(raw) as ProposalFormState;
+            if (draft.previousApplicationId === rejectedApplication.id) {
+              setProposalForm({ ...draft, requestedProgramModule: module });
+              setHasDraft(true);
+              loaded = true;
+            }
+          }
+        } catch (e) {
+          // Fall back to the rejected proposal details below.
         }
-      } catch (e) {
-        // fall through
+      }
+
+      if (!loaded) {
+        const details = rejectedApplication.proposalDetails;
+        setProposalForm({
+          ...createEmptyProposalForm(module),
+          previousApplicationId: rejectedApplication.id,
+          proposedTitle: details?.proposedTitle || '',
+          proposedDescription: details?.proposedDescription || '',
+          proposedStartDate: details?.proposedStartDate || '',
+          proposedEndDate: details?.proposedEndDate || '',
+          proposedLocation: details?.proposedLocation || '',
+          skillsNeeded: details?.skillsNeeded || [],
+          communityNeed: details?.communityNeed || '',
+          expectedDeliverables: details?.expectedDeliverables || '',
+          photoAttachment: details?.attachments?.find(attachment => attachment.type === 'image')?.url || '',
+          documentAttachment: details?.attachments?.find(attachment => attachment.type === 'document')?.url || '',
+        });
+        setHasDraft(false);
+        loaded = true;
+      }
+    }
+
+    // For a new proposal, restore its saved draft when available.
+    if (user) {
+      if (!rejectedApplication) {
+        try {
+          const raw = await AsyncStorage.getItem(getDraftKey(user.id, module));
+          if (raw) {
+            const draft = JSON.parse(raw) as ProposalFormState;
+            setProposalForm({ ...draft, requestedProgramModule: module });
+            setHasDraft(true);
+            loaded = true;
+          }
+        } catch (e) {
+          // fall through
+        }
       }
     }
     if (!loaded) {
@@ -1268,6 +1315,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       requestedProgramModule: selectedModule,
 
+      previousApplicationId: proposalForm.previousApplicationId,
+
       proposedTitle: proposalForm.proposedTitle.trim(),
 
       proposedDescription: proposalForm.proposedDescription.trim(),
@@ -1357,6 +1406,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       setActionProjectId(proposalProjectId);
 
+      const isResubmission = Boolean(proposalForm.previousApplicationId);
+
       const submittedApplication = await submitPartnerProgramProposal(proposalProjectId, user, {
 
         programModule: selectedModule,
@@ -1376,7 +1427,12 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       void clearProposalDraft(selectedModule);
 
-      Alert.alert('Proposal Sent', 'Your project proposal has been sent to the admin for review.');
+      Alert.alert(
+        isResubmission ? 'Proposal Resubmitted' : 'Proposal Sent',
+        isResubmission
+          ? 'Your revised proposal has been resubmitted to the admin for review.'
+          : 'Your project proposal has been sent to the admin for review.',
+      );
 
       void loadDashboardData();
 
@@ -1759,8 +1815,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                   <Text style={styles.cardMeta}>
                     {partner.sectorType}
-                    {partner.sectorType === 'NGO'
-                      ? ` - DSWD ${partner.dswdAccreditationNo || 'Pending'}`
+                    {partner.sectorType === 'NGO' && partner.dswdAccreditationNo?.trim()
+                      ? ` - DSWD: ${partner.dswdAccreditationNo.trim()}`
                       : ''}
                   </Text>
                 </View>
@@ -1784,8 +1840,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
               </View>
 
               <Text style={styles.cardText}>
-                Verification: {partner.verificationStatus || 'Pending'}
-                {partner.credentialsUnlockedAt ? ' - Login unlocked' : ' - Login locked'}
+                Login access: {partner.credentialsUnlockedAt ? 'Unlocked' : 'Locked'}
               </Text>
             </View>
 
@@ -1816,7 +1871,9 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
         {availableProgramCards.map(programCard => {
           const module = programCard.module;
 
-          const application = programApplicationByModule.get(module);
+          const application =
+            programApplicationsByTarget.byProgramId.get(programCard.id) ||
+            programApplicationsByTarget.legacyByModule.get(module);
 
           const status = application?.status;
 
@@ -1826,7 +1883,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
           const isRejected = status === 'Rejected';
 
-          const proposalProjectId = buildProgramProposalProjectId(module);
+          const proposalProjectId = programCard.id;
 
           const proposalSubmissionLocked = isPending || isApproved;
           const buttonLabel = isRejected
@@ -1907,7 +1964,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                   (actionProjectId === proposalProjectId || proposalSubmissionLocked) && styles.timeButtonDisabled,
                 ]}
 
-                onPress={() => openProposalForm(module, programCard.id)}
+                onPress={() => openProposalForm(module, programCard.id, isRejected ? application : undefined)}
 
                 disabled={actionProjectId === proposalProjectId || proposalSubmissionLocked}
 

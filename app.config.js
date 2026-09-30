@@ -143,7 +143,7 @@ module.exports = () => {
     expo: {
       name: 'NVC',
       slug: 'nvc-build-account',
-      owner: '09092233654',
+      owner: 'astodillos-team',
       icon: './assets/nvc-app-icon.png',
       version: '1.0.0',
       orientation: 'portrait',

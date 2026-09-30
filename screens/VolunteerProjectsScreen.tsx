@@ -169,6 +169,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [selectedProgramDetailsId, setSelectedProgramDetailsId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [showAllEvents, setShowAllEvents] = useState(false);
   const [joinRecords, setJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const hasLoadedOnceRef = useRef(false);
 
@@ -177,6 +178,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     if (!targetProjectId || records.length === 0) return;
     const target = records.find(p => p.id === targetProjectId);
     if (target) {
+      setShowAllEvents(false);
       if (target.isEvent) {
         const parentProject = target.parentProjectId
           ? records.find(p => p.id === target.parentProjectId)
@@ -468,6 +470,11 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
     [records, selectedProject]
   );
 
+  const allEvents = useMemo(
+    () => records.filter(project => project.isEvent).sort(sortByDate),
+    [records]
+  );
+
   const matchByProjectId = useMemo(
     () => new Map(volunteerMatches.map(match => [match.projectId, match])),
     [volunteerMatches]
@@ -552,6 +559,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
   };
 
   const goBackOneLevel = () => {
+    setShowAllEvents(false);
     if (selectedProjectId) {
       setSelectedProjectId(null);
       return;
@@ -563,12 +571,14 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
 
   const handleStepPress = (step: 'Program' | 'Project' | 'Event') => {
     if (step === 'Program') {
+      setShowAllEvents(false);
       setSelectedProgramId(null);
       setSelectedProjectId(null);
       return;
     }
 
     if (step === 'Project') {
+      setShowAllEvents(false);
       if (selectedProgramId) {
         setSelectedProjectId(null);
         return;
@@ -582,21 +592,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       return;
     }
 
-    if (selectedProjectId) {
-      return;
-    }
-
-    const resolvedProgramId = selectedProgramId || programGroups[0]?.id || null;
-    if (!resolvedProgramId) {
-      return;
-    }
-
-    const firstProjectForProgram = projectsOnly
-      .filter(project => !project.isEvent && getProjectProgramId(project, programs) === resolvedProgramId)
-      .sort(sortByDate)[0];
-
-    setSelectedProgramId(resolvedProgramId);
-    setSelectedProjectId(firstProjectForProgram?.id || null);
+    setShowAllEvents(true);
   };
 
   const openProjectDetails = (projectId: string) => {
@@ -812,9 +808,9 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
 
       <View style={styles.stepper}>
         {[
-          { label: 'Program', active: !selectedProgramId },
-          { label: 'Project', active: Boolean(selectedProgramId && !selectedProjectId) },
-          { label: 'Event', active: Boolean(selectedProjectId) },
+          { label: 'Program', active: !showAllEvents && !selectedProgramId },
+          { label: 'Project', active: !showAllEvents && Boolean(selectedProgramId && !selectedProjectId) },
+          { label: 'Event', active: showAllEvents || Boolean(selectedProjectId) },
         ].map((step, index) => (
           <TouchableOpacity
             key={step.label}
@@ -828,7 +824,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         ))}
       </View>
 
-      {!selectedProgramId && nextOpenEvent ? (
+      {!showAllEvents && !selectedProgramId && nextOpenEvent ? (
         <TouchableOpacity
           style={styles.featuredEventCard}
           onPress={() => {
@@ -850,7 +846,21 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         </TouchableOpacity>
       ) : null}
 
-      {!selectedProgramId ? (
+      {showAllEvents ? (
+        <>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.screenTitle}>All Events</Text>
+            <Text style={styles.screenSubtitle}>Browse events across all programs and projects, then request to join.</Text>
+          </View>
+          {allEvents.length ? (
+            allEvents.map(renderEventCard)
+          ) : (
+            <View style={styles.centerContent}>
+              <Text style={styles.loadingText}>No events available right now.</Text>
+            </View>
+          )}
+        </>
+      ) : !selectedProgramId ? (
         <>
           <View style={styles.sectionHeader}>
             <Text style={styles.screenTitle}>Explore Programs</Text>
