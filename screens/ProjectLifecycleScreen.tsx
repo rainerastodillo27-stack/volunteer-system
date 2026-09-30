@@ -22979,62 +22979,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                  <View style={styles.programSectionControls}>
-
-                    <View style={[
-                      styles.projectsFilterMenuWrap,
-                      styles.projectsSortMenuWrap,
-                      activeProjectsFilterMenu === 'sort' && styles.projectsFilterMenuWrapActive
-                    ]}>
-
-                      <TouchableOpacity
-                        style={styles.projectsSortDropdown}
-                        onPress={() => setActiveProjectsFilterMenu(current => current === 'sort' ? null : 'sort')}
-                        activeOpacity={0.85}
-                      >
-
-                        <Text style={styles.projectsSortDropdownText}>
-                          Sort by: {PROJECTS_SORT_OPTIONS.find(option => option.key === projectsSortKey)?.label || 'Recently Updated'}
-                        </Text>
-
-                        <MaterialIcons name={activeProjectsFilterMenu === 'sort' ? 'arrow-drop-up' : 'arrow-drop-down'} size={16} color="#475569" />
-
-                      </TouchableOpacity>
-
-                      {activeProjectsFilterMenu === 'sort' ? (
-
-                        <View style={[styles.projectsFilterMenu, styles.projectsSortMenu]}>
-
-                          {PROJECTS_SORT_OPTIONS.map(option => (
-
-                            <TouchableOpacity
-                              key={option.key}
-                              style={styles.projectsFilterMenuItem}
-                              onPress={() => {
-                                setProjectsSortKey(option.key);
-                                setActiveProjectsFilterMenu(null);
-                              }}
-                            >
-
-                              <Text style={[
-                                styles.projectsFilterMenuText,
-                                projectsSortKey === option.key && styles.projectsFilterMenuTextActive
-                              ]}>
-                                {option.label}
-                              </Text>
-
-                            </TouchableOpacity>
-
-                          ))}
-
-                        </View>
-
-                      ) : null}
-
-                    </View>
-
-                  </View>
-
                 </View>
 
 

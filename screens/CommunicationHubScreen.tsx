@@ -3843,11 +3843,26 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
         <Text style={styles.sidebarHeaderTitle}>Messages</Text>
 
-        <TouchableOpacity style={styles.sidebarHeaderAction}>
-
-          <Ionicons name="create-outline" size={22} color="#166534" />
-
-        </TouchableOpacity>
+        {availableSections.includes('contacts') ? (
+          <TouchableOpacity
+            style={styles.sidebarHeaderAction}
+            accessibilityRole="button"
+            accessibilityLabel="Start a new conversation"
+            onPress={() => {
+              setSearchText('');
+              setSelectedUser(null);
+              setSelectedProjectChat(null);
+              setSelectedProposalApplication(null);
+              setProposalIntent(null);
+              setActiveSection('contacts');
+              if (!isWide) {
+                setView('sidebar');
+              }
+            }}
+          >
+            <Ionicons name="create-outline" size={22} color="#166534" />
+          </TouchableOpacity>
+        ) : null}
 
       </View>
 
