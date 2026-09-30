@@ -1606,7 +1606,7 @@ export function PartnerReportsDashboard({
           </View>
         </View>
 
-        {partnerAccountCards.length > 0 ? (
+        {Platform.OS === 'web' && partnerAccountCards.length > 0 ? (
           <View
             style={{
               backgroundColor: '#ffffff',
