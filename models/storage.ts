@@ -3683,6 +3683,13 @@ export async function createUserAccount(input: {
     throw new Error('Complete the organization application details before submitting.');
   }
 
+  if (
+    input.role === 'volunteer' &&
+    !input.volunteerMembershipSheet?.validIdPhoto?.trim()
+  ) {
+    throw new Error('Upload a valid government-issued ID before creating the account.');
+  }
+
   if (!normalizedEmail) {
     throw new Error('Email verification is required for registration.');
   }

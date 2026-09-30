@@ -7002,6 +7002,7 @@ def auth_register(
             "homeAddressBarangay",
             "occupation",
             "workplaceOrSchool",
+            "validIdPhoto",
         )
         if any(not str(volunteer_membership.get(field) or "").strip() for field in required_membership_fields):
             raise HTTPException(

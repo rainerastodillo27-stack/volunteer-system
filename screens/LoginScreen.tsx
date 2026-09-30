@@ -1569,6 +1569,13 @@ export default function LoginScreen() {
         return;
       }
 
+      if (!signupVolunteerSheet.validIdPhoto.trim()) {
+        const errorMsg = "Upload a valid government-issued ID.";
+        setSignupValidationError(errorMsg);
+        Alert.alert("Validation Error", errorMsg);
+        return;
+      }
+
       if (!signupAcceptedCommitment) {
         const errorMsg = "You must accept the NVC volunteer commitment before creating the account.";
         setSignupValidationError(errorMsg);
