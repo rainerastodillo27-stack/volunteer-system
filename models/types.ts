@@ -217,6 +217,8 @@ export interface Project {
   locationBarangay?: string; // Only for events
   locationVenue?: string; // Specific venue description (only for events)
   googleMeetUrl?: string;
+  /** Recurrence rule for events. The event end date is the series end date. */
+  repeat?: 'Does not repeat' | 'Daily' | 'Weekly' | 'Monthly';
   notificationSettings?: {
     type: 'Notification' | 'Email';
     value: string;

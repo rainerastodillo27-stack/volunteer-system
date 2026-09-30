@@ -3911,7 +3911,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const [eventAllDay, setEventAllDay] = useState(false);
 
-  const [eventRepeat, setEventRepeat] = useState('Does not repeat');
+  const [eventRepeat, setEventRepeat] = useState<NonNullable<Project['repeat']>>('Does not repeat');
 
   const [eventOwner, setEventOwner] = useState('THEA SALINAS');
 
@@ -5802,6 +5802,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setEventTimeEnd(extractTimeIn12HourFormat(project.endDate));
 
       setEventAllDay(false);
+
+      setEventRepeat(project.repeat || 'Does not repeat');
 
       setEventNotifications(
 
@@ -7733,6 +7735,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       locationBarangay: projectDraft.isEvent ? selectedLocationBarangay?.name : undefined,
 
       locationVenue: projectDraft.isEvent ? projectPlaceVenue.trim() : undefined,
+
+      repeat: projectDraft.isEvent ? (eventRepeat || 'Does not repeat') : undefined,
 
       notificationSettings: projectDraft.isEvent ? sanitizedEventNotifications : undefined,
 
@@ -14147,7 +14151,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         selectedValue={eventRepeat}
 
-                        onValueChange={(val: string) => setEventRepeat(val)}
+                        onValueChange={(val: string) => setEventRepeat(val as NonNullable<Project['repeat']>)}
 
                         style={[{ width: '100%', height: '100%', color: '#0f172a' }, isMobile && styles.eventFormPickerMobile]}
 

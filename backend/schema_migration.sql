@@ -203,6 +203,7 @@ CREATE TABLE public.projects (
   location_region text,
   location_city text,
   location_barangay text,
+  repeat_rule text,
   CONSTRAINT projects_pkey PRIMARY KEY (id)
 );
 
@@ -238,6 +239,7 @@ CREATE TABLE public.events (
   location_venue text,
   google_meet_url text,
   notification_settings jsonb NOT NULL DEFAULT '[]',
+  repeat_rule text,
   CONSTRAINT events_pkey PRIMARY KEY (id)
 );
 

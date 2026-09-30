@@ -1,4 +1,5 @@
 import os
+import calendar
 import base64
 import binascii
 import json
@@ -921,15 +922,16 @@ def _send_email_message(
     if not recipient or not is_valid_email(recipient):
         raise ValueError("A valid recipient email address is required.")
 
-    # Keep the existing OTP_* names as a backwards-compatible fallback while
-    # allowing notification credentials to be separated later.
+    # Event reminders use the existing Gmail credentials already configured for
+    # OTP delivery. Separate notification credentials remain an optional
+    # override for deployments that want a different sender.
     sender_email = (
-        os.getenv("NOTIFICATION_GMAIL_SENDER", "").strip()
-        or os.getenv("OTP_GMAIL_SENDER", "").strip()
+        os.getenv("OTP_GMAIL_SENDER", "").strip()
+        or os.getenv("NOTIFICATION_GMAIL_SENDER", "").strip()
     )
     app_password = (
-        os.getenv("NOTIFICATION_GMAIL_APP_PASSWORD", "").strip()
-        or os.getenv("OTP_GMAIL_APP_PASSWORD", "").strip()
+        os.getenv("OTP_GMAIL_APP_PASSWORD", "").strip()
+        or os.getenv("NOTIFICATION_GMAIL_APP_PASSWORD", "").strip()
     )
     # Google displays app passwords in groups separated by spaces. Those
     # separators are presentation-only and must not be sent to SMTP.
@@ -1368,14 +1370,109 @@ def _get_event_reminder_settings(
 
 
 def _get_event_email_reminder_settings(event: dict[str, Any]) -> list[dict[str, Any]]:
-    settings = _get_event_reminder_settings(event, "email")
-    if settings:
-        return settings
-    return [{"type": "Email", "value": str(REMINDER_LEAD_DAYS), "unit": "days"}]
+    # Email must be explicitly selected for this event. Do not silently add a
+    # default email reminder when the organizer selected in-app notifications.
+    return _get_event_reminder_settings(event, "email")
 
 
 def _get_event_notification_reminder_settings(event: dict[str, Any]) -> list[dict[str, Any]]:
     return _get_event_reminder_settings(event, "notification")
+
+
+def _normalize_event_repeat(event: dict[str, Any]) -> str:
+    raw_repeat = str(event.get("repeat") or event.get("repeatRule") or "Does not repeat").strip().lower()
+    return {
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly",
+        "does not repeat": "Does not repeat",
+        "none": "Does not repeat",
+        "": "Does not repeat",
+    }.get(raw_repeat, "Does not repeat")
+
+
+def _event_occurrence_starts(event: dict[str, Any]) -> list[datetime]:
+    """Return the event starts in its saved recurrence range.
+
+    For recurring events the existing end date is the series end date. This
+    keeps the current form backwards-compatible while allowing one event row
+    to produce one reminder per occurrence.
+    """
+    start_date = _parse_iso_datetime(event.get("startDate"))
+    if start_date is None:
+        return []
+
+    local_start = start_date.astimezone(APP_TIMEZONE)
+    repeat = _normalize_event_repeat(event)
+    if repeat == "Does not repeat":
+        return [local_start]
+
+    end_date = _parse_iso_datetime(event.get("endDate")) or start_date
+    local_end = end_date.astimezone(APP_TIMEZONE)
+    if local_end < local_start:
+        local_end = local_start
+
+    occurrences: list[datetime] = []
+    occurrence_index = 0
+    # Protect the scheduler from malformed records with an enormous series.
+    while occurrence_index < 10000:
+        if repeat == "Daily":
+            occurrence = local_start + timedelta(days=occurrence_index)
+        elif repeat == "Weekly":
+            occurrence = local_start + timedelta(weeks=occurrence_index)
+        else:
+            month_index = (local_start.year * 12 + local_start.month - 1) + occurrence_index
+            year, month_zero_based = divmod(month_index, 12)
+            month = month_zero_based + 1
+            day = min(local_start.day, calendar.monthrange(year, month)[1])
+            occurrence = local_start.replace(year=year, month=month, day=day)
+
+        if occurrence > local_end:
+            break
+        occurrences.append(occurrence)
+        occurrence_index += 1
+
+    return occurrences
+
+
+def _get_due_event_occurrences(
+    event: dict[str, Any],
+    setting: dict[str, Any],
+    now: datetime,
+) -> list[datetime]:
+    lead_delta = _notification_lead_delta(setting)
+    if lead_delta is None:
+        return []
+
+    local_now = now.astimezone(APP_TIMEZONE)
+    return [
+        occurrence
+        for occurrence in _event_occurrence_starts(event)
+        if occurrence - lead_delta <= local_now < occurrence
+    ]
+
+
+def _event_for_occurrence(event: dict[str, Any], occurrence_start: datetime) -> dict[str, Any]:
+    return {
+        **event,
+        "startDate": occurrence_start.isoformat(),
+    }
+
+
+def _reminder_occurrence_key(event: dict[str, Any], occurrence_start: datetime) -> str:
+    if _normalize_event_repeat(event) == "Does not repeat":
+        return ""
+    return occurrence_start.astimezone(APP_TIMEZONE).strftime("%Y-%m-%dT%H-%M-%S%z")
+
+
+def _build_reminder_id(
+    reminder_type: str,
+    event_id: str,
+    volunteer_id: str,
+    occurrence_key: str,
+) -> str:
+    base_id = f"{reminder_type}:{event_id}:{volunteer_id}"
+    return f"{base_id}:occurrence:{occurrence_key}" if occurrence_key else base_id
 
 
 def _event_reminder_setting_is_due(event: dict[str, Any], setting: dict[str, Any], now: datetime) -> bool:
@@ -1407,7 +1504,7 @@ def _create_event_in_app_reminder_message(
     connection: Any,
     event: dict[str, Any],
     volunteer: dict[str, Any],
-    reminder_type: str,
+    reminder_id: str,
     reminder_label: str,
 ) -> bool:
     recipient_id = str(volunteer.get("userId") or volunteer.get("id") or "").strip()
@@ -1419,7 +1516,7 @@ def _create_event_in_app_reminder_message(
     sender_id = _resolve_admin_message_user_id(connection)
     activity_type = "event" if bool(event.get("isEvent")) else "project"
     event_title = str(event.get("title") or f"your joined {activity_type}").strip()
-    message_id = f"event-reminder:{event_id}:{reminder_type}:{volunteer_id}"
+    message_id = f"event-reminder:{reminder_id}"
     content = (
         f"Reminder: you joined the {activity_type} \"{event_title}\". "
         f"It starts in {reminder_label}. Check NVC Connect for the latest details."
@@ -1522,122 +1619,145 @@ def run_event_reminder_check() -> dict[str, Any]:
                 )
 
                 for setting in _get_event_email_reminder_settings(event):
-                    if not _event_reminder_setting_is_due(event, setting, now):
+                    due_occurrences = _get_due_event_occurrences(event, setting, now)
+                    if not due_occurrences:
                         skipped_count += len(event_recipients)
                         continue
 
                     reminder_type = _get_reminder_type(setting)
                     reminder_label = _get_reminder_label(setting)
 
-                    for volunteer in event_recipients:
-                        volunteer_id = str(volunteer.get("id") or volunteer.get("userId") or volunteer.get("email") or "").strip()
-                        recipient_email = str(volunteer.get("email") or "").strip().lower()
-                        if not volunteer_id or not recipient_email:
-                            skipped_count += 1
-                            continue
+                    for occurrence_start in due_occurrences:
+                        occurrence_event = _event_for_occurrence(event, occurrence_start)
+                        occurrence_key = _reminder_occurrence_key(event, occurrence_start)
+                        for volunteer in event_recipients:
+                            volunteer_id = str(volunteer.get("id") or volunteer.get("userId") or volunteer.get("email") or "").strip()
+                            recipient_email = str(volunteer.get("email") or "").strip().lower()
+                            if not volunteer_id or not recipient_email:
+                                skipped_count += 1
+                                continue
 
-                        reminder_id = f"{reminder_type}:{event_id}:{volunteer_id}"
-                        cursor.execute(
-                            "select reminder_id from public.event_email_reminders where reminder_id = %s",
-                            (reminder_id,),
-                        )
-                        if cursor.fetchone():
-                            skipped_count += 1
-                            continue
-
-                        try:
-                            _send_event_reminder_email(volunteer, event, recipient_email, reminder_label)
-                        except Exception as error:
-                            print(f"[REMINDER] Failed to send event reminder to {recipient_email}: {error}")
-                            skipped_count += 1
-                            continue
-
-                        cursor.execute(
-                            """
-                            insert into public.event_email_reminders (
-                              reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
-                            )
-                            values (%s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                reminder_id,
+                            reminder_id = _build_reminder_id(
+                                reminder_type,
                                 event_id,
                                 volunteer_id,
-                                recipient_email,
-                                reminder_type,
-                                datetime.now(timezone.utc).isoformat(),
-                            ),
-                        )
-                        sent_count += 1
+                                occurrence_key,
+                            )
+                            cursor.execute(
+                                "select reminder_id from public.event_email_reminders where reminder_id = %s",
+                                (reminder_id,),
+                            )
+                            if cursor.fetchone():
+                                skipped_count += 1
+                                continue
+
+                            try:
+                                _send_event_reminder_email(
+                                    volunteer,
+                                    occurrence_event,
+                                    recipient_email,
+                                    reminder_label,
+                                )
+                            except Exception as error:
+                                print(f"[REMINDER] Failed to send event reminder to {recipient_email}: {error}")
+                                skipped_count += 1
+                                continue
+
+                            cursor.execute(
+                                """
+                                insert into public.event_email_reminders (
+                                  reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
+                                )
+                                values (%s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    reminder_id,
+                                    event_id,
+                                    volunteer_id,
+                                    recipient_email,
+                                    reminder_type,
+                                    datetime.now(timezone.utc).isoformat(),
+                                ),
+                            )
+                            sent_count += 1
 
                 # In-app reminders use the same due-window and idempotency
                 # rules as email reminders, but are persisted as unread
                 # messages so the app banner can receive them by polling or
                 # the existing message websocket.
                 for setting in _get_event_notification_reminder_settings(event):
-                    if not _event_reminder_setting_is_due(event, setting, now):
+                    due_occurrences = _get_due_event_occurrences(event, setting, now)
+                    if not due_occurrences:
                         skipped_count += len(event_recipients)
                         continue
 
                     reminder_type = _get_reminder_type(setting)
                     reminder_label = _get_reminder_label(setting)
 
-                    for volunteer in event_recipients:
-                        volunteer_id = str(
-                            volunteer.get("id")
-                            or volunteer.get("userId")
-                            or volunteer.get("email")
-                            or ""
-                        ).strip()
-                        recipient_id = str(
-                            volunteer.get("userId") or volunteer.get("id") or ""
-                        ).strip()
-                        recipient_email = str(volunteer.get("email") or "").strip().lower()
-                        if not volunteer_id or not recipient_id:
-                            skipped_count += 1
-                            continue
+                    for occurrence_start in due_occurrences:
+                        occurrence_event = _event_for_occurrence(event, occurrence_start)
+                        occurrence_key = _reminder_occurrence_key(event, occurrence_start)
+                        for volunteer in event_recipients:
+                            volunteer_id = str(
+                                volunteer.get("id")
+                                or volunteer.get("userId")
+                                or volunteer.get("email")
+                                or ""
+                            ).strip()
+                            recipient_id = str(
+                                volunteer.get("userId") or volunteer.get("id") or ""
+                            ).strip()
+                            recipient_email = str(volunteer.get("email") or "").strip().lower()
+                            if not volunteer_id or not recipient_id:
+                                skipped_count += 1
+                                continue
 
-                        reminder_id = f"{reminder_type}:{event_id}:{volunteer_id}"
-                        cursor.execute(
-                            "select reminder_id from public.event_email_reminders where reminder_id = %s",
-                            (reminder_id,),
-                        )
-                        if cursor.fetchone():
-                            skipped_count += 1
-                            continue
-
-                        try:
-                            _create_event_in_app_reminder_message(
-                                connection,
-                                event,
-                                volunteer,
+                            reminder_id = _build_reminder_id(
                                 reminder_type,
-                                reminder_label,
-                            )
-                        except Exception as error:
-                            print(
-                                f"[REMINDER] Failed to create in-app reminder for {recipient_id}: {error}"
-                            )
-                            skipped_count += 1
-                            continue
-
-                        cursor.execute(
-                            """
-                            insert into public.event_email_reminders (
-                              reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
-                            )
-                            values (%s, %s, %s, %s, %s, %s)
-                            """,
-                            (
-                                reminder_id,
                                 event_id,
                                 volunteer_id,
-                                recipient_email or recipient_id,
-                                reminder_type,
-                                datetime.now(timezone.utc).isoformat(),
-                            ),
-                        )
-                        sent_count += 1
+                                occurrence_key,
+                            )
+                            cursor.execute(
+                                "select reminder_id from public.event_email_reminders where reminder_id = %s",
+                                (reminder_id,),
+                            )
+                            if cursor.fetchone():
+                                skipped_count += 1
+                                continue
+
+                            try:
+                                _create_event_in_app_reminder_message(
+                                    connection,
+                                    occurrence_event,
+                                    volunteer,
+                                    reminder_id,
+                                    reminder_label,
+                                )
+                            except Exception as error:
+                                print(
+                                    f"[REMINDER] Failed to create in-app reminder for {recipient_id}: {error}"
+                                )
+                                skipped_count += 1
+                                continue
+
+                            cursor.execute(
+                                """
+                                insert into public.event_email_reminders (
+                                  reminder_id, event_id, volunteer_id, volunteer_email, reminder_type, sent_at
+                                )
+                                values (%s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    reminder_id,
+                                    event_id,
+                                    volunteer_id,
+                                    recipient_email or recipient_id,
+                                    reminder_type,
+                                    datetime.now(timezone.utc).isoformat(),
+                                ),
+                            )
+                            sent_count += 1
 
         connection.commit()
 
