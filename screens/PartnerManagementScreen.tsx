@@ -1,4 +1,5 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -30,6 +31,7 @@ import {
   subscribeToStorageChanges,
   getAllPartnerProjectApplications,
   reviewPartnerProjectApplication,
+  clearStorageCache,
 } from '../models/storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
@@ -215,15 +217,6 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   }, [actionNotice]);
 
   useEffect(() => {
-    if (!isAdmin) {
-      return;
-    }
-
-    void loadPartners();
-    void loadProjects();
-  }, [isAdmin]);
-
-  useEffect(() => {
     const partnerId = route?.params?.partnerId;
     if (!isAdmin || !partnerId || allPartnersList.length === 0) {
       return;
@@ -246,16 +239,19 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     return subscribeToStorageChanges(
       ['partners', 'users', 'partnerProjectApplications', 'projects'],
       () => {
-        void loadPartners();
-        void loadProjects();
+        void loadPartners(true);
+        void loadProjects(true);
       }
     );
   }, [isAdmin]);
 
   // Loads all partner profiles and applications.
-  const loadPartners = async () => {
+  const loadPartners = useCallback(async (forceRefresh = false) => {
     const requestGeneration = ++partnerLoadGenerationRef.current;
     try {
+      if (forceRefresh) {
+        clearStorageCache(['partners', 'users', 'partnerProjectApplications']);
+      }
       const [allPartnerRecords, allApps, allUsers] = await Promise.all([
         getAllPartners(),
         getAllPartnerProjectApplications(),
@@ -431,7 +427,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     } finally {
       setReviewActionLoadingId(null);
     }
-  };
+  }, []);
 
   const handleApproveProposal = async (application: PartnerProjectApplication) => {
     const actionId = `proposal:${application.id}:approve`;
@@ -474,10 +470,10 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
   };
 
   // Loads available projects for display.
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async (forceRefresh = false) => {
     const requestGeneration = ++projectLoadGenerationRef.current;
     try {
-      const allProjects = await getAllProjects();
+      const allProjects = await getAllProjects(false, { forceRefresh });
       if (requestGeneration !== projectLoadGenerationRef.current) {
         return;
       }
@@ -491,7 +487,19 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         });
       }
     }
-  };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAdmin) {
+        return undefined;
+      }
+
+      void loadPartners(true);
+      void loadProjects(true);
+      return undefined;
+    }, [isAdmin, loadPartners, loadProjects])
+  );
 
   // Opens the detail view for a selected partner.
   const handleSelectPartner = async (partner: Partner) => {
@@ -501,8 +509,14 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
   // Closes the partner detail view.
   const handleCloseDetail = () => {
+    const returnToUserManagement = route?.params?.returnToUserManagement;
     setView('list');
     setSelectedPartner(null);
+
+    if (returnToUserManagement) {
+      navigation.setParams({ partnerId: undefined, returnToUserManagement: undefined });
+      navigation.navigate('Users');
+    }
   };
 
   // Opens the edit modal with the selected partner's current values.
@@ -690,6 +704,9 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
 
   if (view === 'detail' && selectedPartner) {
     const partnerProjects = getPartnerProjects();
+    const completedPartnerProjectCount = partnerProjects.filter(
+      project => getProjectDisplayStatus(project) === 'Completed'
+    ).length;
     const partnerAdvocacyFocus = getPartnerAdvocacyFocus(selectedPartner);
     const validIdDocument = getPartnerValidIdDocument(selectedPartner);
 
@@ -777,18 +794,9 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
                 <Text style={styles.statLabel}>Partnered Projects</Text>
               </View>
               <View style={styles.stat}>
-                <MaterialIcons name="group" size={24} color="#FFA500" />
-                <Text style={styles.statValue}>
-                  {partnerProjects.reduce((sum, project) => sum + getProjectVolunteerCount(project), 0)}
-                </Text>
-                <Text style={styles.statLabel}>Volunteers</Text>
-              </View>
-              <View style={styles.stat}>
                 <MaterialIcons name="location-on" size={24} color="#4CAF50" />
-                <Text style={styles.statValue}>
-                  {partnerProjects.filter(p => getProjectDisplayStatus(p) === 'Completed').length}
-                </Text>
-                <Text style={styles.statLabel}>Completed</Text>
+                <Text style={styles.statValue}>{completedPartnerProjectCount}</Text>
+                <Text style={styles.statLabel}>Completed Projects</Text>
               </View>
             </View>
           </View>

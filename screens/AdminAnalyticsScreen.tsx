@@ -12,7 +12,7 @@ import {
   Modal,
   Alert,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
   getAllPartnerReports,
@@ -24,6 +24,7 @@ import {
   getAllPartners,
   getAllPartnerProjectApplications,
   subscribeToStorageChanges,
+  clearStorageCache,
 } from '../models/storage';
 import type { Partner, PartnerProjectApplication, PartnerReport, ProgramTrack, Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import ModernTheme from '../utils/modernTheme';
@@ -1008,9 +1009,17 @@ export default function AdminAnalyticsScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    void loadAnalytics(true);
-  }, [loadAnalytics]);
+  useFocusEffect(
+    useCallback(() => {
+      clearStorageCache([
+        'projects', 'events', 'programs', 'programTracks', 'volunteers',
+        'volunteerTimeLogs', 'volunteerProjectJoins', 'partnerReports',
+        'partners', 'partnerProjectApplications',
+      ]);
+      void loadAnalytics(true);
+      return undefined;
+    }, [loadAnalytics])
+  );
 
   useEffect(() => {
     return subscribeToStorageChanges(

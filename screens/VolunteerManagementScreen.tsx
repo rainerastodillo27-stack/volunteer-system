@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import ModernTheme from '../utils/modernTheme';
 import {
   View,
@@ -242,10 +243,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   };
 
   // Loads available projects for matching and detail display.
-  const loadProjects = async () => {
+  const loadProjects = async (forceRefresh = false) => {
     const requestGeneration = ++projectLoadGenerationRef.current;
     try {
-      const allProjects = await getAllProjects();
+      const allProjects = await getAllProjects(false, { forceRefresh });
       if (requestGeneration !== projectLoadGenerationRef.current) {
         return;
       }
@@ -262,10 +263,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
   };
 
   // Loads every volunteer time log so admins can audit time-in/time-out activity.
-  const loadTimeLogs = async () => {
+  const loadTimeLogs = async (forceRefresh = false) => {
     const requestGeneration = ++timeLogLoadGenerationRef.current;
     try {
-      const logs = await getAllVolunteerTimeLogs({ includeImages: false });
+      const logs = await getAllVolunteerTimeLogs({ includeImages: false, forceRefresh });
       if (requestGeneration !== timeLogLoadGenerationRef.current) {
         return;
       }
@@ -732,6 +733,32 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     );
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAdmin) {
+        return undefined;
+      }
+
+      void loadVolunteers();
+      void loadProjects(true);
+      void loadTimeLogs(true);
+      return undefined;
+    }, [isAdmin])
+  );
+
+  const closeVolunteerProfile = () => {
+    const returnToUserManagement = route?.params?.returnToUserManagement;
+    setView('list');
+    setSelectedVolunteer(null);
+    selectedVolunteerIdRef.current = null;
+    selectedVolunteerRecordRef.current = null;
+
+    if (returnToUserManagement) {
+      navigation.setParams({ volunteerId: undefined, returnToUserManagement: undefined });
+      navigation.navigate('Users');
+    }
+  };
+
   const handleDownloadVolunteerHoursXlsxReport = () => {
     const reportRows = getVolunteerHoursReportRows();
     const downloaded = downloadXlsxFile(
@@ -867,7 +894,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
           onClose={() => setDocumentPreview(null)}
         />
         <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top }]}>
-          <TouchableOpacity onPress={() => setView('list')}>
+          <TouchableOpacity onPress={closeVolunteerProfile}>
             <MaterialIcons name="arrow-back" size={24} color="#333" />
           </TouchableOpacity>
           <Text style={styles.title}>{isApplicationPending ? 'Volunteer Application' : 'Volunteer Profile'}</Text>

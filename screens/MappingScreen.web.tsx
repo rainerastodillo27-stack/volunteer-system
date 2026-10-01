@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Constants from 'expo-constants';
 import ModernTheme from '../utils/modernTheme';
 import {
@@ -13,6 +13,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AdvocacyFocus, Partner, PartnerProjectApplication, Project, ProgramTrack, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
@@ -21,6 +22,7 @@ import {
   getAllVolunteers,
   getProjectsScreenSnapshot,
   subscribeToStorageChanges,
+  clearStorageCache,
 } from '../models/storage';
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { withImpactMapFallbackProjects } from '../utils/impactMapFallbacks';
@@ -722,19 +724,6 @@ export default function MappingScreen({ navigation }: any) {
     { label: 'Cancelled', color: '#B95258' },
   ];
 
-  useEffect(() => {
-    void loadProjects();
-  }, [user]);
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'events', 'volunteers', 'partnerProjectApplications', 'volunteerProjectJoins'],
-      () => {
-        void loadProjects();
-      }
-    );
-  }, [user]);
-
   const clearMarkers = () => {
     if (infoWindowRef.current) {
       try {
@@ -1055,8 +1044,15 @@ export default function MappingScreen({ navigation }: any) {
   ]);
 
   // Loads map projects and narrows visibility based on the active role.
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async (forceRefresh = false) => {
     try {
+      if (forceRefresh) {
+        clearStorageCache([
+          'projects', 'events', 'programs', 'programTracks', 'volunteers',
+          'partnerProjectApplications', 'volunteerProjectJoins', 'volunteerMatches',
+          'partners',
+        ]);
+      }
       const snapshot = await getProjectsScreenSnapshot(
         user,
         [
@@ -1067,7 +1063,7 @@ export default function MappingScreen({ navigation }: any) {
           'volunteerMatches',
           'programTracks',
         ],
-        false,
+        forceRefresh,
         true,
       );
       const allPartners = await getAllPartners();
@@ -1132,7 +1128,19 @@ export default function MappingScreen({ navigation }: any) {
       );
       setLoading(false);
     }
-  };
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadProjects(true);
+      return subscribeToStorageChanges(
+        ['projects', 'events', 'volunteers', 'partnerProjectApplications', 'volunteerProjectJoins'],
+        () => {
+          void loadProjects(true);
+        }
+      );
+    }, [loadProjects])
+  );
 
   // Handles opening directions with geolocation permission prompt or text list fallback
   const handleGetDirections = (targetProject: Project | null) => {

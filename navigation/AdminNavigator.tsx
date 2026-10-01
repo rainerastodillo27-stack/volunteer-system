@@ -53,13 +53,13 @@ const SystemSettingsScreen = lazyScreen(() => require('../screens/SystemSettings
 export type AdminTabParamList = {
   Dashboard: undefined;
   Analytics: undefined;
-  Partners: { partnerId?: string } | undefined;
+  Partners: { partnerId?: string; returnToUserManagement?: boolean } | undefined;
   Projects: {
     projectId?: string;
     programSuiteView?: 'programs' | 'projects' | 'events';
     programSuiteNavKey?: number;
   } | undefined;
-  Volunteers: { volunteerId?: string } | undefined;
+  Volunteers: { volunteerId?: string; returnToUserManagement?: boolean } | undefined;
   Map: undefined;
   Messages: { projectId?: string; conversationUserId?: string } | undefined;
   Reports: { projectId?: string } | undefined;

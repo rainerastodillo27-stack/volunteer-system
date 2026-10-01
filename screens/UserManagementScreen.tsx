@@ -58,7 +58,7 @@ function escapeCsvCell(value: string): string {
   return `"${String(value || '').replace(/"/g, '""')}"`;
 }
 
-export default function UserManagementScreen() {
+export default function UserManagementScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
 
   // Confirmation dialog hook
@@ -351,10 +351,33 @@ export default function UserManagementScreen() {
   };
 
   const openUserReview = (targetUser: User) => {
+    setShowActionMenuUser(null);
+
+    if (targetUser.role === 'volunteer') {
+      const linkedVolunteer = getLinkedVolunteerForUser(targetUser);
+      if (linkedVolunteer) {
+        navigation.navigate('Volunteers', {
+          volunteerId: linkedVolunteer.id,
+          returnToUserManagement: true,
+        });
+        return;
+      }
+    }
+
+    if (targetUser.role === 'partner') {
+      const linkedPartner = getLinkedPartnerForUser(targetUser);
+      if (linkedPartner) {
+        navigation.navigate('Partners', {
+          partnerId: linkedPartner.id,
+          returnToUserManagement: true,
+        });
+        return;
+      }
+    }
+
     setReviewTarget({ type: 'user', record: targetUser });
     setReviewVolunteer(null);
     setReviewPartner(null);
-    setShowActionMenuUser(null);
 
     // Keep list reads lightweight, then fetch only the selected account's
     // document-bearing profile for the admin preview.
@@ -380,10 +403,15 @@ export default function UserManagementScreen() {
 
   const getLinkedPartnerForUser = (targetUser: User) =>
     partners.find(partner => {
-      if (partner.ownerUserId) return partner.ownerUserId === targetUser.id;
+      const partnerEmail = (partner.contactEmail || '').trim().toLowerCase();
+      const userEmail = (targetUser.email || '').trim().toLowerCase();
+      const partnerPhone = (partner.contactPhone || '').trim();
+      const userPhone = (targetUser.phone || '').trim();
+
       return (
-        (partner.contactEmail || '').trim().toLowerCase() === (targetUser.email || '').trim().toLowerCase() ||
-        (partner.contactPhone || '').trim() === (targetUser.phone || '').trim()
+        partner.ownerUserId === targetUser.id ||
+        Boolean(partnerEmail && userEmail && partnerEmail === userEmail) ||
+        Boolean(partnerPhone && userPhone && partnerPhone === userPhone)
       );
     }) || null;
 
