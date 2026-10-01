@@ -2867,6 +2867,46 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
         try:
             cursor.execute(
                 """
+                select distinct events_id
+                from events
+                where parent_project_id = any(%s::text[])
+                   or events_id = any(%s::text[])
+                """,
+                (related_ids, related_ids),
+            )
+            all_related_ids = list(dict.fromkeys(
+                related_ids + [str(row[0]) for row in cursor.fetchall() if row and row[0]]
+            ))
+
+            planning_items_deleted = _delete_admin_planning_items_for_projects(
+                cursor,
+                set(all_related_ids),
+            )
+
+            # Keep a durable cleanup job before removing the local event links.
+            # Google Calendar is external to the NVC transaction, so the job is
+            # retried by the calendar worker if Google's API is temporarily down.
+            _ensure_google_calendar_tables(connection)
+            cursor.execute(
+                """
+                insert into google_calendar_event_cleanup (
+                    partner_user_id, google_event_id, queued_at
+                )
+                select partner_user_id, google_event_id, %s
+                from google_calendar_event_links
+                where project_id = any(%s::text[])
+                on conflict (partner_user_id, google_event_id) do nothing
+                """,
+                (datetime.now(timezone.utc).isoformat(), all_related_ids),
+            )
+            cursor.execute(
+                "delete from google_calendar_event_links where project_id = any(%s::text[])",
+                (all_related_ids,),
+            )
+            google_links_deleted = cursor.rowcount or 0
+
+            cursor.execute(
+                """
                 with requested_ids(id) as (
                     select unnest(%s::text[])
                 ),
@@ -2968,7 +3008,48 @@ def _cascade_delete_project_references(connection: Any, related_project_ids: set
     ):
         if count:
             changed_keys.append(key)
+    if planning_items_deleted:
+        changed_keys.append("adminPlanningCalendars")
+    if google_links_deleted and "projects" not in changed_keys:
+        changed_keys.append("projects")
     return changed_keys
+
+
+def _delete_admin_planning_items_for_projects(
+    cursor: Any,
+    project_ids: set[str],
+) -> int:
+    normalized_project_ids = {str(value or "").strip().casefold() for value in project_ids if str(value or "").strip()}
+    if not normalized_project_ids:
+        return 0
+
+    cursor.execute("select admin_planning_calendars_id, planning_items from admin_planning_calendars")
+    rows = cursor.fetchall()
+    deleted_count = 0
+    updated_at = datetime.now(timezone.utc).isoformat()
+    for calendar_id, raw_items in rows:
+        try:
+            items = json.loads(raw_items or "[]") if isinstance(raw_items, str) else raw_items
+        except (TypeError, json.JSONDecodeError):
+            print(f"[WARN] Skipped invalid planning items while deleting linked project from calendar {calendar_id}.", flush=True)
+            continue
+        if not isinstance(items, list):
+            continue
+        filtered_items = [
+            item for item in items
+            if not isinstance(item, dict)
+            or str(item.get("linkedProjectId") or item.get("linked_project_id") or "").strip().casefold()
+            not in normalized_project_ids
+        ]
+        removed = len(items) - len(filtered_items)
+        if not removed:
+            continue
+        cursor.execute(
+            "update admin_planning_calendars set planning_items = %s, updated_at = %s where admin_planning_calendars_id = %s",
+            (json.dumps(filtered_items, separators=(",", ":")), updated_at, calendar_id),
+        )
+        deleted_count += removed
+    return deleted_count
 
 
 def _remove_volunteer_assignments_from_project(
@@ -5661,6 +5742,16 @@ _google_calendar_sync_locks_guard = threading.Lock()
 def _ensure_google_calendar_tables(connection: Any) -> None:
     with connection.cursor() as cursor:
         cursor.execute(
+            """
+            create table if not exists google_calendar_event_cleanup (
+              partner_user_id text not null,
+              google_event_id text not null,
+              queued_at text not null,
+              primary key (partner_user_id, google_event_id)
+            )
+            """
+        )
+        cursor.execute(
             "select to_regclass('public.google_calendar_connections'), "
             "to_regclass('public.google_calendar_event_links'), "
             "to_regclass('public.google_calendar_event_links_google_event_idx'), "
@@ -6642,6 +6733,79 @@ async def _push_partner_google_calendar_item(storage_key: str, project: dict[str
         print(f"[WARN] Official Google Calendar schedule push failed: {type(error).__name__}", flush=True)
 
 
+def _drain_google_calendar_event_cleanup() -> int:
+    """Delete queued Google events for NVC records removed by an admin."""
+    from psycopg.rows import dict_row
+
+    with get_connection() as connection:
+        _ensure_google_calendar_tables(connection)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select cleanup.partner_user_id, cleanup.google_event_id,
+                       calendar.client_id, calendar.encrypted_refresh_token
+                from google_calendar_event_cleanup cleanup
+                join google_calendar_connections calendar
+                  on calendar.partner_user_id = cleanup.partner_user_id
+                order by cleanup.queued_at
+                """
+            )
+            cleanup_rows = [dict(row) for row in cursor.fetchall()]
+
+    rows_by_partner: dict[str, list[dict[str, Any]]] = {}
+    for row in cleanup_rows:
+        rows_by_partner.setdefault(str(row.get("partner_user_id") or ""), []).append(row)
+
+    deleted_count = 0
+    for partner_user_id, rows in rows_by_partner.items():
+        try:
+            refresh_token = decrypt_refresh_token(str(rows[0].get("encrypted_refresh_token") or ""))
+            access_token = refresh_access_token(str(rows[0].get("client_id") or ""), refresh_token)
+        except Exception as error:
+            print(
+                f"[WARN] Google Calendar project-delete cleanup deferred for partner {partner_user_id}: {type(error).__name__}",
+                flush=True,
+            )
+            continue
+
+        for row in rows:
+            google_event_id = str(row.get("google_event_id") or "").strip()
+            if not google_event_id:
+                continue
+            try:
+                google_api_request(
+                    f"/calendars/primary/events/{google_event_id}",
+                    access_token,
+                    method="DELETE",
+                )
+            except GoogleCalendarError as error:
+                if error.status_code not in {404, 410}:
+                    print(
+                        f"[WARN] Google Calendar event-delete cleanup deferred for partner {partner_user_id}: HTTP {error.status_code or 'error'}",
+                        flush=True,
+                    )
+                    continue
+
+            try:
+                with get_connection() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            "delete from google_calendar_event_cleanup where partner_user_id = %s and google_event_id = %s",
+                            (partner_user_id, google_event_id),
+                        )
+                    connection.commit()
+                deleted_count += 1
+            except Exception as error:
+                # The external delete is idempotent. If this row cannot be
+                # cleared now, the next worker run will receive Google's 404
+                # and then remove the queued job.
+                print(
+                    f"[WARN] Google Calendar cleanup job could not be cleared: {type(error).__name__}",
+                    flush=True,
+                )
+    return deleted_count
+
+
 def _google_calendar_scheduler_loop() -> None:
     while True:
         time.sleep(60)
@@ -6651,6 +6815,7 @@ def _google_calendar_scheduler_loop() -> None:
                 with connection.cursor() as cursor:
                     cursor.execute("select partner_user_id from google_calendar_connections")
                     partner_user_ids = [str(row[0]) for row in cursor.fetchall() if row and row[0]]
+            _drain_google_calendar_event_cleanup()
             for partner_user_id in partner_user_ids:
                 _run_google_calendar_sync(partner_user_id)
         except Exception as error:
@@ -13045,6 +13210,7 @@ async def delete_project_record(request: FastAPIRequest, project_id: str) -> dic
         _projects_snapshot_cache.clear()
         _storage_collection_cache.clear()
         asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    asyncio.create_task(asyncio.to_thread(_drain_google_calendar_event_cleanup))
 
     return {
         "status": "ok",
@@ -13105,6 +13271,7 @@ async def delete_event_record(request: FastAPIRequest, event_id: str) -> dict[st
         _projects_snapshot_cache.clear()
         _storage_collection_cache.clear()
         asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    asyncio.create_task(asyncio.to_thread(_drain_google_calendar_event_cleanup))
 
     return {
         "status": "ok",
