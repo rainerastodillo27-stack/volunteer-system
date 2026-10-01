@@ -2590,6 +2590,33 @@ export async function getDashboardSnapshot(): Promise<{
   };
 }
 
+// Calendar deletion needs a complete server inventory rather than a display
+// cache, which can legitimately fall back to older data during an outage.
+export async function getAdminCalendarSyncSnapshot(): Promise<DashboardTimelineSnapshot> {
+  const keys = [
+    STORAGE_KEYS.PROGRAMS,
+    STORAGE_KEYS.PROJECTS,
+    STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.ADMIN_PLANNING_CALENDARS,
+  ];
+  const items = await fetchRemoteStorageItemsUncached(keys, false);
+  if (keys.some(key => !Array.isArray(items[key]))) {
+    throw new Error('The complete admin calendar schedule could not be verified. Try syncing again.');
+  }
+  const planningCalendars = items[STORAGE_KEYS.ADMIN_PLANNING_CALENDARS] as AdminPlanningCalendar[];
+  return {
+    projects: mergeProjectAndEventRecords(
+      [
+        ...(items[STORAGE_KEYS.PROGRAMS] as Project[]),
+        ...(items[STORAGE_KEYS.PROJECTS] as Project[]),
+      ],
+      items[STORAGE_KEYS.EVENTS] as Project[],
+    ),
+    planningCalendars,
+    planningItems: collectPlanningItemsFromCalendars(planningCalendars),
+  };
+}
+
 // Loads the combined data set required by the partner dashboard screen.
 // OPTIMIZED: Selective loading to minimize egress while ensuring all data is available.
 // Core collections fetched immediately, supplemental data loaded on-demand.

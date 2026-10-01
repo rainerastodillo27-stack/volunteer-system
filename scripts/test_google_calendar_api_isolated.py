@@ -30,6 +30,7 @@ HELPERS = runpy.run_path(str(ROOT / "backend/google_calendar_sync.py"))
 SOURCE = ast.parse((ROOT / "backend/api.py").read_text(encoding="utf-8"))
 FUNCTION_NAMES = {
     "_google_calendar_event_metadata", "_apply_google_calendar_schedule",
+    "_cleanup_stale_partner_google_calendar_events",
     "_process_google_calendar_event_changes", "_connect_partner_google_calendar",
     "_lock_google_calendar_transaction", "_google_calendar_lock_for_user",
     "_run_google_calendar_sync", "_renew_google_calendar_watch",
@@ -45,6 +46,9 @@ def load_functions() -> dict[str, Any]:
         "time": time, "uuid": uuid, "os": os, "asyncio": asyncio,
         "_google_calendar_sync_locks": {},
         "_google_calendar_sync_locks_guard": threading.Lock(),
+        "_google_calendar_stale_scope_snapshots": {},
+        "_google_calendar_stale_snapshot_times": {},
+        "_GOOGLE_CALENDAR_STALE_SWEEP_INTERVAL_SECONDS": 15 * 60,
         "TABLE_SPECS": {"projects": {"table": "projects"}, "events": {"table": "events"}},
         "_primary_key_column": lambda key: f"{key}_id",
     }
@@ -75,6 +79,8 @@ class FixtureCursor:
                 self.fixture.project["repeat"] = params[2]
         if 'update google_calendar_connections set sync_token' in rendered:
             self.fixture.connection_row["sync_token"] = params[0]
+        if 'delete from google_calendar_event_links' in rendered:
+            self.fixture.links[:] = [link for link in self.fixture.links if link["google_event_id"] != params[1]]
 
     def fetchone(self) -> tuple[bool]:
         return (self.fixture.lock_available,)
@@ -167,6 +173,8 @@ class FixtureState:
             if method == "POST" and path.endswith("/events"):
                 self.google_event = deepcopy(payload)
                 return deepcopy(self.google_event)
+            if method == "DELETE":
+                return {}
             raise AssertionError(f"Unexpected fixture request: {method} {path}")
 
         def list_events(access_token: str, sync_token: str | None = None) -> Any:
@@ -178,6 +186,7 @@ class FixtureState:
             "_google_calendar_row": lambda connection, partner: deepcopy(self.connection_row),
             "_google_calendar_links": lambda connection, partner: deepcopy(self.links),
             "_approved_partner_calendar_items": approved_items,
+            "get_postgres_hot_storage_collection": lambda connection, key, **kwargs: [deepcopy(self.project)] if key == "projects" and self.project_exists else [],
             "_postgres_get_hot_item_by_id": get_item,
             "_postgres_get_project_like_item_by_id": lambda connection, project_id, **kwargs: (get_item(connection, "projects", project_id), "projects"),
             "_google_calendar_update_link_schedule": update_link,
@@ -194,7 +203,11 @@ class FixtureState:
             "_google_calendar_stop_watch": Mock(),
             "_invalidate_collection_cache": Mock(),
             "_projects_snapshot_cache": Mock(), "_realtime_event_loop": None,
+            "ensure_message_storage_once": Mock(),
+            "_notify_google_calendar_schedule_change": Mock(return_value=False),
         })
+        self.namespace["_google_calendar_stale_scope_snapshots"]["memory-only-partner"] = frozenset({self.project["id"]})
+        self.namespace["_google_calendar_stale_snapshot_times"]["memory-only-partner"] = time.monotonic()
 
     def run_sync(self) -> list[str]:
         return self.namespace["_run_google_calendar_sync"]("memory-only-partner", broadcast_changes=False)
@@ -252,7 +265,100 @@ class CalendarApiIsolatedTests(unittest.TestCase):
         self.fixture.changes = [deepcopy(self.fixture.google_event)]
         self.assertEqual(self.fixture.run_sync(), [])
         self.assertEqual(self.fixture.project["endDate"], "2026-10-02T09:00:00+08:00")
-        self.assertEqual(self.fixture.api_calls, [])
+        self.assertEqual([method for _, method, _, _ in self.fixture.api_calls], ["DELETE"])
+        self.assertEqual(self.fixture.links, [])
+
+    def obsolete_legacy_event(self) -> dict[str, Any]:
+        return {
+            "id": HELPERS["stable_google_event_id"]("removed-legacy-project"),
+            "etag": "legacy-etag",
+            "summary": "[Event] Removed proposal event",
+            "description": "Old description\n\n📂 Category: Nutrition\n📌 Status: Completed\n👥 Volunteers Needed: 3",
+        }
+
+    def test_connect_cleans_unlinked_deleted_legacy_copy_and_tags_current_copy(self) -> None:
+        obsolete = self.obsolete_legacy_event()
+        self.fixture.namespace["_run_google_calendar_sync"] = Mock(return_value=[])
+        self.fixture.namespace["_google_calendar_list_events"] = lambda token: (
+            [deepcopy(self.fixture.google_event), deepcopy(obsolete)], "fixture-new-cursor",
+        )
+        self.assertEqual(self.fixture.connect(), (1, []))
+        deletes = [call for call in self.fixture.api_calls if call[1] == "DELETE"]
+        self.assertEqual(len(deletes), 1)
+        self.assertTrue(deletes[0][0].endswith(obsolete["id"]))
+        self.assertEqual(deletes[0][3]["headers"], {"If-Match": "legacy-etag"})
+        self.assertEqual(
+            self.fixture.google_event["extendedProperties"],
+            HELPERS["partner_calendar_event_properties"]("memory-only-partner", self.fixture.project["id"]),
+        )
+        self.assertTrue(self.fixture.project_exists)
+
+    def test_first_reconciliation_after_upgrade_inventories_old_items(self) -> None:
+        self.fixture.namespace["_google_calendar_stale_scope_snapshots"].clear()
+        self.fixture.changes = [self.obsolete_legacy_event()]
+        self.assertEqual(self.fixture.run_sync(), [])
+        self.assertEqual(self.fixture.sync_calls, [None])
+        self.assertEqual([call[1] for call in self.fixture.api_calls], ["DELETE"])
+        self.fixture.changes = []
+        self.fixture.run_sync()
+        self.assertEqual(self.fixture.sync_calls, [None, "fixture-new-cursor"])
+
+    def test_periodic_full_sweep_finds_deleted_legacy_items_without_scope_change(self) -> None:
+        previous_scan = time.monotonic() - 901
+        self.fixture.namespace["_google_calendar_stale_snapshot_times"]["memory-only-partner"] = previous_scan
+        self.fixture.changes = [self.obsolete_legacy_event()]
+        self.assertEqual(self.fixture.run_sync(), [])
+        self.assertEqual(self.fixture.sync_calls, [None])
+        self.assertEqual([call[1] for call in self.fixture.api_calls], ["DELETE"])
+        latest_scan = self.fixture.namespace["_google_calendar_stale_snapshot_times"]["memory-only-partner"]
+        self.assertGreater(latest_scan, previous_scan)
+        self.fixture.changes = []
+        self.fixture.run_sync()
+        self.assertEqual(self.fixture.sync_calls, [None, "fixture-new-cursor"])
+        self.assertEqual(self.fixture.namespace["_google_calendar_stale_snapshot_times"]["memory-only-partner"], latest_scan)
+
+    def test_approved_scope_change_forces_inventory_and_preserves_unlinked_current_item(self) -> None:
+        self.fixture.namespace["_google_calendar_stale_scope_snapshots"]["memory-only-partner"] = frozenset()
+        self.fixture.links = []
+        self.fixture.changes = [deepcopy(self.fixture.google_event), self.obsolete_legacy_event()]
+        self.assertEqual(self.fixture.run_sync(), [])
+        self.assertEqual(self.fixture.sync_calls, [None])
+        deletes = [call for call in self.fixture.api_calls if call[1] == "DELETE"]
+        self.assertEqual(len(deletes), 1)
+        self.assertTrue(deletes[0][0].endswith(self.obsolete_legacy_event()["id"]))
+
+    def test_delete_conflict_retains_cursor_for_retry(self) -> None:
+        self.fixture.namespace["_google_calendar_stale_scope_snapshots"].clear()
+        previous_scan = self.fixture.namespace["_google_calendar_stale_snapshot_times"]["memory-only-partner"]
+        self.fixture.changes = [self.obsolete_legacy_event()]
+        original_api = self.fixture.namespace["google_api_request"]
+
+        def conflicting_delete(path: str, token: str, **kwargs: Any) -> Any:
+            if kwargs.get("method") == "DELETE":
+                raise HELPERS["GoogleCalendarError"]("edited during cleanup", 412)
+            return original_api(path, token, **kwargs)
+
+        self.fixture.namespace["google_api_request"] = conflicting_delete
+        self.assertEqual(self.fixture.run_sync(), [])
+        self.assertEqual(self.fixture.connection_row["sync_token"], "fixture-old-cursor")
+        self.assertNotIn("memory-only-partner", self.fixture.namespace["_google_calendar_stale_scope_snapshots"])
+        self.assertEqual(self.fixture.namespace["_google_calendar_stale_snapshot_times"]["memory-only-partner"], previous_scan)
+        self.assertEqual(self.fixture.rollbacks, 1)
+
+    def test_already_deleted_copy_is_treated_as_completed_cleanup(self) -> None:
+        obsolete = self.obsolete_legacy_event()
+        self.fixture.changes = [obsolete]
+        original_api = self.fixture.namespace["google_api_request"]
+
+        def missing_delete(path: str, token: str, **kwargs: Any) -> Any:
+            if kwargs.get("method") == "DELETE":
+                raise HELPERS["GoogleCalendarError"]("already removed", 410)
+            return original_api(path, token, **kwargs)
+
+        self.fixture.namespace["google_api_request"] = missing_delete
+        self.assertEqual(self.fixture.run_sync(), [])
+        self.assertEqual(self.fixture.connection_row["sync_token"], "fixture-new-cursor")
+        self.assertEqual(self.fixture.commits, 1)
 
     def test_google_change_imports_once_without_stale_outbound_patch(self) -> None:
         self.fixture.google_event["start"]["dateTime"] = "2026-10-02T10:00:00+08:00"
@@ -463,7 +569,7 @@ class CalendarApiIsolatedTests(unittest.TestCase):
         self.assertIn("FREQ=WEEKLY", self.fixture.google_event["recurrence"][0])
         self.assertEqual(self.fixture.links[0]["last_exported_repeat"], "Weekly")
 
-    def test_existing_schema_check_performs_no_ddl(self) -> None:
+    def test_existing_schema_skips_connection_and_link_table_ddl(self) -> None:
         namespace = load_functions()
         cursor = Mock()
         cursor.fetchone.return_value = ("connections", "links", "index", True)
@@ -471,8 +577,10 @@ class CalendarApiIsolatedTests(unittest.TestCase):
         connection.cursor.return_value.__enter__ = Mock(return_value=cursor)
         connection.cursor.return_value.__exit__ = Mock(return_value=None)
         namespace["_ensure_google_calendar_tables"](connection)
-        self.assertEqual(cursor.execute.call_count, 1)
+        self.assertEqual(cursor.execute.call_count, 2)
         self.assertTrue(cursor.execute.call_args.args[0].startswith("select "))
+        first_statement = cursor.execute.call_args_list[0].args[0]
+        self.assertIn("create table if not exists google_calendar_event_cleanup", first_statement)
 
     def test_failed_connect_commit_stops_unused_google_watch(self) -> None:
         self.fixture.fail_commit = True

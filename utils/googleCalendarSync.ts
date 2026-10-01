@@ -13,7 +13,7 @@
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
-import { Project } from '../models/types';
+import type { AdminPlanningItem, Project } from '../models/types';
 import { getApiBaseUrl, getApiAuthHeaders } from '../models/storage';
 import { getEventRepeatRule } from './attendanceSchedule';
 
@@ -67,14 +67,30 @@ export interface GoogleCalendarEvent {
   end: { dateTime?: string; date?: string; timeZone?: string };
   recurrence?: string[];
   colorId?: string;
+  status?: string;
+  extendedProperties?: {
+    private?: Record<string, string>;
+  };
 }
 
 export interface SyncResult {
   success: boolean;
   synced: number;
+  removed: number;
   failed: number;
   errors: string[];
 }
+
+type CalendarCleanupOptions = {
+  role: 'volunteer';
+  userId: string;
+  unjoinedEventProjects: Project[];
+} | {
+  role: 'admin';
+  userId: string;
+  planningItems: AdminPlanningItem[];
+  retainedProjectIds: string[];
+};
 
 export type CalendarSyncRole = 'volunteer' | 'partner' | 'admin';
 
@@ -405,7 +421,32 @@ export function formatProjectAsGoogleEvent(project: Project): GoogleCalendarEven
   };
 }
 
-function getStableGoogleEventId(project: Project): string {
+export function formatAdminPlanningItemAsGoogleEvent(item: AdminPlanningItem): GoogleCalendarEvent {
+  const endValue = item.endDate || item.startDate;
+  const start = new Date(item.startDate);
+  const end = new Date(endValue);
+  const isAllDay = !item.startDate.includes('T') && !endValue.includes('T');
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ||
+      item.startDate.includes('T') !== endValue.includes('T') ||
+      (isAllDay ? end < start : end <= start)) {
+    throw new Error('The planning item has no valid start and end schedule.');
+  }
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const description = [
+    item.description || '',
+    ...(item.participantsLabel ? [`Participants: ${item.participantsLabel}`] : []),
+    ...(item.linkedProjectId ? [`Linked NVC project: ${item.linkedProjectId}`] : []),
+  ].join('\n');
+  return {
+    summary: `[Planning] ${item.title}`,
+    description,
+    location: item.location || undefined,
+    start: isAllDay ? { date: item.startDate.slice(0, 10) } : { dateTime: item.startDate, timeZone },
+    end: isAllDay ? { date: addDaysToDateOnly(endValue.slice(0, 10), 1) } : { dateTime: endValue, timeZone },
+  };
+}
+
+function getStableGoogleEventId(project: Pick<Project, 'id'>): string {
   const source = `nvc:${project.id}`;
   let hash = 5381;
 
@@ -427,15 +468,43 @@ function getStableGoogleEventId(project: Project): string {
  */
 export async function syncProjectsToGoogleCalendar(
   accessToken: string,
-  projects: Project[]
+  projects: Project[],
+  cleanupOptions?: CalendarCleanupOptions,
 ): Promise<SyncResult> {
-  const result: SyncResult = { success: true, synced: 0, failed: 0, errors: [] };
+  const result: SyncResult = { success: true, synced: 0, removed: 0, failed: 0, errors: [] };
+  const syncItems = [
+    ...projects.map(project => ({ id: project.id, title: project.title, project, planningItem: undefined as AdminPlanningItem | undefined })),
+    ...(cleanupOptions?.role === 'admin' ? cleanupOptions.planningItems.map(planningItem => ({
+      id: `admin-planning:${planningItem.id}`,
+      title: planningItem.title,
+      project: undefined as Project | undefined,
+      planningItem,
+    })) : []),
+  ];
 
-  for (const project of projects) {
+  for (const item of syncItems) {
     try {
-      const event = formatProjectAsGoogleEvent(project);
+      const event = item.planningItem
+        ? formatAdminPlanningItemAsGoogleEvent(item.planningItem)
+        : formatProjectAsGoogleEvent(item.project!);
+      if (cleanupOptions?.userId) {
+        // Explicitly restore previously deleted entries when their stable ID
+        // is reused by a later sync (for example, after a volunteer rejoins).
+        event.status = 'confirmed';
+        event.extendedProperties = {
+          ...event.extendedProperties,
+          private: {
+            ...event.extendedProperties?.private,
+            nvcManagedBy: 'nvc-connect',
+            nvcSyncRole: cleanupOptions.role,
+            nvcSyncUserId: cleanupOptions.userId,
+            nvcProjectId: item.id,
+            nvcRecordType: item.planningItem ? 'planning' : item.project?.isEvent ? 'event' : 'project',
+          },
+        };
+      }
 
-      const eventId = getStableGoogleEventId(project);
+      const eventId = getStableGoogleEventId(item);
       const response = await fetch(GOOGLE_CALENDAR_API, {
         method: 'POST',
         headers: {
@@ -466,11 +535,11 @@ export async function syncProjectsToGoogleCalendar(
           } else {
             const updateBody = (await updateResponse.json().catch(() => ({}))) as { error?: { message?: string } };
             result.failed++;
-            result.errors.push(`"${project.title}": ${updateBody?.error?.message ?? `HTTP ${updateResponse.status}`}`);
+            result.errors.push(`"${item.title}": ${updateBody?.error?.message ?? `HTTP ${updateResponse.status}`}`);
           }
         } else {
           result.failed++;
-          result.errors.push(`"${project.title}": ${msg}`);
+          result.errors.push(`"${item.title}": ${msg}`);
         }
       } else {
         result.synced++;
@@ -478,7 +547,107 @@ export async function syncProjectsToGoogleCalendar(
     } catch (error: unknown) {
       result.failed++;
       const message = error instanceof Error ? error.message : String(error);
-      result.errors.push(`"${project.title}": ${message}`);
+      result.errors.push(`"${item.title}": ${message}`);
+    }
+  }
+
+  if (cleanupOptions?.userId) {
+    type StoredCalendarEvent = Partial<GoogleCalendarEvent> & {
+      id?: string;
+      etag?: string;
+      status?: string;
+      recurringEventId?: string;
+    };
+    const retainedRecordIds = new Set([
+      ...syncItems.map(item => item.id),
+      ...(cleanupOptions.role === 'admin' ? [
+        ...cleanupOptions.retainedProjectIds,
+        ...cleanupOptions.planningItems.map(item => `admin-planning:${item.id}`),
+      ] : []),
+    ]);
+    const retainedGoogleIds = new Set(Array.from(retainedRecordIds, id => getStableGoogleEventId({ id })));
+    const legacyUnjoinedGoogleIds = new Set(
+      cleanupOptions.role === 'volunteer' ? cleanupOptions.unjoinedEventProjects.map(getStableGoogleEventId) : []
+    );
+    const calendarEvents: StoredCalendarEvent[] = [];
+    try {
+      let pageToken: string | undefined;
+      do {
+        const params = new URLSearchParams({
+          maxResults: '2500',
+          singleEvents: 'false',
+          showDeleted: 'false',
+          fields: 'items(id,etag,status,summary,description,recurringEventId,extendedProperties),nextPageToken',
+        });
+        if (pageToken) params.set('pageToken', pageToken);
+        const response = await fetch(`${GOOGLE_CALENDAR_API}?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const body = await response.json() as {
+          items?: StoredCalendarEvent[];
+          nextPageToken?: string;
+          error?: { message?: string };
+        };
+        if (!response.ok) {
+          throw new Error(body.error?.message || `HTTP ${response.status}`);
+        }
+        calendarEvents.push(...(body.items || []));
+        pageToken = body.nextPageToken;
+      } while (pageToken);
+    } catch (error: unknown) {
+      result.failed++;
+      const message = error instanceof Error ? error.message : String(error);
+      result.errors.push(`Could not check old calendar entries: ${message}`);
+      // An incomplete listing must not trigger any deletions.
+      calendarEvents.length = 0;
+    }
+
+    const checkedEventIds = new Set<string>();
+    for (const existingEvent of calendarEvents) {
+      const eventId = existingEvent.id;
+      if (!eventId || checkedEventIds.has(eventId) || retainedGoogleIds.has(eventId) ||
+          existingEvent.status === 'cancelled' || existingEvent.recurringEventId) continue;
+      checkedEventIds.add(eventId);
+      try {
+        const privateProperties = existingEvent.extendedProperties?.private || {};
+        const isOwnedStaleEvent =
+          privateProperties.nvcManagedBy === 'nvc-connect' &&
+          privateProperties.nvcSyncRole === cleanupOptions.role &&
+          privateProperties.nvcSyncUserId === cleanupOptions.userId &&
+          Boolean(privateProperties.nvcProjectId) &&
+          !retainedRecordIds.has(privateProperties.nvcProjectId);
+        const isLegacyNvcEvent =
+          !Object.keys(privateProperties).some(key => key.startsWith('nvc')) &&
+          (cleanupOptions.role === 'admin'
+            ? /^nvc[0-9a-f]{2,16}$/.test(eventId)
+            : legacyUnjoinedGoogleIds.has(eventId)) &&
+          (cleanupOptions.role === 'admin'
+            ? /^\[(Event|Project)\] /.test(String(existingEvent.summary || ''))
+            : String(existingEvent.summary || '').startsWith('[Event] ')) &&
+          /(?:^|\n)📂 Category: [^\n]+/.test(String(existingEvent.description || '')) &&
+          /(?:^|\n)📌 Status: [^\n]+/.test(String(existingEvent.description || '')) &&
+          /(?:^|\n)👥 Volunteers Needed: \d+(?:\n|$)/.test(String(existingEvent.description || ''));
+        if (!isOwnedStaleEvent && !isLegacyNvcEvent) continue;
+
+        const deleteResponse = await fetch(`${GOOGLE_CALENDAR_API}/${encodeURIComponent(eventId)}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            ...(existingEvent.etag ? { 'If-Match': existingEvent.etag } : {}),
+          },
+        });
+        if (deleteResponse.ok || deleteResponse.status === 404 || deleteResponse.status === 410) {
+          result.removed++;
+        } else {
+          const body = (await deleteResponse.json().catch(() => ({}))) as { error?: { message?: string } };
+          result.failed++;
+          result.errors.push(`Could not remove old event "${existingEvent.summary || eventId}": ${body?.error?.message ?? `HTTP ${deleteResponse.status}`}`);
+        }
+      } catch (error: unknown) {
+        result.failed++;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push(`Could not remove old event "${existingEvent.summary || eventId}": ${message}`);
+      }
     }
   }
 

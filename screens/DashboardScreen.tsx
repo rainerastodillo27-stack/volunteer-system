@@ -19,6 +19,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Circle, Rect, Path, G, Line, Defs, LinearGradient } from 'react-native-svg';
 import {
   getDashboardSnapshot,
+  getAdminCalendarSyncSnapshot,
   getAllVolunteerTimeLogs,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -891,17 +892,9 @@ export default function DashboardScreen({ navigation }: any) {
   };
 
   const handleSyncAdminCalendar = React.useCallback(async () => {
+    if (isSyncingCalendar) return;
     if (!user?.id) {
       Alert.alert('Login Required', 'Please sign in before syncing your calendar.');
-      return;
-    }
-
-    const projectsToSync = projectsData.filter(p => p.startDate && !Number.isNaN(new Date(p.startDate).getTime()));
-    if (projectsToSync.length === 0) {
-      Alert.alert(
-        'No Events or Projects to Sync',
-        'There are no scheduled projects or events with valid start dates to sync.'
-      );
       return;
     }
 
@@ -924,8 +917,17 @@ export default function DashboardScreen({ navigation }: any) {
 
       await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
 
-      const result = await syncProjectsToGoogleCalendar(accessToken, projectsToSync);
-      if (!result.success && result.synced === 0) {
+      const snapshot = await getAdminCalendarSyncSnapshot();
+      const projectsToSync = snapshot.projects.filter(project =>
+        project.startDate && !Number.isNaN(new Date(project.startDate).getTime())
+      );
+      const result = await syncProjectsToGoogleCalendar(accessToken, projectsToSync, {
+        role: 'admin',
+        userId: user.id,
+        retainedProjectIds: snapshot.projects.map(project => project.id),
+        planningItems: snapshot.planningItems,
+      });
+      if (!result.success && result.synced === 0 && result.removed === 0) {
         throw new Error(result.errors[0] || 'Google Calendar sync failed.');
       }
 
@@ -937,7 +939,14 @@ export default function DashboardScreen({ navigation }: any) {
         calendarUrl: GOOGLE_CALENDAR_WEB_URL,
       });
 
-      const successMessage = `${result.synced} event${result.synced === 1 ? '' : 's'} & project${result.synced === 1 ? '' : 's'} synced to Google Calendar and a confirmation email was sent to ${user.email}.`;
+      const syncMessage = `${result.synced} scheduled item${result.synced === 1 ? '' : 's'} added or updated; ${result.removed} stale NVC calendar entr${result.removed === 1 ? 'y' : 'ies'} removed.`;
+      if (!result.success) {
+        const message = `${syncMessage} ${result.failed} failed.`;
+        setSyncStatusBanner({ type: 'error', message });
+        Alert.alert('Calendar Partially Synced', `${message}\n\n${result.errors.slice(0, 2).join('\n')}`);
+        return;
+      }
+      const successMessage = syncMessage;
       setSyncStatusBanner({ type: 'success', message: successMessage });
       Alert.alert('Calendar Synced', successMessage);
     } catch (err: any) {
@@ -948,7 +957,7 @@ export default function DashboardScreen({ navigation }: any) {
     } finally {
       setIsSyncingCalendar(false);
     }
-  }, [googleAuthRequest, projectsData, promptGoogleAuth, user]);
+  }, [googleAuthRequest, isSyncingCalendar, promptGoogleAuth, user]);
 
   const filteredCalendarProjects = useMemo(() => {
     if (calendarFilter === 'All') return projectsData;

@@ -92,7 +92,9 @@ from .google_calendar_sync import (
     format_project_as_google_event,
     get_google_email,
     google_api_request,
+    is_stale_partner_calendar_event,
     normalize_schedule_value,
+    partner_calendar_event_properties,
     project_schedule,
     refresh_access_token,
     schedule_from_google_event,
@@ -5737,6 +5739,9 @@ _google_calendar_scheduler_started = False
 _google_calendar_scheduler_lock = threading.Lock()
 _google_calendar_sync_locks: dict[str, threading.Lock] = {}
 _google_calendar_sync_locks_guard = threading.Lock()
+_google_calendar_stale_scope_snapshots: dict[str, frozenset[str]] = {}
+_google_calendar_stale_snapshot_times: dict[str, float] = {}
+_GOOGLE_CALENDAR_STALE_SWEEP_INTERVAL_SECONDS = 15 * 60
 
 
 def _ensure_google_calendar_tables(connection: Any) -> None:
@@ -6040,9 +6045,69 @@ def _google_calendar_list_events(
     return events, next_sync_token
 
 
-def _google_calendar_event_metadata(project: dict[str, Any]) -> dict[str, Any]:
+def _google_calendar_event_metadata(project: dict[str, Any], partner_user_id: str) -> dict[str, Any]:
     event = format_project_as_google_event(project)
-    return {key: event[key] for key in ("summary", "description", "location") if key in event}
+    return {
+        **{key: event[key] for key in ("summary", "description", "location") if key in event},
+        "extendedProperties": partner_calendar_event_properties(partner_user_id, str(project.get("id") or "")),
+    }
+
+
+def _cleanup_stale_partner_google_calendar_events(
+    connection: Any,
+    partner_user_id: str,
+    access_token: str,
+    events: list[dict[str, Any]],
+    approved_project_ids: set[str],
+) -> int:
+    """Remove recognizable obsolete calendar copies, keeping official records."""
+    if not events:
+        return 0
+    links = _google_calendar_links(connection, partner_user_id)
+    linked_projects = {
+        str(link.get("google_event_id") or ""): str(link.get("project_id") or "")
+        for link in links
+    }
+    approved_event_ids = {stable_google_event_id(project_id) for project_id in approved_project_ids}
+    approved_event_ids.update(
+        event_id for event_id, project_id in linked_projects.items()
+        if project_id in approved_project_ids
+    )
+    known_projects: dict[str, dict[str, Any]] = {}
+    for key in ("projects", "events", "programs"):
+        for project in get_postgres_hot_storage_collection(connection, key, include_images=False):
+            if isinstance(project, dict) and str(project.get("id") or "").strip():
+                known_projects.setdefault(stable_google_event_id(str(project["id"])), project)
+
+    deleted_count = 0
+    for event in events:
+        if not is_stale_partner_calendar_event(
+            event, partner_user_id, approved_project_ids, known_projects, linked_projects,
+            approved_event_ids=approved_event_ids,
+        ):
+            continue
+        event_id = str(event["id"])
+        try:
+            google_api_request(
+                f"/calendars/primary/events/{event_id}",
+                access_token,
+                method="DELETE",
+                headers={"If-Match": str(event["etag"])} if event.get("etag") else None,
+            )
+        except GoogleCalendarError as error:
+            if error.status_code == 412:
+                # Leave the cursor unchanged so a newer edit is evaluated on
+                # the next reconciliation before anything is deleted.
+                raise
+            if error.status_code not in {404, 410}:
+                raise
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "delete from google_calendar_event_links where partner_user_id = %s and google_event_id = %s",
+                (partner_user_id, event_id),
+            )
+        deleted_count += 1
+    return deleted_count
 
 
 def _google_calendar_comparison_project(
@@ -6446,7 +6511,10 @@ def _connect_partner_google_calendar(
                 if error.status_code != 404:
                     raise
                 is_new = True
-                event_body = format_project_as_google_event(project)
+                event_body = {
+                    **format_project_as_google_event(project),
+                    "extendedProperties": partner_calendar_event_properties(partner_user_id, project_id),
+                }
                 try:
                     google_event = google_api_request(
                         "/calendars/primary/events",
@@ -6552,7 +6620,7 @@ def _connect_partner_google_calendar(
                     f"/calendars/primary/events/{event_id}",
                     access_token,
                     method="PATCH",
-                    payload=_google_calendar_event_metadata(project),
+                    payload=_google_calendar_event_metadata(project, partner_user_id),
                 )
 
             current_start, current_end = project_schedule(project)
@@ -6572,6 +6640,9 @@ def _connect_partner_google_calendar(
         # channel. Changes between this list and watch creation are replayed
         # immediately after the connection has been persisted.
         initial_events, sync_token = _google_calendar_list_events(access_token)
+        _cleanup_stale_partner_google_calendar_events(
+            connection, partner_user_id, access_token, initial_events, set(approved_items),
+        )
         changed_keys.extend(
             key_name
             for key_name in _process_google_calendar_event_changes(
@@ -6597,6 +6668,8 @@ def _connect_partner_google_calendar(
                 channel_expiration=expiration,
             )
             connection.commit()
+            _google_calendar_stale_scope_snapshots[partner_user_id] = frozenset(approved_items)
+            _google_calendar_stale_snapshot_times[partner_user_id] = time.monotonic()
         except Exception:
             _google_calendar_stop_watch(access_token, channel_id, resource_id)
             raise
@@ -6654,19 +6727,31 @@ def _run_google_calendar_sync(
             if expected_channel_id and str(calendar_connection.get("channel_id") or "") != expected_channel_id:
                 return []
             sync_token = str(calendar_connection.get("sync_token") or "")
+            _, current_approved_items = _approved_partner_calendar_items(connection, partner_user_id)
+            approved_scope = frozenset(current_approved_items)
+            last_stale_snapshot = _google_calendar_stale_snapshot_times.get(partner_user_id)
+            needs_stale_snapshot = (
+                _google_calendar_stale_scope_snapshots.get(partner_user_id) != approved_scope
+                or last_stale_snapshot is None
+                or time.monotonic() - last_stale_snapshot >= _GOOGLE_CALENDAR_STALE_SWEEP_INTERVAL_SECONDS
+            )
 
             refresh_token = decrypt_refresh_token(str(calendar_connection.get("encrypted_refresh_token") or ""))
             access_token = refresh_access_token(str(calendar_connection.get("client_id") or ""), refresh_token)
             try:
-                google_events, next_sync_token = _google_calendar_list_events(access_token, sync_token or None)
-                full_sync = False
+                google_events, next_sync_token = _google_calendar_list_events(
+                    access_token, None if needs_stale_snapshot else (sync_token or None),
+                )
+                full_sync = needs_stale_snapshot or not sync_token
             except GoogleCalendarError as error:
                 if error.status_code != 410:
                     raise
                 google_events, next_sync_token = _google_calendar_list_events(access_token)
                 full_sync = True
 
-            _, current_approved_items = _approved_partner_calendar_items(connection, partner_user_id)
+            _cleanup_stale_partner_google_calendar_events(
+                connection, partner_user_id, access_token, google_events, set(current_approved_items),
+            )
             changed_keys.extend(
                 _process_google_calendar_event_changes(
                     connection,
@@ -6796,6 +6881,9 @@ def _run_google_calendar_sync(
                     (next_sync_token, datetime.now(timezone.utc).isoformat(), partner_user_id),
                 )
             connection.commit()
+            _google_calendar_stale_scope_snapshots[partner_user_id] = approved_scope
+            if full_sync:
+                _google_calendar_stale_snapshot_times[partner_user_id] = time.monotonic()
             committed_keys = list(changed_keys)
 
         if changed_keys and broadcast_changes:

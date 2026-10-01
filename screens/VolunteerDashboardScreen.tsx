@@ -32,7 +32,7 @@ import {
 import type { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, AdminPlanningItem, ProgramTrack, VolunteerProjectMatch } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
-import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
+import { getVolunteerEventParticipationSummary, getVolunteerJoinedEventIds } from '../utils/volunteerEventParticipation';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import { getScheduledAttendanceDateKeys } from '../utils/attendanceSchedule';
 import { openAddGoogleCalendarEvent, fetchGoogleCalendarEvents, getStoredCalendarConfig } from '../utils/calendarSync';
@@ -263,14 +263,9 @@ export default function VolunteerDashboardScreen() {
       return;
     }
 
-    const joinedEvents = eventParticipation.joinedEvents;
-
-    if (joinedEvents.length === 0) {
-      Alert.alert(
-        'No Joined Events',
-        'Only events joined by your volunteer account can be synced. Join an event first, then sync again.'
-      );
-      setSyncStatus({ type: 'error', message: 'No joined events were found to sync.' });
+    if (loading || !volunteerProfile) {
+      Alert.alert('Calendar Not Ready', 'Wait for your volunteer profile and event memberships to finish loading, then sync again.');
+      setSyncStatus({ type: 'error', message: 'Volunteer event memberships are still loading.' });
       return;
     }
 
@@ -293,8 +288,34 @@ export default function VolunteerDashboardScreen() {
 
       await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
 
-      const result = await syncProjectsToGoogleCalendar(accessToken, joinedEvents);
-      if (!result.success && result.synced === 0) {
+      // Refresh membership before removing calendar entries so an old screen
+      // snapshot cannot remove an event the volunteer has just joined.
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'events', 'volunteerProfile', 'volunteerJoinRecords'],
+        true,
+        false,
+      );
+      if (!snapshot.volunteerProfile) {
+        throw new Error('Your volunteer memberships could not be verified. Try syncing again.');
+      }
+      const volunteerEventProjects = snapshot.projects.filter(project =>
+        Boolean(project.isEvent || project.id?.startsWith('event-'))
+      );
+      const joinedEventIds = getVolunteerJoinedEventIds({
+        projects: volunteerEventProjects,
+        volunteer: snapshot.volunteerProfile,
+        volunteerUserId: user.id,
+        joinRecords: snapshot.volunteerJoinRecords,
+      });
+      const joinedEvents = volunteerEventProjects.filter(project => joinedEventIds.has(project.id));
+      const unjoinedEventProjects = volunteerEventProjects.filter(project => !joinedEventIds.has(project.id));
+      const result = await syncProjectsToGoogleCalendar(accessToken, joinedEvents, {
+        role: 'volunteer',
+        userId: user.id,
+        unjoinedEventProjects,
+      });
+      if (!result.success && result.synced === 0 && result.removed === 0) {
         throw new Error(result.errors[0] || 'Google Calendar sync failed.');
       }
 
@@ -307,13 +328,13 @@ export default function VolunteerDashboardScreen() {
       });
 
       if (!result.success) {
-        const message = `${result.synced} joined event${result.synced === 1 ? '' : 's'} synced, ${result.failed} failed.`;
+        const message = `${result.synced} joined event${result.synced === 1 ? '' : 's'} synced, ${result.removed} old unjoined event${result.removed === 1 ? '' : 's'} removed, ${result.failed} failed.`;
         setSyncStatus({ type: 'error', message });
         Alert.alert('Calendar Partially Synced', `${message}\n\n${result.errors.slice(0, 2).join('\n')}`);
         return;
       }
 
-      const successMessage = `${result.synced} joined event${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`;
+      const successMessage = `${result.synced} joined event${result.synced === 1 ? '' : 's'} added or updated${result.removed > 0 ? `; ${result.removed} old unjoined NVC event${result.removed === 1 ? '' : 's'} removed` : ''} in your Google Calendar.`;
       setSyncStatus({ type: 'success', message: successMessage });
       Alert.alert(
         'Calendar Synced',

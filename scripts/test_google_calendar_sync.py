@@ -173,6 +173,67 @@ class CalendarScheduleTests(unittest.TestCase):
         self.assertEqual(calendar.stable_google_event_id("event-test"), "nvce1f7cc55a")
         self.assertEqual(calendar.stable_google_event_id("event-\U0001f31f"), "nvc7345d1108")
 
+    def stale(self, event, approved=None, known=None, linked=None):
+        return calendar.is_stale_partner_calendar_event(event, "partner-test", approved or set(), known or {}, linked or {})
+
+    def tagged(self, project_id="deleted-event"):
+        return {
+            "id": calendar.stable_google_event_id(project_id),
+            "extendedProperties": calendar.partner_calendar_event_properties("partner-test", project_id),
+        }
+
+    def test_partner_owned_obsolete_event_is_recognized(self):
+        self.assertTrue(self.stale(self.tagged()))
+
+    def test_new_approved_unlinked_partner_event_is_kept(self):
+        self.assertFalse(self.stale(self.tagged("new-event"), approved={"new-event"}))
+
+    def test_other_role_user_partial_marker_and_personal_items_are_kept(self):
+        for changes in (
+            {"nvcSyncRole": "volunteer"},
+            {"nvcSyncRole": "admin"},
+            {"nvcSyncUserId": "another-partner"},
+            {"nvcManagedBy": "another-system"},
+            {"nvcProjectId": ""},
+        ):
+            with self.subTest(changes=changes):
+                event = self.tagged()
+                event["extendedProperties"]["private"].update(changes)
+                self.assertFalse(self.stale(event))
+        self.assertFalse(self.stale({"id": "personal-item", "summary": "[Event] Personal reminder"}))
+        self.assertFalse(self.stale({"id": self.tagged()["id"], "extendedProperties": {"private": {"nvcManagedBy": "nvc-connect"}}}))
+        self.assertFalse(self.stale({"id": self.tagged()["id"], "extendedProperties": {"private": {"nvcRecordType": "event"}}}))
+
+    def test_deleted_legacy_app_export_needs_full_generated_signature(self):
+        event = {
+            "id": calendar.stable_google_event_id("deleted-legacy-event"),
+            "summary": "[Event] Old approved proposal event",
+            "description": "Old description\n\n📂 Category: Nutrition\n📌 Status: Completed\n👥 Volunteers Needed: 10",
+        }
+        self.assertTrue(self.stale(event))
+        self.assertFalse(self.stale({**event, "id": "ordinary-google-id"}))
+        self.assertFalse(self.stale({**event, "description": "Old description"}))
+        self.assertFalse(self.stale({**event, "summary": "Personal item"}))
+        self.assertFalse(self.stale({**event, "extendedProperties": {"private": {"nvcRecordType": "event"}}}))
+
+    def test_existing_unlinked_legacy_export_with_unknown_owner_is_preserved(self):
+        project = self.project(description="Official description")
+        event_id = calendar.stable_google_event_id(project["id"])
+        event = {"id": event_id, **self.event(project)}
+        self.assertFalse(self.stale(event, known={event_id: project}))
+        self.assertFalse(self.stale({**event, "summary": "[Event] Something else"}, known={event_id: project}))
+        self.assertFalse(self.stale({**event, "description": "Something else"}, known={event_id: project}))
+        event["description"] = "📂 Category: Nutrition\n📌 Status: Active\n👥 Volunteers Needed: 10"
+        self.assertFalse(self.stale(event, known={event_id: project}))
+
+    def test_linked_legacy_cleanup_does_not_require_description_marker(self):
+        self.assertTrue(self.stale({"id": "legacy-id"}, linked={"legacy-id": "removed-project"}))
+        self.assertFalse(self.stale({"id": "legacy-id"}, approved={"approved-project"}, linked={"legacy-id": "approved-project"}))
+
+    def test_recurring_exceptions_and_cancelled_entries_are_not_deleted_again(self):
+        self.assertFalse(self.stale({**self.tagged(), "recurringEventId": "series-id"}))
+        self.assertFalse(self.stale({**self.tagged(), "status": "cancelled"}))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

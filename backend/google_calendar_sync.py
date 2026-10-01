@@ -223,6 +223,81 @@ def stable_google_event_id(project_id: str) -> str:
     return f"nvc{hash_value:x}{project_id_length:x}".lower()
 
 
+def partner_calendar_event_properties(partner_user_id: str, project_id: str) -> dict[str, Any]:
+    """Identify copies owned by this NVC partner, independently of their title."""
+    return {
+        "private": {
+            "nvcManagedBy": "nvc-connect",
+            "nvcSyncRole": "partner",
+            "nvcSyncUserId": partner_user_id,
+            "nvcProjectId": project_id,
+        },
+    }
+
+
+def is_stale_partner_calendar_event(
+    event: dict[str, Any],
+    partner_user_id: str,
+    approved_project_ids: set[str],
+    known_projects_by_event_id: dict[str, dict[str, Any]],
+    linked_projects_by_event_id: dict[str, str],
+    *,
+    approved_event_ids: set[str] | None = None,
+) -> bool:
+    """Recognize a stale NVC copy without treating ordinary Google items as ours."""
+    event_id = str(event.get("id") or "").strip()
+    if not event_id or event.get("recurringEventId") or event.get("status") == "cancelled":
+        return False
+    allowed_event_ids = approved_event_ids
+    if allowed_event_ids is None:
+        allowed_event_ids = {stable_google_event_id(project_id) for project_id in approved_project_ids}
+        allowed_event_ids.update(
+            event_id for event_id, project_id in linked_projects_by_event_id.items()
+            if project_id in approved_project_ids
+        )
+    if event_id in allowed_event_ids:
+        # Newly approved items need not have a saved link yet.
+        return False
+
+    extended = event.get("extendedProperties")
+    private = extended.get("private") if isinstance(extended, dict) else None
+    private = private if isinstance(private, dict) else {}
+    if any(str(key).startswith("nvc") for key in private):
+        project_id = str(private.get("nvcProjectId") or "").strip()
+        return (
+            private.get("nvcManagedBy") == "nvc-connect"
+            and private.get("nvcSyncRole") == "partner"
+            and private.get("nvcSyncUserId") == partner_user_id
+            and bool(project_id)
+            and project_id not in approved_project_ids
+            and event_id == stable_google_event_id(project_id)
+        )
+
+    linked_project_id = linked_projects_by_event_id.get(event_id)
+    if linked_project_id:
+        # A persisted link identifies legacy server exports that had no marker.
+        return linked_project_id not in approved_project_ids
+
+    if event_id in known_projects_by_event_id:
+        # An untagged copy of an existing record may belong to another role
+        # sharing the Google account. Its original owner cannot be proven.
+        return False
+
+    summary = str(event.get("summary") or "")
+    description = str(event.get("description") or "")
+
+    # The old app added these exact generated lines. Combined with its stable
+    # hash ID and title prefix, this also identifies copies of deleted records.
+    # Old unlinked server exports with only a free-form description are ambiguous.
+    return bool(
+        re.fullmatch(r"nvc[0-9a-f]{2,16}", event_id)
+        and re.match(r"^\[(?:Event|Project)\] .+", summary)
+        and re.search(r"(?:^|\n)📂 Category: [^\n]+", description)
+        and re.search(r"(?:^|\n)📌 Status: [^\n]+", description)
+        and re.search(r"(?:^|\n)👥 Volunteers Needed: \d+(?:\n|$)", description)
+    )
+
+
 def _date_only(value: str) -> str:
     return value[:10]
 
