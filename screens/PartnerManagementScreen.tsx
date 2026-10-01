@@ -287,7 +287,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
         });
       }
     }
-  };
+  }, []);
 
   const handleApprovePartner = async (partner: Partner) => {
     if (approvingPartnerId) return;
@@ -427,7 +427,7 @@ export default function PartnerManagementScreen({ navigation, route }: any) {
     } finally {
       setReviewActionLoadingId(null);
     }
-  }, []);
+  };
 
   const handleApproveProposal = async (application: PartnerProjectApplication) => {
     const actionId = `proposal:${application.id}:approve`;
