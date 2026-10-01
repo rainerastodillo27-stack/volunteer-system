@@ -1137,28 +1137,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                 </View>
               </View>
 
-              <View style={styles.applicationGridColumn}>
-                <View style={styles.applicationPanel}>
-                  <View style={styles.applicationPanelHeader}>
-                    <MaterialIcons name="bar-chart" size={16} color="#166534" />
-                    <Text style={styles.applicationPanelTitle}>Activity Overview</Text>
-                  </View>
-                  {[
-                    { label: 'Events Joined', icon: 'event', value: eventsJoinedCount },
-                    { label: 'Photo Reports', icon: 'photo-camera', value: photoReportsCount },
-                    { label: 'Completed Events', icon: 'check-circle', value: completedEventsCount },
-                    { label: 'Available Events', icon: 'event-available', value: availableProjects.length },
-                  ].map(row => (
-                    <View key={row.label} style={styles.applicationOverviewRow}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <MaterialIcons name={row.icon as any} size={16} color="#64748b" style={{ marginRight: 10 }} />
-                        <Text style={styles.applicationOverviewLabel}>{row.label}</Text>
-                      </View>
-                      <Text style={styles.applicationOverviewValue}>{row.value}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
             </View>
           </>
         ) : (
@@ -1425,27 +1403,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
 
               {/* Right column */}
               <View style={styles.applicationGridColumn}>
-                <View style={styles.applicationPanel}>
-                  <View style={styles.applicationPanelHeader}>
-                    <MaterialIcons name="bar-chart" size={16} color="#166534" />
-                    <Text style={styles.applicationPanelTitle}>Activity Overview</Text>
-                  </View>
-                  {[
-                    { label: 'Events Joined', icon: 'event', value: eventsJoinedCount },
-                    { label: 'Photo Reports', icon: 'photo-camera', value: photoReportsCount },
-                    { label: 'Completed Events', icon: 'check-circle', value: completedEventsCount },
-                    { label: 'Available Events', icon: 'event-available', value: availableProjects.length },
-                  ].map(row => (
-                    <View key={row.label} style={styles.applicationOverviewRow}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <MaterialIcons name={row.icon as any} size={16} color="#64748b" style={{ marginRight: 10 }} />
-                        <Text style={styles.applicationOverviewLabel}>{row.label}</Text>
-                      </View>
-                      <Text style={styles.applicationOverviewValue}>{row.value}</Text>
-                    </View>
-                  ))}
-                </View>
-
                 {/* Match Records */}
                 <View style={styles.applicationPanel}>
                   <View style={styles.applicationPanelHeader}>

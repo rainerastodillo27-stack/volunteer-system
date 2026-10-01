@@ -32,7 +32,11 @@ export default function VolunteerHomeScreen() {
   const insets = useSafeAreaInsets();
   const { openNotifications, notificationCount } = useNotificationCenter();
 
-  const handleSeeMission = () => {
+  const handleSeePrograms = () => {
+    navigation.navigate('Programs');
+  };
+
+  const handleBrowseEvents = () => {
     navigation.navigate('Events');
   };
 
@@ -114,7 +118,7 @@ export default function VolunteerHomeScreen() {
           </Text>
           <TouchableOpacity
             style={styles.heroCta}
-            onPress={handleSeeMission}
+            onPress={handleSeePrograms}
             activeOpacity={0.9}
           >
             <Text style={styles.heroCtaText}>See our mission</Text>
@@ -219,17 +223,17 @@ export default function VolunteerHomeScreen() {
 
         {/* GIVE */}
         <View style={styles.giveCard}>
-          <Text style={styles.giveTitle}>Volunteer now</Text>
+          <Text style={styles.giveTitle}>Find an opportunity</Text>
           <Text style={styles.giveDesc}>
-            Volunteer now will go to events.
+            Browse upcoming events and choose where you would like to help.
           </Text>
           <View style={styles.giveActions}>
             <TouchableOpacity
               style={[styles.btnSolid, { marginRight: 0 }]}
-              onPress={handleSeeMission}
+              onPress={handleBrowseEvents}
               activeOpacity={0.85}
             >
-              <Text style={styles.btnSolidText}>Volunteer now</Text>
+              <Text style={styles.btnSolidText}>Browse events</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -259,7 +263,7 @@ export default function VolunteerHomeScreen() {
                   nutrition program using Mingo for children of impoverished families to help
                   them build strong bodies and sharp minds.
                 </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleSeeMission} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.programLearn} onPress={handleSeePrograms} activeOpacity={0.85}>
                   <Text style={styles.programLearnText}>Learn more</Text>
                 </TouchableOpacity>
               </View>
@@ -279,7 +283,7 @@ export default function VolunteerHomeScreen() {
                   poor. These range from infrastructure projects, provision of school supplies,
                   and assisting teachers become better at their craft.
                 </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleSeeMission} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.programLearn} onPress={handleSeePrograms} activeOpacity={0.85}>
                   <Text style={styles.programLearnText}>Learn more</Text>
                 </TouchableOpacity>
               </View>
@@ -299,7 +303,7 @@ export default function VolunteerHomeScreen() {
                   livelihood projects give adults various opportunities to earn or increase
                   their income.
                 </Text>
-                <TouchableOpacity style={styles.programLearn} onPress={handleSeeMission} activeOpacity={0.85}>
+                <TouchableOpacity style={styles.programLearn} onPress={handleSeePrograms} activeOpacity={0.85}>
                   <Text style={styles.programLearnText}>Learn more</Text>
                 </TouchableOpacity>
               </View>
