@@ -19721,7 +19721,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+            <View style={{ marginBottom: 24 }}>
 
               <View>
 
@@ -19740,56 +19740,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
 
 
-
-              <TouchableOpacity
-
-                onPress={() => {
-
-                  setEditingTaskId(null);
-
-                  setTaskDraft(createEmptyProjectTaskDraft());
-
-                  setShowTaskModal(true);
-
-                }}
-
-                style={{
-
-                  flexDirection: 'row',
-
-                  alignItems: 'center',
-
-                  backgroundColor: '#ffffff',
-
-                  borderWidth: 1,
-
-                  borderColor: '#e2e8f0',
-
-                  borderRadius: 8,
-
-                  paddingVertical: 10,
-
-                  paddingHorizontal: 16,
-
-                  shadowColor: '#0f172a',
-
-                  shadowOffset: { width: 0, height: 1 },
-
-                  shadowOpacity: 0.05,
-
-                  shadowRadius: 2,
-
-                  elevation: 1,
-
-                }}
-
-              >
-
-                <MaterialIcons name="add" size={16} color="#166534" style={{ marginRight: 6 }} />
-
-                <Text style={{ fontSize: 14, fontWeight: '700', color: '#166534' }}>Add Task</Text>
-
-              </TouchableOpacity>
 
             </View>
 
@@ -19893,6 +19843,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+            {eventWorkspaceTab === 'Attendance' && (
             <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
 
               <View style={{
@@ -19971,8 +19922,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a' }}>{taskCount}</Text>
 
-                  <Text style={{ fontSize: 12, color: '#64748b' }}>{taskCount} tasks</Text>
-
                 </View>
 
               </View>
@@ -20009,19 +19958,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <View>
 
-                  <Text style={{ fontSize: 12, color: '#64748b', fontWeight: '500' }}>Assigned Volunteers</Text>
+                  <Text style={{ fontSize: 12, color: '#64748b', fontWeight: '500' }}>Tasks Assigned</Text>
 
                   <Text style={{ fontSize: 16, fontWeight: '800', color: '#0f172a' }}>{assignedTaskCount}</Text>
 
-                  <Text style={{ fontSize: 12, color: '#64748b' }}>{assignedTaskCount} of {volunteersNeeded} needed</Text>
+                  <Text style={{ fontSize: 12, color: '#64748b' }}>{unassignedTaskCount} unassigned</Text>
 
                 </View>
 
               </View>
 
             </View>
-
-
+            )}
 
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16 }}>
 
@@ -20051,7 +19999,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <TextInput
 
-                  placeholder="Search tasks or volunteers..."
+                  placeholder="Search volunteers..."
 
                   placeholderTextColor="#94a3b8"
 
@@ -20303,11 +20251,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       { label: 'Total Estimated Volunteers', value: volunteersNeeded, note: `${volunteersCount} joined` },
 
-                      { label: 'Tasks Created', value: taskCount, note: `${taskCount} task${taskCount === 1 ? '' : 's'}` },
+                      { label: 'Tasks Created', value: taskCount, note: '' },
 
-                      { label: 'Assigned Volunteers', value: assignedTaskCount, note: `${assignedTaskCount} assigned` },
+                      { label: 'Tasks Assigned', value: assignedTaskCount, note: '' },
 
-                      { label: 'Unassigned', value: unassignedTaskCount, note: `${unassignedTaskCount} slots open` },
+                      { label: 'Unassigned Tasks', value: unassignedTaskCount, note: '' },
 
                     ].map((stat, idx) => (
 
@@ -20341,7 +20289,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <Text style={{ fontSize: 28, fontWeight: '900', color: '#0f172a', lineHeight: 32 }}>{stat.value}</Text>
 
-                        <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{stat.note}</Text>
+                        {stat.note ? (
+                          <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{stat.note}</Text>
+                        ) : null}
 
                       </View>
 
@@ -20691,22 +20641,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   return (
 
                     <View style={{ marginTop: 24, marginBottom: 40 }}>
-
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24 }}>
-
-                        <MaterialIcons name="info-outline" size={20} color="#166534" style={{ marginRight: 12 }} />
-
-                        <View>
-
-                          <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>Total estimated volunteers needed: {volunteersNeeded}</Text>
-
-                          <Text style={{ fontSize: 12, color: '#64748b' }}>This will help volunteers understand where they can help.</Text>
-
-                        </View>
-
-                      </View>
-
-
 
                       <View style={{ backgroundColor: '#f8fafc', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0' }}>
 
