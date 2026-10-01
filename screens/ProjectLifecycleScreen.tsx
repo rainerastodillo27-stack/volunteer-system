@@ -161,6 +161,8 @@ import {
 
   getStorageItem,
 
+  getVolunteerTimeLogsForProjects,
+
   setStorageItem,
 
   setVolunteerAttendanceChecked,
@@ -3494,6 +3496,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   } | null>(null);
 
   const [previewAttendanceLog, setPreviewAttendanceLog] = useState<VolunteerTimeLog | null>(null);
+
+  const [attendancePhotoLoadingLogId, setAttendancePhotoLoadingLogId] = useState<string | null>(null);
 
   const [attendanceCheckInFlightLogId, setAttendanceCheckInFlightLogId] = useState<string | null>(null);
 
@@ -18616,7 +18620,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           timeOutCount: selectedDateLogs.filter(
 
-            log => Boolean((log.attendancePhoto || log.completionPhoto || '').trim())
+            log => Boolean((log.attendancePhoto || log.completionPhoto || '').trim()) ||
+              Boolean(log.hasAttendancePhoto || log.hasCompletionPhoto)
 
           ).length,
 
@@ -18648,7 +18653,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const projectTimeOutCount = projectTimeLogEntries.filter(
 
-      log => Boolean((log.attendancePhoto || log.completionPhoto || '').trim())
+      log => Boolean((log.attendancePhoto || log.completionPhoto || '').trim()) ||
+        Boolean(log.hasAttendancePhoto || log.hasCompletionPhoto)
 
     ).length;
 
@@ -19369,7 +19375,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           time: attendanceLog ? format(new Date(attendanceLog.timeIn), 'h:mm a') : 'Not timed in',
           assignedTasks: assignedTasks.map(task => task.title).join(', ') || 'No task assigned',
           completedTask: noteTask || completedTasks.join(', ') || 'None',
-          photo: attendanceLog?.attendancePhoto || attendanceLog?.completionPhoto ? 'Yes' : 'No',
+          photo:
+            attendanceLog?.attendancePhoto ||
+            attendanceLog?.completionPhoto ||
+            attendanceLog?.hasAttendancePhoto ||
+            attendanceLog?.hasCompletionPhoto
+              ? 'Yes'
+              : 'No',
         };
       });
       const fileTitle = `attendance-report-${activeSelectedProject.title
@@ -19603,6 +19615,75 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         : [];
       const activeAttendanceLog = activeAttendanceLogs[0] || null;
       const activeAttendancePhotoUri = activeAttendanceLog?.attendancePhoto || activeAttendanceLog?.completionPhoto || '';
+      const activeAttendancePhotoAvailable = Boolean(
+        activeAttendancePhotoUri ||
+        activeAttendanceLog?.hasAttendancePhoto ||
+        activeAttendanceLog?.hasCompletionPhoto
+      );
+
+      const handleViewActiveAttendancePhoto = async () => {
+        if (!activeAttendanceLog) {
+          setActiveActionTaskId(null);
+          Alert.alert('No Attendance Record', 'There is no attendance record to review for this volunteer and date.');
+          return;
+        }
+
+        if (activeAttendancePhotoUri && isImageMediaUri(activeAttendancePhotoUri)) {
+          setActiveActionTaskId(null);
+          setPreviewImageUri(activeAttendancePhotoUri);
+          setPreviewAttendanceLog(activeAttendanceLog);
+          setPreviewImageModalVisible(true);
+          return;
+        }
+
+        if (!activeAttendancePhotoAvailable) {
+          setActiveActionTaskId(null);
+          Alert.alert('No Photo', 'Volunteer has not submitted an attendance photo.');
+          return;
+        }
+
+        setAttendancePhotoLoadingLogId(activeAttendanceLog.id);
+        try {
+          const projectLogsWithMedia = await getVolunteerTimeLogsForProjects(
+            [project.id],
+            { includeImages: true }
+          );
+          const hydratedLog = projectLogsWithMedia.find(log => log.id === activeAttendanceLog.id);
+          const photoUri = hydratedLog?.attendancePhoto || hydratedLog?.completionPhoto || '';
+
+          if (hydratedLog) {
+            setVolunteerTimeLogs(current => current.map(log =>
+              log.id === hydratedLog.id ? { ...log, ...hydratedLog } : log
+            ));
+          }
+
+          if (!photoUri || !isImageMediaUri(photoUri)) {
+            setActiveActionTaskId(null);
+            Alert.alert(
+              'Photo Could Not Be Loaded',
+              'This attendance record has a photo upload, but the image could not be retrieved. Please refresh and try again.'
+            );
+            return;
+          }
+
+          const photoLog = hydratedLog || activeAttendanceLog;
+          setActiveActionTaskId(null);
+          setPreviewImageUri(photoUri);
+          setPreviewAttendanceLog({
+            ...photoLog,
+            attendancePhoto: photoLog.attendancePhoto || photoUri,
+          });
+          setPreviewImageModalVisible(true);
+        } catch (error: any) {
+          setActiveActionTaskId(null);
+          Alert.alert(
+            'Photo Could Not Be Loaded',
+            getRequestErrorMessage(error, 'Unable to retrieve the uploaded attendance photo. Please try again.')
+          );
+        } finally {
+          setAttendancePhotoLoadingLogId(null);
+        }
+      };
 
 
 
@@ -21767,32 +21848,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <TouchableOpacity
 
-                      onPress={() => {
+                      onPress={() => void handleViewActiveAttendancePhoto()}
 
-                        setActiveActionTaskId(null);
-
-                        if (activeAttendancePhotoUri && isImageMediaUri(activeAttendancePhotoUri)) {
-
-                          setPreviewImageUri(activeAttendancePhotoUri);
-                          setPreviewAttendanceLog(activeAttendanceLog);
-
-                          setPreviewImageModalVisible(true);
-
-                        } else {
-
-                          Alert.alert('No Photo', 'Volunteer has not submitted an attendance photo.');
-
-                        }
-
-                      }}
+                      disabled={attendancePhotoLoadingLogId === activeAttendanceLog?.id}
 
                       style={{ padding: 14, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', flexDirection: 'row', alignItems: 'center', gap: 8 }}
 
                     >
 
-                      <MaterialIcons name="photo-camera" size={16} color={activeAttendancePhotoUri ? '#166534' : '#94a3b8'} />
+                      {attendancePhotoLoadingLogId === activeAttendanceLog?.id ? (
+                        <ActivityIndicator size="small" color="#166534" />
+                      ) : (
+                        <MaterialIcons name="photo-camera" size={16} color={activeAttendancePhotoAvailable ? '#166534' : '#94a3b8'} />
+                      )}
 
-                      <Text style={{ fontSize: 14, fontWeight: '700', color: activeAttendancePhotoUri ? '#334155' : '#94a3b8' }}>View Photo</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: activeAttendancePhotoAvailable ? '#334155' : '#94a3b8' }}>
+                        {attendancePhotoLoadingLogId === activeAttendanceLog?.id ? 'Loading Photo...' : 'View Photo'}
+                      </Text>
 
                     </TouchableOpacity>
 
