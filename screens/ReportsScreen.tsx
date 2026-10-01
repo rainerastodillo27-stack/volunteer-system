@@ -1601,6 +1601,7 @@ export default function ReportsScreen({ navigation, route }: any) {
           isPartnerView={user?.role === 'partner'}
           volunteers={user?.role === 'partner' ? partnerVisibleVolunteers : volunteers}
           joinedEventIds={user?.role === 'volunteer' ? Array.from(volunteerJoinedEventIds) : undefined}
+          hideVolunteerAccountSummary={Platform.OS === 'android' && user?.role === 'volunteer'}
         />
       );
     }

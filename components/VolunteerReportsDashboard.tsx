@@ -178,6 +178,7 @@ interface VolunteerReportsDashboardProps {
   volunteers?: Volunteer[];
   joinedEventIds?: string[];
   partnerAccounts?: PartnerReportAccountFilter[];
+  hideVolunteerAccountSummary?: boolean;
 }
 
 type PartnerQuarterlyDocument = {
@@ -202,6 +203,7 @@ export function VolunteerReportsDashboard({
   isPartnerView = false,
   volunteers = [],
   joinedEventIds,
+  hideVolunteerAccountSummary = false,
 }: VolunteerReportsDashboardProps) {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedEventPhoto, setSelectedEventPhoto] = useState<{
@@ -737,7 +739,8 @@ export function VolunteerReportsDashboard({
           ) : null}
         </View>
 
-        {/* Accounts Section — real system volunteer account */}
+        {/* The signed-in volunteer already owns this report view; avoid repeating their account card. */}
+        {!hideVolunteerAccountSummary ? (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -789,6 +792,7 @@ export function VolunteerReportsDashboard({
             </View>
           )}
         </View>
+        ) : null}
 
         {/* Reports Section */}
         <View style={styles.section}>

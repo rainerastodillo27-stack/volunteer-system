@@ -46,6 +46,13 @@ import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { ConfirmDialogHandle, ConfirmDialogHost } from '../components/ConfirmDialog';
+import {
+  getAllCities,
+  getBarangaysByCity,
+  getCitiesByRegion,
+  PHRegions,
+  type PHCityMunicipality,
+} from '../utils/philippineAddressData';
 
 const USER_TYPES: UserType[] = ['Student', 'Adult', 'Senior'];
 const PILLAR_OPTIONS: NVCSector[] = [];
@@ -82,6 +89,113 @@ function formatSocialMediaInfo(socialMedia?: SocialMediaInfo): string {
     .filter(([, value]) => Boolean(value?.trim()))
     .map(([platform, value]) => `${platform}: ${value}`)
     .join(' • ');
+}
+
+function normalizeLocationName(value?: string): string {
+  return (value || '')
+    .toLowerCase()
+    .replace(/\bcity of\b/g, '')
+    .replace(/\bmunicipality of\b/g, '')
+    .replace(/\b(city|municipality)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function findProfileRegionCode(regionName?: string): string {
+  const normalizedName = normalizeLocationName(regionName);
+  return PHRegions.find(region => normalizeLocationName(region.name) === normalizedName)?.code || '';
+}
+
+function findProfileCity(
+  regionCode: string,
+  cityName?: string,
+  provinceName?: string
+): PHCityMunicipality | undefined {
+  const normalizedCityName = normalizeLocationName(cityName);
+  if (!normalizedCityName) return undefined;
+
+  const cityOptions = regionCode ? getCitiesByRegion(regionCode) : getAllCities();
+  const cityMatches = cityOptions.filter(city =>
+    normalizeLocationName(city.displayName) === normalizedCityName ||
+    normalizeLocationName(city.name) === normalizedCityName
+  );
+  return cityMatches.find(city => normalizeLocationName(city.provinceName) === normalizeLocationName(provinceName))
+    || cityMatches[0];
+}
+
+function splitPartnerAddress(
+  address: string,
+  regionName: string,
+  city?: PHCityMunicipality
+): { streetAddress: string; barangay: string } {
+  const parts = address.split(',').map(part => part.trim()).filter(Boolean);
+  const removeMatchingLastPart = (expected: string) => {
+    if (expected && parts.length > 0 && normalizeLocationName(parts[parts.length - 1]) === normalizeLocationName(expected)) {
+      parts.pop();
+    }
+  };
+
+  removeMatchingLastPart(regionName);
+  removeMatchingLastPart(city?.provinceName || '');
+  removeMatchingLastPart(city?.displayName || '');
+
+  const barangayOptions = city ? getBarangaysByCity(city.code) : [];
+  const matchedBarangay = barangayOptions.find(barangay =>
+    normalizeLocationName(barangay.name) === normalizeLocationName(parts[parts.length - 1]) ||
+    normalizeLocationName(barangay.displayName) === normalizeLocationName(parts[parts.length - 1])
+  );
+  if (matchedBarangay) parts.pop();
+
+  return { streetAddress: parts.join(', '), barangay: matchedBarangay?.name || '' };
+}
+
+function ProfileLocationPickers({
+  regionCode,
+  cityCode,
+  barangay,
+  disabled,
+  onRegionChange,
+  onCityChange,
+  onBarangayChange,
+}: {
+  regionCode: string;
+  cityCode: string;
+  barangay: string;
+  disabled: boolean;
+  onRegionChange: (value: string) => void;
+  onCityChange: (value: string) => void;
+  onBarangayChange: (value: string) => void;
+}) {
+  const cities = regionCode ? getCitiesByRegion(regionCode) : [];
+  const barangays = cityCode ? getBarangaysByCity(cityCode) : [];
+
+  return (
+    <View>
+      <Text style={styles.fieldLabel}>Region</Text>
+      <View style={styles.locationPickerContainer}>
+        <Picker selectedValue={regionCode} onValueChange={onRegionChange} enabled={!disabled} style={styles.locationPicker}>
+          <Picker.Item label="Select Region..." value="" />
+          {PHRegions.map(region => <Picker.Item key={region.code} label={region.name} value={region.code} />)}
+        </Picker>
+      </View>
+
+      <Text style={styles.fieldLabel}>City / Municipality</Text>
+      <View style={styles.locationPickerContainer}>
+        <Picker selectedValue={cityCode} onValueChange={onCityChange} enabled={!disabled && Boolean(regionCode)} style={styles.locationPicker}>
+          <Picker.Item label="Select City / Municipality..." value="" />
+          {cities.map(city => <Picker.Item key={city.code} label={city.displayName} value={city.code} />)}
+        </Picker>
+      </View>
+
+      <Text style={styles.fieldLabel}>Barangay</Text>
+      <View style={styles.locationPickerContainer}>
+        <Picker selectedValue={barangay} onValueChange={onBarangayChange} enabled={!disabled && Boolean(cityCode)} style={styles.locationPicker}>
+          <Picker.Item label="Select Barangay..." value="" />
+          {barangays.map(item => <Picker.Item key={item.code} label={item.displayName} value={item.name} />)}
+        </Picker>
+      </View>
+    </View>
+  );
 }
 
 // Displays the signed-in user's profile, volunteer recognition, and edit form.
@@ -131,6 +245,9 @@ export default function ProfileScreen() {
   const [stakeholderNameDraft, setStakeholderNameDraft] = useState('');
   const [advocacyFocusDraft, setAdvocacyFocusDraft] = useState<AdvocacyFocus[]>([]);
   const [addressDraft, setAddressDraft] = useState('');
+  const [profileLocationRegionCodeDraft, setProfileLocationRegionCodeDraft] = useState('');
+  const [profileLocationCityCodeDraft, setProfileLocationCityCodeDraft] = useState('');
+  const [profileLocationBarangayDraft, setProfileLocationBarangayDraft] = useState('');
   const [partnerValidIdDocumentDraft, setPartnerValidIdDocumentDraft] = useState('');
   const membershipValidIdPhoto = user?.volunteerMembershipSheet?.validIdPhoto?.trim() || '';
   const membershipCertificate = user?.volunteerMembershipSheet?.certificationsOrTrainings?.trim() || '';
@@ -323,13 +440,41 @@ export default function ProfileScreen() {
     setAffiliationsDraft(volunteerProfile?.affiliations || []);
 
     const primaryPartner = partnerProfiles[0] || null;
+    const partnerRegistration = user.partnerRegistration;
+    const partnerRegionName = primaryPartner?.region || partnerRegistration?.region || '';
+    const partnerCityName = primaryPartner?.cityMunicipality || partnerRegistration?.cityMunicipality || '';
+    const partnerAddress = primaryPartner?.address || partnerRegistration?.address || '';
+    const partnerRegionCode = findProfileRegionCode(partnerRegionName);
+    const partnerCity = findProfileCity(partnerRegionCode, partnerCityName, primaryPartner?.province || partnerRegistration?.province);
+    const partnerAddressParts = splitPartnerAddress(partnerAddress, partnerRegionName, partnerCity);
+
+    const volunteerRegionName = volunteerProfile?.homeAddressRegion || user.volunteerMembershipSheet?.homeAddressRegion || '';
+    const volunteerCityName = volunteerProfile?.homeAddressCityMunicipality || user.volunteerMembershipSheet?.homeAddressCityMunicipality || '';
+    const volunteerRegionCode = findProfileRegionCode(volunteerRegionName);
+    const volunteerCity = findProfileCity(volunteerRegionCode, volunteerCityName);
+
     setOrgNameDraft(primaryPartner?.name || '');
     setDswdAccreditationNoDraft(primaryPartner?.dswdAccreditationNo || '');
     setSecRegistrationNoDraft(primaryPartner?.secRegistrationNo || '');
     setSectorTypeDraft(primaryPartner?.sectorType || 'NGO');
     setStakeholderNameDraft(primaryPartner?.stakeholderName || '');
     setAdvocacyFocusDraft(primaryPartner?.advocacyFocus || []);
-    setAddressDraft(primaryPartner?.address || '');
+    setAddressDraft(
+      user.role === 'partner' && Platform.OS === 'android'
+        ? partnerAddressParts.streetAddress
+        : partnerAddress
+    );
+    if (user.role === 'partner') {
+      setProfileLocationRegionCodeDraft(partnerRegionCode);
+      setProfileLocationCityCodeDraft(partnerCity?.code || '');
+      setProfileLocationBarangayDraft(partnerAddressParts.barangay);
+    } else {
+      setProfileLocationRegionCodeDraft(volunteerRegionCode);
+      setProfileLocationCityCodeDraft(volunteerCity?.code || '');
+      setProfileLocationBarangayDraft(
+        volunteerProfile?.homeAddressBarangay || user.volunteerMembershipSheet?.homeAddressBarangay || ''
+      );
+    }
     setPartnerValidIdDocumentDraft(getPartnerValidIdDocument(primaryPartner));
   }, [user, volunteerProfile, partnerProfiles]);
 
@@ -375,6 +520,17 @@ export default function ProfileScreen() {
         ? current.filter(item => item !== pillar)
         : [...current, pillar]
     );
+  };
+
+  const handleProfileLocationRegionChange = (regionCode: string) => {
+    setProfileLocationRegionCodeDraft(regionCode);
+    setProfileLocationCityCodeDraft('');
+    setProfileLocationBarangayDraft('');
+  };
+
+  const handleProfileLocationCityChange = (cityCode: string) => {
+    setProfileLocationCityCodeDraft(cityCode);
+    setProfileLocationBarangayDraft('');
   };
 
   // Opens the device photo picker and stores the selected image in the edit draft.
@@ -478,6 +634,18 @@ export default function ProfileScreen() {
     const normalizedName = nameDraft.trim();
     const normalizedEmail = emailDraft.trim().toLowerCase();
     const normalizedPhone = phoneDraft.trim();
+    const selectedProfileRegion = PHRegions.find(region => region.code === profileLocationRegionCodeDraft);
+    const selectedProfileCity = getCitiesByRegion(profileLocationRegionCodeDraft)
+      .find(city => city.code === profileLocationCityCodeDraft);
+    const selectedProfileBarangay = getBarangaysByCity(profileLocationCityCodeDraft)
+      .find(barangay => barangay.name === profileLocationBarangayDraft);
+    const partnerFullAddress = [
+      addressDraft.trim(),
+      selectedProfileBarangay?.name || profileLocationBarangayDraft.trim(),
+      selectedProfileCity?.displayName,
+      selectedProfileCity?.provinceName,
+      selectedProfileRegion?.name,
+    ].filter(Boolean).join(', ');
     
     console.log('[ProfileScreen] Saving profile, photo draft:', profilePhotoDraft?.substring(0, 50));
     
@@ -564,6 +732,11 @@ export default function ProfileScreen() {
               dateOfBirth: dateOfBirthDraft,
               civilStatus: civilStatusDraft,
               homeAddress: homeAddressDraft,
+              ...(Platform.OS === 'android' ? {
+                homeAddressRegion: selectedProfileRegion?.name || '',
+                homeAddressCityMunicipality: selectedProfileCity?.displayName || '',
+                homeAddressBarangay: selectedProfileBarangay?.name || '',
+              } : {}),
               occupation: occupationDraft,
               workplaceOrSchool: workplaceOrSchoolDraft,
               collegeCourse: collegeCourseDraft,
@@ -574,6 +747,16 @@ export default function ProfileScreen() {
               socialMedia: socialMediaDraft,
             }
           : user.volunteerMembershipSheet,
+        partnerRegistration:
+          user.role === 'partner' && Platform.OS === 'android' && user.partnerRegistration
+            ? {
+                ...user.partnerRegistration,
+                address: partnerFullAddress,
+                region: selectedProfileRegion?.name || '',
+                province: selectedProfileCity?.provinceName || '',
+                cityMunicipality: selectedProfileCity?.displayName || '',
+              }
+            : user.partnerRegistration,
       };
 
       await saveUser(updatedUser);
@@ -631,6 +814,11 @@ export default function ProfileScreen() {
           dateOfBirth: dateOfBirthDraft,
           civilStatus: civilStatusDraft,
           homeAddress: homeAddressDraft,
+          ...(Platform.OS === 'android' ? {
+            homeAddressRegion: selectedProfileRegion?.name || '',
+            homeAddressCityMunicipality: selectedProfileCity?.displayName || '',
+            homeAddressBarangay: selectedProfileBarangay?.name || '',
+          } : {}),
           occupation: occupationDraft,
           workplaceOrSchool: workplaceOrSchoolDraft,
           collegeCourse: collegeCourseDraft,
@@ -660,7 +848,12 @@ export default function ProfileScreen() {
               sectorType: sectorTypeDraft,
               stakeholderName: stakeholderNameDraft.trim(),
               advocacyFocus: advocacyFocusDraft,
-              address: addressDraft.trim(),
+              address: Platform.OS === 'android' ? partnerFullAddress : addressDraft.trim(),
+              ...(Platform.OS === 'android' ? {
+                region: selectedProfileRegion?.name || '',
+                province: selectedProfileCity?.provinceName || '',
+                cityMunicipality: selectedProfileCity?.displayName || '',
+              } : {}),
               ownerUserId: user.id,
               contactEmail: normalizedEmail || undefined,
               contactPhone: normalizedPhone || undefined,
@@ -1805,14 +1998,38 @@ export default function ProfileScreen() {
 
                 {/* Advocacy Focus field removed */}
 
-                <Text style={styles.fieldLabel}>Location Address</Text>
-                <TextInput
-                  style={styles.input}
-                  value={addressDraft}
-                  onChangeText={setAddressDraft}
-                  placeholder="Full Address"
-                  editable={!saveLoading}
-                />
+                {Platform.OS === 'android' ? (
+                  <>
+                    <ProfileLocationPickers
+                      regionCode={profileLocationRegionCodeDraft}
+                      cityCode={profileLocationCityCodeDraft}
+                      barangay={profileLocationBarangayDraft}
+                      disabled={saveLoading}
+                      onRegionChange={handleProfileLocationRegionChange}
+                      onCityChange={handleProfileLocationCityChange}
+                      onBarangayChange={setProfileLocationBarangayDraft}
+                    />
+                    <Text style={styles.fieldLabel}>Street Address / House Number</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={addressDraft}
+                      onChangeText={setAddressDraft}
+                      placeholder="House No., Street Name, Subdivision..."
+                      editable={!saveLoading}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.fieldLabel}>Location Address</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={addressDraft}
+                      onChangeText={setAddressDraft}
+                      placeholder="Full Address"
+                      editable={!saveLoading}
+                    />
+                  </>
+                )}
               </>
             )}
 
@@ -1861,14 +2078,38 @@ export default function ProfileScreen() {
                   editable={!saveLoading}
                 />
 
-                <Text style={styles.fieldLabel}>Home Address</Text>
-                <TextInput
-                  style={styles.input}
-                  value={homeAddressDraft}
-                  onChangeText={setHomeAddressDraft}
-                  placeholder="Full Home Address"
-                  editable={!saveLoading}
-                />
+                {Platform.OS === 'android' ? (
+                  <>
+                    <ProfileLocationPickers
+                      regionCode={profileLocationRegionCodeDraft}
+                      cityCode={profileLocationCityCodeDraft}
+                      barangay={profileLocationBarangayDraft}
+                      disabled={saveLoading}
+                      onRegionChange={handleProfileLocationRegionChange}
+                      onCityChange={handleProfileLocationCityChange}
+                      onBarangayChange={setProfileLocationBarangayDraft}
+                    />
+                    <Text style={styles.fieldLabel}>Street Address / House Number</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={homeAddressDraft}
+                      onChangeText={setHomeAddressDraft}
+                      placeholder="House No., Street Name, Subdivision..."
+                      editable={!saveLoading}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.fieldLabel}>Home Address</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={homeAddressDraft}
+                      onChangeText={setHomeAddressDraft}
+                      placeholder="Full Home Address"
+                      editable={!saveLoading}
+                    />
+                  </>
+                )}
 
                 <Text style={styles.fieldLabel}>Occupation</Text>
                 <TextInput
@@ -2910,6 +3151,18 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
     fontWeight: '800',
     color: '#15803d',
+  },
+  locationPickerContainer: {
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 16,
+    backgroundColor: '#f8fafc',
+  },
+  locationPicker: {
+    height: 52,
+    color: '#334155',
   },
   input: {
     backgroundColor: '#ffffff',

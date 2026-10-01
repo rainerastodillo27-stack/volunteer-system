@@ -252,16 +252,31 @@ export default function PartnerProgramManagementScreen() {
     [partnerApplications]
   );
 
-  const approvedProjects = useMemo(() => {
-    const approvedProjectIds = new Set(
+  const approvedProposalProjectIds = useMemo(
+    () => new Set(
       partnerApplications
         .filter(application => application.status === 'Approved')
-        .map(application => application.projectId)
-    );
-    return allProjects.filter(
-      project => !project.isEvent && approvedProjectIds.has(project.id)
-    );
-  }, [allProjects, partnerApplications]);
+        .map(application => String(application.projectId || '').trim())
+        .filter(Boolean)
+    ),
+    [partnerApplications]
+  );
+
+  const approvedProposalCalendarProjects = useMemo(
+    () => allProjects.filter(project => {
+      if (project.isEvent) {
+        return approvedProposalProjectIds.has(String(project.parentProjectId || '').trim());
+      }
+
+      return approvedProposalProjectIds.has(String(project.id || '').trim());
+    }),
+    [allProjects, approvedProposalProjectIds]
+  );
+
+  const approvedProposalCalendarProjectIds = useMemo(
+    () => approvedProposalCalendarProjects.map(project => project.id),
+    [approvedProposalCalendarProjects]
+  );
 
   const handleSyncProgramCalendar = useCallback(async () => {
     if (!user?.id) {
@@ -269,10 +284,10 @@ export default function PartnerProgramManagementScreen() {
       return;
     }
 
-    if (approvedProjects.length === 0) {
+    if (approvedProposalCalendarProjects.length === 0) {
       Alert.alert(
         'No Approved Projects',
-        'Only projects approved by the admin for your partner account can be synced.'
+        'Only approved projects and their events can be synced.'
       );
       return;
     }
@@ -296,7 +311,7 @@ export default function PartnerProgramManagementScreen() {
 
       await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
 
-      const result = await syncProjectsToGoogleCalendar(accessToken, approvedProjects);
+      const result = await syncProjectsToGoogleCalendar(accessToken, approvedProposalCalendarProjects);
       if (!result.success && result.synced === 0) {
         throw new Error(result.errors[0] || 'Google Calendar sync failed.');
       }
@@ -309,8 +324,8 @@ export default function PartnerProgramManagementScreen() {
       });
 
       const confirmationMessage = result.failed > 0
-        ? `${result.synced} approved project${result.synced === 1 ? '' : 's'} synced. ${result.failed} could not be synced.`
-        : `${result.synced} approved project${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`;
+        ? `${result.synced} approved project or event item${result.synced === 1 ? '' : 's'} synced. ${result.failed} could not be synced.`
+        : `${result.synced} approved project or event item${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`;
       setCalendarSyncMessage(confirmationMessage);
       Alert.alert('Calendar Sync Complete', confirmationMessage);
     } catch (error) {
@@ -318,7 +333,7 @@ export default function PartnerProgramManagementScreen() {
     } finally {
       setCalendarSyncing(false);
     }
-  }, [approvedProjects, googleAuthRequest, promptGoogleAuth, user]);
+  }, [approvedProposalCalendarProjects, googleAuthRequest, promptGoogleAuth, user]);
 
   const handleOpenProposal = (card: ProgramCardConfig) => {
     navigation.navigate('Messages', {
@@ -452,7 +467,7 @@ export default function PartnerProgramManagementScreen() {
         </View>
       )}
 
-      {allProjects.length > 0 ? (
+      {approvedProposalCalendarProjects.length > 0 ? (
         <>
           <View style={styles.calendarSectionHeaderRow}>
             <Text style={styles.calendarSectionHeader}>Project & Event Timeline Calendar</Text>
@@ -479,10 +494,13 @@ export default function PartnerProgramManagementScreen() {
           ) : null}
           <ProjectTimelineCalendarCard
             title="Program Calendar"
-            subtitle="Review projects, scheduled events, and milestones."
-            projects={allProjects}
+            subtitle="Review approved proposal projects and their scheduled events."
+            projects={approvedProposalCalendarProjects}
+            projectFilterIds={approvedProposalCalendarProjectIds}
             planningCalendars={planningCalendars}
             planningItems={planningItems}
+            includeProjectEntries
+            includeUnlinkedPlanningItems={false}
             accentColor="#166534"
             emptyText="No scheduled items yet."
             statusFilter={statusFilter}

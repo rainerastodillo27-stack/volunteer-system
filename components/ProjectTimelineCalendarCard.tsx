@@ -32,6 +32,8 @@ type ProjectTimelineCalendarCardProps = {
   statusFilter?: string | null;
   setStatusFilter?: (status: string | null) => void;
   hideSecondCalendar?: boolean;
+  includeProjectEntries?: boolean;
+  includeUnlinkedPlanningItems?: boolean;
   onAddEvent?: (date: Date) => void;
   onOpenProject?: (projectId: string) => void;
   onEditProject?: (projectId: string) => void;
@@ -129,6 +131,8 @@ export default function ProjectTimelineCalendarCard({
   statusFilter,
   setStatusFilter,
   hideSecondCalendar = false,
+  includeProjectEntries = false,
+  includeUnlinkedPlanningItems = true,
   onAddEvent,
   onOpenProject,
   onEditProject,
@@ -233,7 +237,7 @@ export default function ProjectTimelineCalendarCard({
     const projectEntries: TimelineEntry[] = showProjects
       ? projects
           .filter(project => {
-            if (!project.isEvent) {
+            if (!project.isEvent && !includeProjectEntries) {
               return false;
             }
 
@@ -281,7 +285,11 @@ export default function ProjectTimelineCalendarCard({
               return true;
             }
 
-            return !item.linkedProjectId || visibleProjectIds.has(item.linkedProjectId);
+            if (!item.linkedProjectId) {
+              return includeUnlinkedPlanningItems;
+            }
+
+            return visibleProjectIds.has(item.linkedProjectId);
           })
           .map(item => ({
             id: `planning-${item.id}`,
@@ -324,7 +332,7 @@ export default function ProjectTimelineCalendarCard({
         new Date(left.startDate).getTime() - new Date(right.startDate).getTime() ||
         new Date(left.endDate).getTime() - new Date(right.endDate).getTime()
     );
-  }, [planningCalendars, planningItems, projectFilterIds, projects, googleEvents, showProjects, showPlanning, showGoogle, statusFilter]);
+  }, [planningCalendars, planningItems, projectFilterIds, projects, googleEvents, showProjects, showPlanning, showGoogle, statusFilter, includeProjectEntries, includeUnlinkedPlanningItems]);
 
   // Compute status counts for events
   const statusCounts = useMemo(() => {

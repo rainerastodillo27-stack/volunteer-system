@@ -33,6 +33,8 @@ import type { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, 
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
+import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
+import { getScheduledAttendanceDateKeys } from '../utils/attendanceSchedule';
 import { openAddGoogleCalendarEvent, fetchGoogleCalendarEvents, getStoredCalendarConfig } from '../utils/calendarSync';
 import {
   GOOGLE_CALENDAR_WEB_URL,
@@ -80,6 +82,10 @@ function getGoogleEventsForDay(
 
     return (startMs <= targetEnd && endMs >= targetStart);
   });
+}
+
+function getCalendarDateKey(year: number, monthIndex: number, day: number): string {
+  return `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function formatGoogleEventTime(event: any): string {
@@ -472,11 +478,24 @@ export default function VolunteerDashboardScreen() {
     [projects, volunteerProfile, volunteerJoinRecords, volunteerMatches, timeLogs]
   );
   const joinedEventsCount = eventParticipation.joinedEvents.length;
+  const joinedEventScheduleDateKeys = useMemo(
+    () => new Set(
+      eventParticipation.joinedEvents.flatMap(event =>
+        getScheduledAttendanceDateKeys({ ...event, isEvent: true })
+      )
+    ),
+    [eventParticipation.joinedEvents]
+  );
 
   // Calendar setup
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const monthLabel = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const currentMonthDatePrefix = getCalendarDateKey(year, month, 1).slice(0, 7);
+  const joinedEventOccurrenceDaysThisMonth = useMemo(
+    () => Array.from(joinedEventScheduleDateKeys).filter(dateKey => dateKey.startsWith(currentMonthDatePrefix)).length,
+    [currentMonthDatePrefix, joinedEventScheduleDateKeys]
+  );
   const firstDayIndex = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
@@ -493,6 +512,13 @@ export default function VolunteerDashboardScreen() {
 
   const getDayStatus = (dayNum: number) => {
     const isToday = year === 2026 && month === 6 && dayNum === 27; // Mock today as Jul 27
+
+    if (Platform.OS === 'android') {
+      return {
+        isToday,
+        isMarked: joinedEventScheduleDateKeys.has(getCalendarDateKey(year, month, dayNum)),
+      };
+    }
     
     // Check if day has a project or timeline planning item
     const hasTimeline = planningItems.some(item => {
@@ -533,7 +559,7 @@ export default function VolunteerDashboardScreen() {
 
   // Timeline list merging database planning items, projects/events, and synced google events (NO HARDCODED MOCK)
   const displayTimeline = useMemo(() => {
-    const realPlanning = (planningItems || [])
+    const realPlanning = (Platform.OS === 'android' ? [] : planningItems || [])
       .filter(item => Boolean(item.startDate))
       .map(item => ({
         id: item.id,
@@ -542,29 +568,44 @@ export default function VolunteerDashboardScreen() {
         htmlLink: undefined,
       }));
 
-    const realProjectEvents = (projects || [])
-      .filter(p => Boolean(p.startDate))
-      .map(p => ({
-        id: p.id,
-        startDate: p.startDate,
-        title: p.title,
-        htmlLink: undefined,
-      }));
+    const realProjectEvents = Platform.OS === 'android'
+      ? eventParticipation.joinedEvents.flatMap(event =>
+          getScheduledAttendanceDateKeys({ ...event, isEvent: true }).map(dateKey => ({
+            id: `${event.id}-${dateKey}`,
+            startDate: `${dateKey}T12:00:00`,
+            title: event.title,
+            htmlLink: undefined,
+          }))
+        )
+      : (projects || [])
+          .filter(p => Boolean(p.startDate))
+          .map(p => ({
+            id: p.id,
+            startDate: p.startDate,
+            title: p.title,
+            htmlLink: undefined,
+          }));
 
-    const googleTimeline = (googleEvents || []).map(event => ({
+    const googleTimeline = (Platform.OS === 'android' ? [] : googleEvents || []).map(event => ({
       id: `google-${event.id}`,
       startDate: event.start?.dateTime || event.start?.date || '',
       title: event.summary || 'Google Calendar Event',
       htmlLink: event.htmlLink,
     }));
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const combined = [...realPlanning, ...realProjectEvents, ...googleTimeline]
-      .filter(item => Boolean(item.startDate))
+      .filter(item => {
+        if (!item.startDate) return false;
+        const startTime = new Date(item.startDate).getTime();
+        return Number.isFinite(startTime) && startTime >= today.getTime();
+      })
       .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
       .slice(0, 5);
 
     return combined;
-  }, [planningItems, projects, googleEvents]);
+  }, [eventParticipation.joinedEvents, planningItems, projects, googleEvents]);
 
   const formatTimelineDate = (dateStr?: string) => {
     if (!dateStr) return '';
@@ -590,6 +631,14 @@ export default function VolunteerDashboardScreen() {
       Alert.alert('Notice', 'Please sign in before joining.');
       return;
     }
+    const capacity = Number(project.volunteersNeeded || 0);
+    const joinedCount = getActiveProjectJoinCount(project, volunteerJoinRecords, volunteerMatches);
+    if (Platform.OS === 'android' && capacity > 0 && joinedCount >= capacity) {
+      Alert.alert('Event Full', 'This event has reached its maximum volunteer capacity and is already full.');
+      void loadDashboardData(true);
+      return;
+    }
+
     try {
       setLoading(true);
       await requestVolunteerProjectJoin(project.id, user.id);
@@ -697,7 +746,9 @@ export default function VolunteerDashboardScreen() {
           <View style={styles.sectionHead}>
             <View style={styles.sectionHeadCopy}>
               <Text style={styles.sectionTitle}>Volunteer calendar</Text>
-              <Text style={styles.sectionSub}>Shared project schedule and admin timeline</Text>
+              <Text style={styles.sectionSub}>
+                {Platform.OS === 'android' ? 'Your joined events and scheduled dates' : 'Shared project schedule and admin timeline'}
+              </Text>
             </View>
             <TouchableOpacity
               onPress={handleSyncCalendar}
@@ -738,7 +789,9 @@ export default function VolunteerDashboardScreen() {
           <View style={styles.calCard}>
             <View style={styles.calBadge}>
               <MaterialIcons name="done" size={10} color="#2C4C3B" style={{ marginRight: 4 }} />
-              <Text style={styles.calBadgeText}>Volunteer calendar synced</Text>
+              <Text style={styles.calBadgeText}>
+                {Platform.OS === 'android' ? 'Joined-event schedule' : 'Volunteer calendar synced'}
+              </Text>
             </View>
             <View style={styles.calHeader}>
               <Text style={styles.calMonth}>{monthLabel}</Text>
@@ -790,14 +843,20 @@ export default function VolunteerDashboardScreen() {
 
             <View style={styles.calFoot}>
               <View style={styles.calMetric}>
-                <Text style={styles.calMetricNum}>{displayTimeline.length}</Text>
-                <Text style={styles.calMetricLabel}>Timeline items</Text>
+                <Text style={styles.calMetricNum}>
+                  {Platform.OS === 'android' ? joinedEventOccurrenceDaysThisMonth : displayTimeline.length}
+                </Text>
+                <Text style={styles.calMetricLabel}>
+                  {Platform.OS === 'android' ? 'Event days this month' : 'Timeline items'}
+                </Text>
               </View>
               <View style={styles.calMetric}>
                 <Text style={styles.calMetricNum}>
-                  {projects.filter(p => p.isEvent).length}
+                  {Platform.OS === 'android' ? joinedEventsCount : projects.filter(p => p.isEvent).length}
                 </Text>
-                <Text style={styles.calMetricLabel}>Project dates</Text>
+                <Text style={styles.calMetricLabel}>
+                  {Platform.OS === 'android' ? 'Joined events' : 'Project dates'}
+                </Text>
               </View>
             </View>
           </View>
@@ -808,7 +867,9 @@ export default function VolunteerDashboardScreen() {
           <View style={styles.sectionHead}>
             <View>
               <Text style={styles.sectionTitle}>Upcoming timeline</Text>
-              <Text style={styles.sectionSub}>Projects and admin plans</Text>
+              <Text style={styles.sectionSub}>
+                {Platform.OS === 'android' ? 'Your joined events' : 'Projects and admin plans'}
+              </Text>
             </View>
           </View>
           <View style={[styles.calCard, { paddingVertical: 14, paddingHorizontal: 16 }]}>
@@ -907,6 +968,12 @@ export default function VolunteerDashboardScreen() {
             displayProjects.map(project => {
               const skillMatch = checkEventSkillMatch(project, volunteerProfile);
               const isJoined = isProjectJoined(project);
+              const capacity = Number(project.volunteersNeeded || 0);
+              const isFull =
+                Platform.OS === 'android' &&
+                !isJoined &&
+                capacity > 0 &&
+                getActiveProjectJoinCount(project, volunteerJoinRecords, volunteerMatches) >= capacity;
               return (
                 <View key={project.id} style={styles.projectRow}>
                   <View style={styles.projectIcon}>
@@ -927,13 +994,13 @@ export default function VolunteerDashboardScreen() {
                     </Text>
                   </View>
                   <TouchableOpacity
-                    style={[styles.projectJoin, isJoined && styles.projectJoined]}
-                    onPress={() => !isJoined && handleJoinProject(project)}
-                    disabled={isJoined}
+                    style={[styles.projectJoin, isJoined && styles.projectJoined, isFull && styles.projectFull]}
+                    onPress={() => !isJoined && !isFull && handleJoinProject(project)}
+                    disabled={isJoined || isFull}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.projectJoinText, isJoined && styles.projectJoinedText]}>
-                      {isJoined ? 'Joined' : 'Join'}
+                    <Text style={[styles.projectJoinText, isJoined && styles.projectJoinedText, isFull && styles.projectFullText]}>
+                      {isJoined ? 'Joined' : isFull ? 'Event Full' : 'Join'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -1433,6 +1500,12 @@ const styles = StyleSheet.create({
   },
   projectJoinedText: {
     color: '#ffffff',
+  },
+  projectFull: {
+    backgroundColor: '#FEE2E2',
+  },
+  projectFullText: {
+    color: '#B91C1C',
   },
   skillMatchBadge: {
     marginTop: 4,

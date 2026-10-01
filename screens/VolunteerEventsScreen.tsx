@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -161,7 +161,37 @@ export default function VolunteerEventsScreen() {
   const [showSortModal, setShowSortModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'applications'>('all');
+  const [seenApplicationNotifications, setSeenApplicationNotifications] = useState<string[]>([]);
+  const [seenApplicationNotificationsLoaded, setSeenApplicationNotificationsLoaded] = useState(false);
   const loadGenerationRef = useRef(0);
+
+  useEffect(() => {
+    let isCurrentUser = true;
+    setSeenApplicationNotifications([]);
+    setSeenApplicationNotificationsLoaded(false);
+
+    if (!user?.id) {
+      setSeenApplicationNotificationsLoaded(true);
+      return () => {
+        isCurrentUser = false;
+      };
+    }
+
+    AsyncStorage.getItem(`volunteer_event_applications_seen_${user.id}`)
+      .then(value => {
+        if (!isCurrentUser) return;
+        const parsed = value ? JSON.parse(value) : [];
+        setSeenApplicationNotifications(Array.isArray(parsed) ? parsed : []);
+      })
+      .catch(error => console.warn('[VolunteerEventsScreen] Could not load viewed application notifications:', error))
+      .finally(() => {
+        if (isCurrentUser) setSeenApplicationNotificationsLoaded(true);
+      });
+
+    return () => {
+      isCurrentUser = false;
+    };
+  }, [user?.id]);
 
   const loadData = useCallback(async (forceRefresh = false) => {
     const requestGeneration = ++loadGenerationRef.current;
@@ -433,8 +463,8 @@ export default function VolunteerEventsScreen() {
       );
     }
 
-    // Category filter
-    if (filterCategory !== 'All') {
+    // Keep the category filter on web; the volunteer APK no longer shows it.
+    if (Platform.OS !== 'android' && filterCategory !== 'All') {
       result = result.filter(e => e.category === filterCategory);
     }
 
@@ -471,6 +501,34 @@ export default function VolunteerEventsScreen() {
   const applicationCount = useMemo(() => {
     return volunteerMatches.filter(m => m.status === 'Requested' || m.status === 'Matched').length;
   }, [volunteerMatches]);
+
+  const applicationNotificationKeys = useMemo(
+    () => volunteerMatches
+      .filter(match => match.status === 'Requested' || match.status === 'Matched')
+      .map(match => `${match.id}:${match.status}:${match.reviewedAt || match.matchedAt || match.requestedAt || ''}`),
+    [volunteerMatches]
+  );
+
+  const unreadApplicationCount = useMemo(() => {
+    if (!seenApplicationNotificationsLoaded) return 0;
+    const seen = new Set(seenApplicationNotifications);
+    return applicationNotificationKeys.filter(key => !seen.has(key)).length;
+  }, [applicationNotificationKeys, seenApplicationNotifications, seenApplicationNotificationsLoaded]);
+
+  const applicationBadgeCount = Platform.OS === 'android' ? unreadApplicationCount : applicationCount;
+
+  const handleOpenApplications = useCallback(() => {
+    setActiveTab('applications');
+    if (Platform.OS !== 'android' || !user?.id) return;
+
+    const nextSeen = Array.from(new Set([...seenApplicationNotifications, ...applicationNotificationKeys]));
+    setSeenApplicationNotifications(nextSeen);
+    setSeenApplicationNotificationsLoaded(true);
+    void AsyncStorage.setItem(
+      `volunteer_event_applications_seen_${user.id}`,
+      JSON.stringify(nextSeen)
+    ).catch(error => console.warn('[VolunteerEventsScreen] Could not save viewed application notifications:', error));
+  }, [applicationNotificationKeys, seenApplicationNotifications, user?.id]);
 
   const getCategoryBgColor = (cat: string) => {
     switch (cat) {
@@ -689,13 +747,15 @@ export default function VolunteerEventsScreen() {
             onChangeText={setSearchQuery}
           />
         </View>
-        <TouchableOpacity
-          style={styles.filterIconButton}
-          onPress={() => setShowFilterModal(true)}
-          activeOpacity={0.8}
-        >
-          <MaterialIcons name="filter-list" size={20} color="#15803d" />
-        </TouchableOpacity>
+        {Platform.OS !== 'android' && (
+          <TouchableOpacity
+            style={styles.filterIconButton}
+            onPress={() => setShowFilterModal(true)}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="filter-list" size={20} color="#15803d" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* TAB ROW */}
@@ -711,16 +771,16 @@ export default function VolunteerEventsScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tabButton, activeTab === 'applications' && styles.tabButtonActive]}
-          onPress={() => setActiveTab('applications')}
+          onPress={handleOpenApplications}
           activeOpacity={0.8}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Text style={[styles.tabButtonText, activeTab === 'applications' && styles.tabButtonTextActive]}>
               My Applications
             </Text>
-            {applicationCount > 0 && (
+            {applicationBadgeCount > 0 && (
               <View style={styles.tabBadge}>
-                <Text style={styles.tabBadgeText}>{applicationCount}</Text>
+                <Text style={styles.tabBadgeText}>{applicationBadgeCount}</Text>
               </View>
             )}
           </View>
@@ -777,7 +837,7 @@ export default function VolunteerEventsScreen() {
           </View>
           <TouchableOpacity
             style={[styles.reviewBannerButton, width < 600 && styles.reviewBannerButtonCompact]}
-            onPress={() => setActiveTab('applications')}
+            onPress={handleOpenApplications}
             activeOpacity={0.8}
           >
             <Text style={styles.reviewBannerButtonText}>View My Applications</Text>
@@ -818,7 +878,7 @@ export default function VolunteerEventsScreen() {
       )}
 
       {/* Filter Category Modal */}
-      {showFilterModal && (
+      {Platform.OS !== 'android' && showFilterModal && (
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}
