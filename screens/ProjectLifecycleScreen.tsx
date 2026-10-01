@@ -4849,8 +4849,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      await reconcileApprovedVolunteerEventMemberships();
-
       const records = await getVolunteerProjectJoinRecords(projectId);
 
       setVolunteerJoinRecords(current => {
@@ -4858,6 +4856,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         const otherRecords = current.filter(r => r.projectId !== projectId);
 
         return [...otherRecords, ...records];
+
+      });
+
+      // The assignment endpoint already writes the event membership record.
+      // Load that roster immediately, then repair legacy matches in the
+      // background so reconciliation across all projects cannot delay it.
+      void reconcileApprovedVolunteerEventMemberships().catch(error => {
+
+        console.warn('Could not reconcile approved event memberships:', error);
 
       });
 
