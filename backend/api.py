@@ -6107,6 +6107,136 @@ def _apply_google_calendar_schedule(
     return updated, True
 
 
+def _google_calendar_schedule_label(start: Any, end: Any) -> str:
+    def format_value(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "Unknown"
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            try:
+                return datetime.strptime(raw, "%Y-%m-%d").strftime("%b %d, %Y")
+            except ValueError:
+                return raw
+        parsed = _parse_iso_datetime(raw)
+        if parsed is None:
+            return raw
+        return parsed.astimezone(APP_TIMEZONE).strftime("%b %d, %Y at %I:%M %p")
+
+    return f"{format_value(start)} – {format_value(end)}"
+
+
+def _notify_google_calendar_schedule_change(
+    connection: Any,
+    partner_user_id: str,
+    project_id: str,
+    project: dict[str, Any],
+    old_schedule: tuple[str, str],
+    new_schedule: tuple[str, str],
+) -> bool:
+    """Create unread direct-message notifications for admins and affected volunteers."""
+    scheduled_items = [project]
+    if not bool(project.get("isEvent") or project.get("is_event")):
+        scheduled_items.extend(
+            _postgres_get_hot_items_by_field(
+                connection,
+                "events",
+                "parentProjectId",
+                project_id,
+                include_media=False,
+            )
+        )
+
+    participant_ids: set[str] = set()
+    for scheduled_item in scheduled_items:
+        item_id = str(scheduled_item.get("id") or "").strip()
+        if not item_id:
+            continue
+        join_records = _postgres_get_hot_items_by_field(
+            connection,
+            "volunteerProjectJoins",
+            "projectId",
+            item_id,
+            include_media=False,
+        )
+        matches = _postgres_get_hot_items_by_field(
+            connection,
+            "volunteerMatches",
+            "projectId",
+            item_id,
+            include_media=False,
+        )
+        participant_ids.update(
+            _get_active_event_volunteer_keys(scheduled_item, join_records, matches, [])
+        )
+
+    with connection.cursor() as cursor:
+        cursor.execute("select users_id from public.users where lower(trim(role)) = 'admin'")
+        admin_ids = list(dict.fromkeys(str(row[0]) for row in cursor.fetchall() if row and row[0]))
+
+        volunteer_ids: set[str] = set()
+        candidate_ids = list(participant_ids)
+        if candidate_ids:
+            cursor.execute(
+                """
+                select distinct users_id
+                from public.users
+                where lower(trim(role)) = 'volunteer'
+                  and users_id = any(%s)
+                union
+                select distinct users.users_id
+                from public.volunteers as volunteers
+                join public.users as users on users.users_id = volunteers.user_id
+                where lower(trim(users.role)) = 'volunteer'
+                  and volunteers.volunteers_id = any(%s)
+                """,
+                (candidate_ids, candidate_ids),
+            )
+            volunteer_ids = {
+                str(row[0]) for row in cursor.fetchall() if row and row[0]
+            }
+
+    admin_sender_id = _resolve_admin_message_user_id(connection)
+    if not admin_ids and not volunteer_ids:
+        return False
+
+    title = str(project.get("title") or "NVC project or event").strip()
+    previous_label = _google_calendar_schedule_label(*old_schedule)
+    updated_label = _google_calendar_schedule_label(*new_schedule)
+    content = (
+        f'The schedule for "{title}" changed after an edit in the partner\'s linked Google Calendar. '
+        f"Previous schedule: {previous_label}. "
+        f"New official NVC schedule: {updated_label}. "
+        "Open NVC Connect to view the updated details."
+    )
+    message_timestamp = datetime.now(timezone.utc).isoformat()
+    inserted = False
+    from uuid import uuid4
+
+    notification_rows = [
+        (str(uuid4()), partner_user_id, admin_id, project_id, content, message_timestamp)
+        for admin_id in admin_ids
+    ]
+    notification_rows.extend(
+        (str(uuid4()), admin_sender_id, volunteer_id, project_id, content, message_timestamp)
+        for volunteer_id in sorted(volunteer_ids)
+    )
+    with connection.cursor() as cursor:
+        for message_id, sender_id, recipient_id, linked_project_id, message_content, timestamp in notification_rows:
+            cursor.execute(
+                """
+                insert into public.messages (
+                  messages_id, sender_id, recipient_id, project_id, content, timestamp, read, attachments
+                )
+                values (%s, %s, %s, %s, %s, %s, false, '[]')
+                on conflict (messages_id) do nothing
+                """,
+                (message_id, sender_id, recipient_id, linked_project_id, message_content, timestamp),
+            )
+            inserted = inserted or cursor.rowcount > 0
+
+    return inserted
+
+
 def _process_google_calendar_event_changes(
     connection: Any,
     partner_user_id: str,
@@ -6145,6 +6275,7 @@ def _process_google_calendar_event_changes(
             or normalize_schedule_value(incoming_end) != normalize_schedule_value(baseline_end)
         )
         if differs_from_baseline:
+            old_schedule = project_schedule(project)
             updated_project, schedule_changed = _apply_google_calendar_schedule(
                 connection,
                 key,
@@ -6154,6 +6285,15 @@ def _process_google_calendar_event_changes(
             )
             if schedule_changed and key not in changed_keys:
                 changed_keys.append(key)
+            if schedule_changed and _notify_google_calendar_schedule_change(
+                connection,
+                partner_user_id,
+                project_id,
+                updated_project,
+                old_schedule,
+                project_schedule(updated_project),
+            ) and "messages" not in changed_keys:
+                changed_keys.append("messages")
             # Only advance the comparison point after the official record has
             # been brought into line with the Google event.
             new_start, new_end = project_schedule(updated_project)
@@ -6260,6 +6400,7 @@ def _connect_partner_google_calendar(
     old_connection: dict[str, Any] | None
     changed_keys: list[str] = []
     synced = 0
+    ensure_message_storage_once()
     with get_connection() as connection:
         _lock_google_calendar_transaction(connection, partner_user_id, wait=True)
         _ensure_google_calendar_tables(connection)
@@ -6372,6 +6513,7 @@ def _connect_partner_google_calendar(
                     or (is_event and current_repeat != previous_repeat)
                 )
                 if google_changed:
+                    previous_schedule = (current_start, current_end)
                     project, schedule_changed = _apply_google_calendar_schedule(
                         connection,
                         key_name,
@@ -6381,6 +6523,15 @@ def _connect_partner_google_calendar(
                     )
                     if schedule_changed and key_name not in changed_keys:
                         changed_keys.append(key_name)
+                    if schedule_changed and _notify_google_calendar_schedule_change(
+                        connection,
+                        partner_user_id,
+                        project_id,
+                        project,
+                        previous_schedule,
+                        project_schedule(project),
+                    ) and "messages" not in changed_keys:
+                        changed_keys.append("messages")
                 if (not google_changed and (nvc_changed or legacy_all_day_schedule or legacy_repeat_schedule)) or (google_changed and is_event and current_repeat != previous_repeat):
                     event_body = format_project_as_google_event(project)
                     schedule_body = {field: event_body[field] for field in ("start", "end")}
@@ -6492,6 +6643,7 @@ def _run_google_calendar_sync(
     changed_keys: list[str] = []
     committed_keys: list[str] = []
     try:
+        ensure_message_storage_once()
         with get_connection() as connection:
             if not _lock_google_calendar_transaction(connection, partner_user_id):
                 return []
@@ -6575,6 +6727,7 @@ def _run_google_calendar_sync(
                     normalize_schedule_value(google_schedule[0]) != normalize_schedule_value(previous_start)
                     or normalize_schedule_value(google_schedule[1]) != normalize_schedule_value(previous_end)
                 ):
+                    previous_schedule = (current_start, current_end)
                     updated_project, schedule_changed = _apply_google_calendar_schedule(
                         connection,
                         key_name,
@@ -6584,6 +6737,15 @@ def _run_google_calendar_sync(
                     )
                     if schedule_changed and key_name not in changed_keys:
                         changed_keys.append(key_name)
+                    if schedule_changed and _notify_google_calendar_schedule_change(
+                        connection,
+                        partner_user_id,
+                        project_id,
+                        updated_project,
+                        previous_schedule,
+                        project_schedule(updated_project),
+                    ) and "messages" not in changed_keys:
+                        changed_keys.append("messages")
                     new_start, new_end = project_schedule(updated_project)
                     _google_calendar_update_link_schedule(
                         connection,
