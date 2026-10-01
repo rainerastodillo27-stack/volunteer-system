@@ -3,6 +3,7 @@ param(
     [string]$Server = "129.121.73.76",
     [string]$User = "root",
     [string]$RemoteDir = "/var/www/volunteer-system",
+    [string]$Repository = "https://github.com/rainerastodillo27-stack/volunteer-system.git",
     [string]$HealthUrl = "https://nvcfoundationconnect.online/db-health"
 )
 
@@ -27,7 +28,7 @@ Write-Host "[2/3] Connecting to VPS at $Server..." -ForegroundColor Yellow
 Write-Host "      (Enter your VPS root password when prompted)" -ForegroundColor Gray
 Write-Host ""
 
-$remoteCmd = "set -e; cd $RemoteDir; git pull origin main; source .venv/bin/activate; pip install -r backend/requirements.txt; pkill -TERM -f '[u]vicorn backend.api:app' || true; sleep 1; nohup $RemoteDir/.venv/bin/python -m uvicorn backend.api:app --host 127.0.0.1 --port 8001 --ws websockets > backend.log 2>&1 < /dev/null &"
+$remoteCmd = "set -e; cd $RemoteDir; git remote set-url origin '$Repository'; git fetch origin main; git reset --hard origin/main; source .venv/bin/activate; pip install -r backend/requirements.txt; pkill -TERM -f '[u]vicorn backend.api:app' || true; sleep 1; nohup $RemoteDir/.venv/bin/python -m uvicorn backend.api:app --host 127.0.0.1 --port 8001 --ws websockets > backend.log 2>&1 < /dev/null &"
 
 ssh "$User@$Server" $remoteCmd
 if ($LASTEXITCODE -ne 0) {
