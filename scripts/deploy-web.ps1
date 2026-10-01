@@ -2,7 +2,7 @@
 param(
     [string]$Server = "129.121.73.76",
     [string]$User = "root",
-    [string]$RemoteDir = "/var/www/volunteer-system"
+    [string]$RemoteDir = "/var/www/nvcfoundationconnect"
 )
 
 Write-Host ""

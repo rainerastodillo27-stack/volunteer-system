@@ -2,8 +2,9 @@
 param(
     [string]$Server = "129.121.73.76",
     [string]$User = "root",
-    [string]$RemoteDir = "/var/www/volunteer-system",
+    [string]$RemoteDir = "/var/www/nvcfoundationconnect",
     [string]$Repository = "https://github.com/rainerastodillo27-stack/volunteer-system.git",
+    [string]$ServiceName = "nvcfoundationconnect-api.service",
     [string]$HealthUrl = "https://nvcfoundationconnect.online/db-health"
 )
 
@@ -28,7 +29,7 @@ Write-Host "[2/3] Connecting to VPS at $Server..." -ForegroundColor Yellow
 Write-Host "      (Enter your VPS root password when prompted)" -ForegroundColor Gray
 Write-Host ""
 
-$remoteCmd = "set -e; cd $RemoteDir; git remote set-url origin '$Repository'; git fetch origin main; git reset --hard origin/main; source .venv/bin/activate; pip install -r backend/requirements.txt; systemctl restart volcre-api.service; systemctl is-active --quiet volcre-api.service"
+$remoteCmd = "set -e; cd $RemoteDir; git remote set-url origin '$Repository'; git fetch origin main; git reset --hard origin/main; source .venv/bin/activate; pip install -r backend/requirements.txt; systemctl restart $ServiceName; systemctl is-active --quiet $ServiceName"
 
 ssh "$User@$Server" $remoteCmd
 if ($LASTEXITCODE -ne 0) {

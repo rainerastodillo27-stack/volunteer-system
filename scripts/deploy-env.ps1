@@ -2,7 +2,8 @@
 param(
     [string]$Server = "129.121.73.76",
     [string]$User = "root",
-    [string]$RemoteDir = "/var/www/volunteer-system",
+    [string]$RemoteDir = "/var/www/nvcfoundationconnect",
+    [string]$ServiceName = "nvcfoundationconnect-api.service",
     [string]$HealthUrl = "https://nvcfoundationconnect.online/db-health"
 )
 
@@ -32,7 +33,7 @@ Write-Host "  [+] .env uploaded successfully." -ForegroundColor Green
 # 2. Restart backend to load new environment
 Write-Host ""
 Write-Host "[2/3] Restarting backend to reload .env..." -ForegroundColor Yellow
-$remoteCmd = "set -e; cd $RemoteDir; pkill -TERM -f '[u]vicorn backend.api:app' || true; sleep 1; nohup $RemoteDir/.venv/bin/python -m uvicorn backend.api:app --host 0.0.0.0 --port 8001 --ws websockets > backend.log 2>&1 < /dev/null &"
+$remoteCmd = "set -e; cd $RemoteDir; systemctl restart $ServiceName; systemctl is-active --quiet $ServiceName"
 ssh "$User@$Server" $remoteCmd
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  [!] Backend restart failed." -ForegroundColor Red
