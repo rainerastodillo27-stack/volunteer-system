@@ -15,11 +15,13 @@ function getValidDate(value?: string): Date | null {
 
 export type EventRepeat = 'Does not repeat' | 'Daily' | 'Weekly' | 'Monthly';
 
-type RecurringEvent = {
+export type RecurringEvent = {
   isEvent?: boolean;
   startDate?: string;
   endDate?: string;
   repeat?: string;
+  repeatRule?: string;
+  repeat_rule?: string;
 };
 
 export function normalizeEventRepeat(value?: string): EventRepeat {
@@ -33,6 +35,10 @@ export function normalizeEventRepeat(value?: string): EventRepeat {
     default:
       return 'Does not repeat';
   }
+}
+
+export function getEventRepeatRule(event: RecurringEvent): EventRepeat {
+  return normalizeEventRepeat(event.repeat || event.repeatRule || event.repeat_rule);
 }
 
 function getDaysInMonth(year: number, monthIndex: number): number {
@@ -66,7 +72,7 @@ export function isEventOccurrenceToday(
     return false;
   }
 
-  const repeat = normalizeEventRepeat(event.repeat);
+  const repeat = getEventRepeatRule(event);
   if (repeat === 'Does not repeat') {
     return todayKey === startKey;
   }
@@ -84,6 +90,30 @@ export function isEventOccurrenceToday(
     getDaysInMonth(now.getFullYear(), now.getMonth()),
   );
   return now.getDate() === scheduledDay;
+}
+
+/** Returns the local calendar dates on which attendance is scheduled. */
+export function getScheduledAttendanceDateKeys(event: RecurringEvent): string[] {
+  const start = getValidDate(event.startDate);
+  if (!start) {
+    return [];
+  }
+
+  const end = getValidDate(event.endDate) || start;
+  const candidate = new Date(start);
+  candidate.setHours(12, 0, 0, 0);
+  const finalDate = new Date(end < start ? start : end);
+  finalDate.setHours(12, 0, 0, 0);
+
+  const dateKeys: string[] = [];
+  for (let guard = 0; candidate <= finalDate && guard < 3660; guard += 1) {
+    if (!event.isEvent || isEventOccurrenceToday(event, candidate)) {
+      dateKeys.push(getLocalDateKey(candidate));
+    }
+    candidate.setDate(candidate.getDate() + 1);
+  }
+
+  return dateKeys;
 }
 
 /** Returns the next scheduled occurrence on or after the supplied date. */
@@ -120,6 +150,19 @@ export function getNextEventOccurrenceDate(
   }
 
   return null;
+}
+
+export function formatEventOccurrenceDate(value: Date): string {
+  if (Number.isNaN(value.getTime())) {
+    return '';
+  }
+
+  return value.toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
 }
 
 // Returns the calendar date used by the attendance picker and backend. The

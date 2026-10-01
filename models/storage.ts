@@ -3,6 +3,7 @@ import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAbortLikeError } from '../utils/requestErrors';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
+import { getEventRepeatRule } from '../utils/attendanceSchedule';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -3480,7 +3481,10 @@ function normalizeProjectRecord(project: Project): Project {
 }
 
 function normalizeEventRecord(event: Project): Project {
-  const normalized = normalizeProjectRecord(event);
+  const normalized = normalizeProjectRecord({
+    ...event,
+    repeat: getEventRepeatRule(event),
+  });
   const eventWithFlag = {
     ...normalized,
     isEvent: true,

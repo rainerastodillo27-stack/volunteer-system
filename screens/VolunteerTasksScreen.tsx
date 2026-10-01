@@ -19,6 +19,7 @@ import InlineLoadError from '../components/InlineLoadError';
 import { useAuth } from '../contexts/AuthContext';
 import Svg, { Circle, Path, G } from 'react-native-svg';
 import {
+  formatEventOccurrenceDate,
   getAttendanceWindowKey,
   getNextEventOccurrenceDate,
   hasEventStartedForToday,
@@ -387,10 +388,16 @@ function getTrackedTaskStatus(
   }
 
   if (project.isEvent && !isEventOccurrenceToday(project)) {
+    const nextOccurrence = getNextEventOccurrenceDate(project);
+    const nextOccurrenceLabel = nextOccurrence
+      ? formatEventOccurrenceDate(nextOccurrence)
+      : null;
     return {
       status: 'Assigned',
       updatedAt: task.updatedAt,
-      statusTrackingNote: 'No attendance is scheduled today. The task will be available on the next event occurrence.',
+      statusTrackingNote: nextOccurrenceLabel
+        ? `No attendance is scheduled today. The next attendance date is ${nextOccurrenceLabel}.`
+        : 'No attendance is scheduled today, and no future attendance date is set. Please contact the event administrator.',
     };
   }
 
@@ -453,12 +460,8 @@ function getTaskEventAttendanceState(
   const eventScheduledToday = isEventOccurrenceToday(project);
   const nextOccurrence = !eventScheduledToday ? getNextEventOccurrenceDate(project) : null;
   const nextOccurrenceLabel = nextOccurrence
-    ? nextOccurrence.toLocaleDateString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      })
-    : 'the next scheduled occurrence';
+    ? formatEventOccurrenceDate(nextOccurrence)
+    : null;
   const eventHasNotStarted = !hasEventStartedForToday(project.startDate);
   const lifecycleStatus = getProjectDisplayStatus(project);
   const eventHasEnded =
@@ -474,7 +477,9 @@ function getTaskEventAttendanceState(
   } else if (eventHasEnded) {
     helperText = 'Attendance is closed because the event timeline already ended.';
   } else if (!eventScheduledToday) {
-    helperText = `No attendance is scheduled today. Next attendance: ${nextOccurrenceLabel}.`;
+    helperText = nextOccurrenceLabel
+      ? `No attendance is scheduled today. Next attendance is ${nextOccurrenceLabel}.`
+      : 'No attendance is scheduled today, and no future attendance date is set. Please contact the event administrator.';
   } else if (hasConfirmedToday) {
     helperText = hasMarkedToday
       ? 'Attendance was marked by the admin or field officer and is now recorded as verified.'

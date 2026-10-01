@@ -9,6 +9,7 @@ type CalendarDatePickerProps = {
   onClose: () => void;
   minDate?: Date;
   maxDate?: Date;
+  isDateSelectable?: (date: Date) => boolean;
 };
 
 function getMonthGrid(date: Date): Date[] {
@@ -53,6 +54,7 @@ export default function CalendarDatePicker({
   onClose,
   minDate,
   maxDate,
+  isDateSelectable,
 }: CalendarDatePickerProps) {
   const [currentMonth, setCurrentMonth] = useState(selectedDate || new Date());
 
@@ -88,6 +90,7 @@ export default function CalendarDatePicker({
     const normalizedDate = normalizeDateOnly(date);
     if (normalizedMinDate && normalizedDate < normalizedMinDate) return;
     if (normalizedMaxDate && normalizedDate > normalizedMaxDate) return;
+    if (isDateSelectable && !isDateSelectable(normalizedDate)) return;
 
     onDateSelect(date);
     onClose();
@@ -97,6 +100,7 @@ export default function CalendarDatePicker({
     const normalizedDate = normalizeDateOnly(date);
     if (normalizedMinDate && normalizedDate < normalizedMinDate) return true;
     if (normalizedMaxDate && normalizedDate > normalizedMaxDate) return true;
+    if (isDateSelectable && !isDateSelectable(normalizedDate)) return true;
     return false;
   };
   const isSelectedDateDisabled = selectedDate ? isDateDisabled(selectedDate) : false;

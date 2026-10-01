@@ -1397,7 +1397,9 @@ def _get_event_notification_reminder_settings(event: dict[str, Any]) -> list[dic
 
 
 def _normalize_event_repeat(event: dict[str, Any]) -> str:
-    raw_repeat = str(event.get("repeat") or event.get("repeatRule") or "Does not repeat").strip().lower()
+    raw_repeat = str(
+        event.get("repeat") or event.get("repeatRule") or event.get("repeat_rule") or "Does not repeat"
+    ).strip().lower()
     return {
         "daily": "Daily",
         "weekly": "Weekly",

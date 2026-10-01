@@ -46,6 +46,7 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 import { requestPhotoPrivacyConsent } from '../utils/photoConsent';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import {
+  formatEventOccurrenceDate,
   getNextEventOccurrenceDate,
   hasEventStartedForToday,
   isEventOccurrenceToday,
@@ -946,11 +947,13 @@ export default function ProjectsScreen({ navigation, route }: any) {
       if (!isEventOccurrenceToday(project)) {
         const nextOccurrence = getNextEventOccurrenceDate(project);
         const nextOccurrenceLabel = nextOccurrence
-          ? format(nextOccurrence, 'MMM d, yyyy')
-          : 'the next scheduled occurrence';
+          ? formatEventOccurrenceDate(nextOccurrence)
+          : null;
         Alert.alert(
           'Attendance unavailable',
-          `There is no event occurrence scheduled for today. Next attendance: ${nextOccurrenceLabel}.`
+          nextOccurrenceLabel
+            ? `There is no event occurrence scheduled for today. Next attendance is ${nextOccurrenceLabel}.`
+            : 'There is no event occurrence scheduled today, and no future attendance date is set. Please contact the event administrator.'
         );
         return;
       }
@@ -1527,8 +1530,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const eventScheduledToday = !project.isEvent || isEventOccurrenceToday(project);
     const nextOccurrence = !eventScheduledToday ? getNextEventOccurrenceDate(project) : null;
     const nextOccurrenceLabel = nextOccurrence
-      ? format(nextOccurrence, 'MMM d, yyyy')
-      : 'the next scheduled occurrence';
+      ? formatEventOccurrenceDate(nextOccurrence)
+      : null;
     const eventHasNotStarted = project.isEvent ? !hasEventStartedForToday(project.startDate) : false;
     const canTimeIn =
       isAssigned &&
@@ -1585,7 +1588,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
         ? hasConfirmedToday
           ? 'Your attendance is already confirmed for today.'
           : !eventScheduledToday
-          ? `No attendance is scheduled today. Next attendance: ${nextOccurrenceLabel}.`
+          ? nextOccurrenceLabel
+            ? `No attendance is scheduled today. Next attendance is ${nextOccurrenceLabel}.`
+            : 'No attendance is scheduled today or on a future date. Please contact the event administrator to confirm the schedule.'
           : eventHasNotStarted && startDate
           ? `Assigned. Attendance confirmation becomes available at 9:00 AM on ${format(startDate, 'MMM d')}.`
           : 'Admin assigned you to this event. You can confirm attendance now.'

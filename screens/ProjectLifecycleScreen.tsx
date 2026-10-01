@@ -190,6 +190,8 @@ import {
 
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import {
+  getScheduledAttendanceDateKeys,
+  getEventRepeatRule,
   getAttendanceWindowKey,
   hasEventStartedForToday,
   isEventAttendanceLate,
@@ -4059,7 +4061,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    const eventDateKeys = getDateRangeKeys(selectedProject.startDate, selectedProject.endDate);
+    const eventDateKeys = getScheduledAttendanceDateKeys(selectedProject);
 
     const todayKey = getAttendanceWindowKey(selectedProject.startDate, currentDate.toISOString());
 
@@ -4073,7 +4075,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     );
 
-  }, [currentDate, selectedProject?.endDate, selectedProject?.id, selectedProject?.isEvent, selectedProject?.startDate]);
+  }, [currentDate, selectedProject?.endDate, selectedProject?.id, selectedProject?.isEvent, selectedProject?.repeat, selectedProject?.startDate]);
 
 
 
@@ -5803,7 +5805,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       setEventAllDay(false);
 
-      setEventRepeat(project.repeat || 'Does not repeat');
+      setEventRepeat(getEventRepeatRule(project));
 
       setEventNotifications(
 
@@ -18536,13 +18538,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       );
 
-    const projectAttendanceDateKeys = getDateRangeKeys(
-
-      activeSelectedProject.startDate,
-
-      activeSelectedProject.endDate
-
-    );
+    const projectAttendanceDateKeys = getScheduledAttendanceDateKeys(activeSelectedProject);
 
     const fallbackAttendanceDateKeys = Array.from(
 
@@ -18559,10 +18555,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     ).sort((left, right) => new Date(left).getTime() - new Date(right).getTime());
 
     const availableAttendanceDateKeys = projectAttendanceDateKeys.length
-
       ? projectAttendanceDateKeys
-
-      : fallbackAttendanceDateKeys;
+      : activeSelectedProject.isEvent
+        ? []
+        : fallbackAttendanceDateKeys;
 
     const resolvedAttendanceDateKey =
 
@@ -19769,7 +19765,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           <View>
                             <Text style={styles.attendancePickerModalTitle}>Choose attendance date</Text>
                             <Text style={styles.attendancePickerModalSubtitle}>
-                              Dates outside the event are unavailable.
+                              {project.isEvent
+                                ? 'Only scheduled event dates are available.'
+                                : 'Dates outside the project are unavailable.'}
                             </Text>
                           </View>
                         </View>
@@ -19788,6 +19786,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           selectedDate={selectedAttendanceDate}
                           minDate={attendanceDateMin}
                           maxDate={attendanceDateMax}
+                          isDateSelectable={date =>
+                            availableAttendanceDateKeys.includes(getLocalDateKey(date.toISOString()))
+                          }
                           onDateSelect={date => {
                             setSelectedAttendanceDateKey(getLocalDateKey(date.toISOString()));
                           }}
