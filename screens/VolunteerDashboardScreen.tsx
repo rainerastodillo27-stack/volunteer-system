@@ -188,7 +188,7 @@ export default function VolunteerDashboardScreen() {
   const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const loadGenerationRef = useRef(0);
 
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 6, 27));
+  const [currentDate, setCurrentDate] = useState(() => new Date());
 
   // Google Calendar Integration states
   const [calendarSettings, setCalendarSettings] = useState({
@@ -488,6 +488,7 @@ export default function VolunteerDashboardScreen() {
   );
 
   // Calendar setup
+  const today = new Date();
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
   const monthLabel = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -511,7 +512,10 @@ export default function VolunteerDashboardScreen() {
   }, [firstDayIndex, daysInMonth]);
 
   const getDayStatus = (dayNum: number) => {
-    const isToday = year === 2026 && month === 6 && dayNum === 27; // Mock today as Jul 27
+    const isToday =
+      year === today.getFullYear() &&
+      month === today.getMonth() &&
+      dayNum === today.getDate();
 
     if (Platform.OS === 'android') {
       return {

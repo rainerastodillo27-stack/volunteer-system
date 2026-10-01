@@ -149,6 +149,24 @@ function splitPartnerAddress(
   return { streetAddress: parts.join(', '), barangay: matchedBarangay?.name || '' };
 }
 
+function splitVolunteerStreetAddress(
+  address: string,
+  barangayName: string,
+  cityName: string,
+  regionName: string
+): string {
+  const parts = address.split(',').map(part => part.trim()).filter(Boolean);
+  const expectedSuffixes = [regionName, cityName, barangayName];
+
+  expectedSuffixes.forEach(expected => {
+    if (expected && parts.length > 0 && normalizeLocationName(parts[parts.length - 1]) === normalizeLocationName(expected)) {
+      parts.pop();
+    }
+  });
+
+  return parts.join(', ');
+}
+
 function ProfileLocationPickers({
   regionCode,
   cityCode,
@@ -430,7 +448,7 @@ export default function ProfileScreen() {
     setGenderDraft(volunteerProfile?.gender || user?.volunteerMembershipSheet?.gender || '');
     setDateOfBirthDraft(volunteerProfile?.dateOfBirth || user?.volunteerMembershipSheet?.dateOfBirth || '');
     setCivilStatusDraft(volunteerProfile?.civilStatus || user?.volunteerMembershipSheet?.civilStatus || '');
-    setHomeAddressDraft(volunteerProfile?.homeAddress || user?.volunteerMembershipSheet?.homeAddress || '');
+    const volunteerHomeAddress = volunteerProfile?.homeAddress || user.volunteerMembershipSheet?.homeAddress || '';
     setOccupationDraft(volunteerProfile?.occupation || user?.volunteerMembershipSheet?.occupation || '');
     setWorkplaceOrSchoolDraft(volunteerProfile?.workplaceOrSchool || user?.volunteerMembershipSheet?.workplaceOrSchool || '');
     setCollegeCourseDraft(volunteerProfile?.collegeCourse || user?.volunteerMembershipSheet?.collegeCourse || '');
@@ -450,8 +468,14 @@ export default function ProfileScreen() {
 
     const volunteerRegionName = volunteerProfile?.homeAddressRegion || user.volunteerMembershipSheet?.homeAddressRegion || '';
     const volunteerCityName = volunteerProfile?.homeAddressCityMunicipality || user.volunteerMembershipSheet?.homeAddressCityMunicipality || '';
+    const volunteerBarangayName = volunteerProfile?.homeAddressBarangay || user.volunteerMembershipSheet?.homeAddressBarangay || '';
     const volunteerRegionCode = findProfileRegionCode(volunteerRegionName);
     const volunteerCity = findProfileCity(volunteerRegionCode, volunteerCityName);
+    setHomeAddressDraft(
+      user.role === 'volunteer' && Platform.OS === 'android'
+        ? splitVolunteerStreetAddress(volunteerHomeAddress, volunteerBarangayName, volunteerCityName, volunteerRegionName)
+        : volunteerHomeAddress
+    );
 
     setOrgNameDraft(primaryPartner?.name || '');
     setDswdAccreditationNoDraft(primaryPartner?.dswdAccreditationNo || '');
@@ -471,9 +495,7 @@ export default function ProfileScreen() {
     } else {
       setProfileLocationRegionCodeDraft(volunteerRegionCode);
       setProfileLocationCityCodeDraft(volunteerCity?.code || '');
-      setProfileLocationBarangayDraft(
-        volunteerProfile?.homeAddressBarangay || user.volunteerMembershipSheet?.homeAddressBarangay || ''
-      );
+      setProfileLocationBarangayDraft(volunteerBarangayName);
     }
     setPartnerValidIdDocumentDraft(getPartnerValidIdDocument(primaryPartner));
   }, [user, volunteerProfile, partnerProfiles]);
