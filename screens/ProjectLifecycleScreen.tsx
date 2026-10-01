@@ -19734,13 +19734,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <Text style={{ fontSize: 30, fontWeight: '800', color: '#0f172a', marginBottom: 4 }}>
 
-                  Event Tasks
+                  Event Attendance & Tasks
 
                 </Text>
 
                 <Text style={{ fontSize: 14, color: '#64748b' }}>
 
-                  Define tasks, required skills, and assign volunteers.
+                  Track attendance and manage tasks for this event.
 
                 </Text>
 
@@ -19978,6 +19978,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             </View>
             )}
 
+            {eventWorkspaceTab === 'Attendance' && (
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16 }}>
 
               <View style={{
@@ -20069,6 +20070,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </View>
 
             </View>
+
+            )}
 
 
 
