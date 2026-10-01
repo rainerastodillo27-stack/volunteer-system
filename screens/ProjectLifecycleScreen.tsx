@@ -19311,6 +19311,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     };
 
     const handleExportAttendancePdf = () => {
+      try {
       const exportDateKey = resolvedAttendanceDateKey;
       const exportDateValue = new Date(`${exportDateKey}T00:00:00`);
       const exportCurrentDateValue = new Date(currentDate);
@@ -19417,6 +19418,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           Photo: row.photo,
         })),
       });
+      } catch (error: any) {
+        console.error('Unable to prepare attendance PDF preview:', error);
+        Alert.alert(
+          'PDF Preview Failed',
+          error?.message || 'Unable to prepare the attendance PDF preview.'
+        );
+      }
     };
 
     const renderInitialsAvatar = (name: string, size = 40) => {
@@ -21911,6 +21919,35 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           </ScrollView>
 
+          <DownloadPreviewModal
+            visible={Boolean(attendanceDownloadPreview)}
+            title={attendanceDownloadPreview?.title || 'Attendance download preview'}
+            subtitle={attendanceDownloadPreview?.subtitle || ''}
+            totalRows={attendanceDownloadPreview?.rows.length || 0}
+            previewRows={attendanceDownloadPreview?.rows || []}
+            columns={['Volunteer', 'Attendance', 'Marked', 'Time', 'Assigned Tasks', 'Task Completed', 'Photo']}
+            previewTables={attendanceDownloadPreview?.previewTables}
+            documentTitle={attendanceDownloadPreview?.documentTitle}
+            documentSubtitle={attendanceDownloadPreview?.documentSubtitle}
+            stats={attendanceDownloadPreview ? [
+              { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
+              { label: 'Included volunteers', value: String(attendanceDownloadPreview.rows.length), icon: 'groups' },
+            ] : undefined}
+            onConfirm={() => {
+              if (!attendanceDownloadPreview) return;
+              const pending = attendanceDownloadPreview;
+              setAttendanceDownloadPreview(null);
+              void downloadPdfFile(
+                pending.fileName,
+                pending.pdf,
+                'Unable to save the attendance PDF on this device.'
+              );
+            }}
+            onCancel={() => setAttendanceDownloadPreview(null)}
+            confirmText="Download PDF"
+            confirmColor="#166534"
+          />
+
           <ConfirmDialogHost ref={confirmDialogRef} />
         </View>
       );
@@ -24227,35 +24264,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             Alert.alert('Document Open Failed', error?.message || 'Unable to open document.');
           });
         }}
-      />
-
-      <DownloadPreviewModal
-        visible={Boolean(attendanceDownloadPreview)}
-        title={attendanceDownloadPreview?.title || 'Attendance download preview'}
-        subtitle={attendanceDownloadPreview?.subtitle || ''}
-        totalRows={attendanceDownloadPreview?.rows.length || 0}
-        previewRows={attendanceDownloadPreview?.rows || []}
-        columns={['Volunteer', 'Attendance', 'Marked', 'Time', 'Assigned Tasks', 'Task Completed', 'Photo']}
-        previewTables={attendanceDownloadPreview?.previewTables}
-        documentTitle={attendanceDownloadPreview?.documentTitle}
-        documentSubtitle={attendanceDownloadPreview?.documentSubtitle}
-        stats={attendanceDownloadPreview ? [
-          { label: 'File format', value: 'PDF', icon: 'picture-as-pdf' },
-          { label: 'Included volunteers', value: String(attendanceDownloadPreview.rows.length), icon: 'groups' },
-        ] : undefined}
-        onConfirm={() => {
-          if (!attendanceDownloadPreview) return;
-          const pending = attendanceDownloadPreview;
-          setAttendanceDownloadPreview(null);
-          void downloadPdfFile(
-            pending.fileName,
-            pending.pdf,
-            'Unable to save the attendance PDF on this device.'
-          );
-        }}
-        onCancel={() => setAttendanceDownloadPreview(null)}
-        confirmText="Download PDF"
-        confirmColor="#166534"
       />
 
       <ConfirmDialogHost ref={confirmDialogRef} />

@@ -433,30 +433,27 @@ export async function downloadPdfFile(
 ) {
   const safeFilename = sanitizeFilename(filename.endsWith('.pdf') ? filename : `${filename}.pdf`);
 
-  if (typeof document !== 'undefined' && typeof window !== 'undefined') {
-    const blob = new Blob([pdfContent], { type: 'application/pdf' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = safeFilename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
-    return;
-  }
-
   try {
-    if (Platform.OS === 'web') {
+    if (typeof document !== 'undefined' && typeof window !== 'undefined') {
       const blob = new Blob([pdfContent], { type: 'application/pdf' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = safeFilename;
       document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      try {
+        link.click();
+      } finally {
+        document.body.removeChild(link);
+        // Browsers may still be reading the object URL after the click starts
+        // the download. Revoke it later so the PDF isn't cut off.
+        window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+      }
+      return;
+    }
+
+    if (Platform.OS === 'web') {
+      throw new Error('The browser download API is unavailable.');
     } else {
       // Native: Write file to cache directory using expo-file-system and share
       const filePath = `${FileSystem.cacheDirectory}${safeFilename}`;
