@@ -15,6 +15,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
 import { Project } from '../models/types';
 import { getApiBaseUrl, getApiAuthHeaders } from '../models/storage';
+import { getEventRepeatRule } from './attendanceSchedule';
 
 // Required so the auth session redirect works correctly on mobile
 WebBrowser.maybeCompleteAuthSession();
@@ -64,6 +65,7 @@ export interface GoogleCalendarEvent {
   location?: string;
   start: { dateTime?: string; date?: string; timeZone?: string };
   end: { dateTime?: string; date?: string; timeZone?: string };
+  recurrence?: string[];
   colorId?: string;
 }
 
@@ -92,7 +94,10 @@ export const GOOGLE_CALENDAR_WEB_URL = 'https://calendar.google.com/calendar/u/0
  * Returns the discovery document and request config needed by expo-auth-session.
  * Call this inside a component using useAuthRequest().
  */
-export function getGoogleAuthConfig(loginHint?: string) {
+export function getGoogleAuthConfig(
+  loginHint?: string,
+  options: { serverExchange?: boolean } = {}
+) {
   const discovery = {
     authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
@@ -108,18 +113,71 @@ export function getGoogleAuthConfig(loginHint?: string) {
     clientId: isAndroid ? GOOGLE_ANDROID_CLIENT_ID : GOOGLE_WEB_CLIENT_ID,
     redirectUri,
     scopes: GOOGLE_SCOPES,
-    // Keep the existing browser behavior while using Google's recommended
-    // authorization-code + PKCE flow in the Android production build.
-    responseType: isAndroid ? AuthSession.ResponseType.Code : AuthSession.ResponseType.Token,
-    usePKCE: isAndroid,
+    // The partner's server-side connection needs an authorization code so the
+    // backend can retain an encrypted refresh token and watch for calendar edits.
+    // Other calendar sync callers keep their existing browser flow.
+    responseType: isAndroid || options.serverExchange
+      ? AuthSession.ResponseType.Code
+      : AuthSession.ResponseType.Token,
+    usePKCE: isAndroid || options.serverExchange,
     extraParams: {
-      access_type: 'online',
-      prompt: 'select_account',
+      access_type: options.serverExchange ? 'offline' : 'online',
+      prompt: options.serverExchange ? 'consent select_account' : 'select_account',
       ...(loginHint?.trim() ? { login_hint: loginHint.trim() } : {}),
     },
   };
 
   return { discovery, request, redirectUri };
+}
+
+/** Connects a partner Google Calendar through the authenticated NVC backend. */
+export async function connectPartnerGoogleCalendar(
+  authResult: AuthSession.AuthSessionResult,
+  request: Pick<AuthSession.AuthRequest, 'codeVerifier'> | null,
+  authConfig: ReturnType<typeof getGoogleAuthConfig>,
+  projectIds: string[]
+): Promise<{ synced: number; connected: boolean }> {
+  if (authResult.type !== 'success') {
+    throw new Error('Google Calendar permission was not granted.');
+  }
+
+  const authorizationCode = authResult.params.code;
+  if (!authorizationCode) {
+    throw new Error('Google did not return an authorization code. Please try again.');
+  }
+  if (!request?.codeVerifier) {
+    throw new Error('Google authorization did not return a valid PKCE verifier. Please try again.');
+  }
+
+  const authHeaders = await getApiAuthHeaders();
+  const response = await fetch(`${getApiBaseUrl()}/partner/google-calendar/connect`, {
+    method: 'POST',
+    credentials: typeof document !== 'undefined' ? 'include' : undefined,
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'ngrok-skip-browser-warning': '69420',
+      'User-Agent': 'VolCre-App/1.0',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      authorizationCode,
+      clientId: authConfig.request.clientId,
+      redirectUri: authConfig.redirectUri,
+      codeVerifier: request.codeVerifier,
+      projectIds: [...new Set(projectIds.map(id => String(id || '').trim()).filter(Boolean))],
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({})) as {
+    detail?: string;
+    synced?: number;
+    connected?: boolean;
+  };
+  if (!response.ok) {
+    throw new Error(payload.detail || `Partner calendar connection failed (HTTP ${response.status}).`);
+  }
+  return { synced: Number(payload.synced || 0), connected: payload.connected === true };
 }
 
 /**
@@ -211,6 +269,77 @@ export async function assertGoogleCalendarAccountMatchesUser(
 
 // ─── Event Formatting ─────────────────────────────────────────────────────────
 
+function addDaysToDateOnly(value: string, days: number): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12);
+  date.setDate(date.getDate() + days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getFirstOccurrenceEndDateTime(project: Project): string {
+  const start = new Date(project.startDate);
+  const seriesEnd = new Date(project.endDate || project.startDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(seriesEnd.getTime())) {
+    return project.endDate || project.startDate;
+  }
+
+  const occurrenceEnd = new Date(start);
+  occurrenceEnd.setHours(
+    seriesEnd.getHours(),
+    seriesEnd.getMinutes(),
+    seriesEnd.getSeconds(),
+    seriesEnd.getMilliseconds()
+  );
+  if (occurrenceEnd <= start) {
+    occurrenceEnd.setDate(occurrenceEnd.getDate() + 1);
+  }
+  return occurrenceEnd.toISOString();
+}
+
+function getGoogleRecurrence(project: Project): string[] {
+  if (!project.isEvent) return [];
+
+  const repeat = getEventRepeatRule(project);
+  const frequencyByRepeat = {
+    Daily: 'DAILY',
+    Weekly: 'WEEKLY',
+    Monthly: 'MONTHLY',
+  } as const;
+  if (repeat === 'Does not repeat') return [];
+
+  const endValue = project.endDate || project.startDate;
+  const isAllDay = !project.startDate.includes('T') && !endValue.includes('T');
+  let until: string;
+  let frequencyRule = `FREQ=${frequencyByRepeat[repeat]}`;
+
+  if (repeat === 'Monthly') {
+    const start = new Date(project.startDate);
+    if (!Number.isNaN(start.getTime())) {
+      const startDay = start.getDate();
+      frequencyRule += startDay > 28
+        ? `;BYMONTHDAY=${startDay},-1;BYSETPOS=1`
+        : `;BYMONTHDAY=${startDay}`;
+    }
+  }
+
+  if (isAllDay) {
+    until = endValue.slice(0, 10).replace(/-/g, '');
+  } else {
+    const start = new Date(project.startDate);
+    const end = new Date(endValue);
+    const finalOccurrence = end < start ? start : end;
+    if (Number.isNaN(finalOccurrence.getTime())) return [];
+    until = finalOccurrence.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  }
+
+  return [`RRULE:${frequencyRule};UNTIL=${until}`];
+}
+
 /**
  * Maps a Project/Event from the volunteer system to a Google Calendar event body.
  * Uses ISO date strings if times are present, or date-only format otherwise.
@@ -252,12 +381,26 @@ export function formatProjectAsGoogleEvent(project: Project): GoogleCalendarEven
 
   };
 
+  const repeat = project.isEvent ? getEventRepeatRule(project) : 'Does not repeat';
+  const isRecurring = project.isEvent && repeat !== 'Does not repeat';
+  const endValue = project.endDate || project.startDate;
+  const isAllDay = !project.startDate.includes('T') && !endValue.includes('T');
+  const start = toDateTime(project.startDate);
+  const end = isRecurring
+    ? isAllDay
+      ? { date: addDaysToDateOnly(project.startDate.slice(0, 10), 1) }
+      : toDateTime(getFirstOccurrenceEndDateTime(project))
+    : isAllDay
+      ? { date: addDaysToDateOnly(endValue.slice(0, 10), 1) }
+      : toDateTime(project.endDate);
+
   return {
     summary: `[${project.isEvent ? 'Event' : 'Project'}] ${project.title}`,
     description: descriptionLines.join('\n'),
     location: locationParts.join(', ') || undefined,
-    start: toDateTime(project.startDate),
-    end: toDateTime(project.endDate),
+    start,
+    end,
+    ...(project.isEvent ? { recurrence: getGoogleRecurrence(project) } : {}),
     colorId: COLOR_MAP[project.category] ?? '1',
   };
 }

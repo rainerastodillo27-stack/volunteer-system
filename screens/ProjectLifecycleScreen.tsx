@@ -4512,17 +4512,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      const [snapshot, programTracksWithImages] = await Promise.all([
-        getProjectsScreenSnapshot(
-          user,
-          ['projects', 'programTracks', 'volunteerJoinRecords'],
-          forceRefresh,
-          false,
-        ),
-        // Keep the project/event snapshot lightweight, but load the cover
-        // images needed by the program cards separately.
-        getAllProgramTracks({ includeImages: true }).catch(() => null),
-      ]);
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'programTracks', 'volunteerJoinRecords'],
+        forceRefresh,
+        false,
+      );
 
       if (requestGeneration !== projectsLoadGenerationRef.current) {
         return [];
@@ -4535,30 +4530,51 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       setProjects(allProjects);
 
       const snapshotTracks = snapshot.programTracks || [];
-      const tracksWithImagesById = new Map(
-        (programTracksWithImages || [])
-          .filter(track => Boolean(track?.id))
-          .map(track => [String(track.id), track])
-      );
-      const hydratedSnapshotTracks = snapshotTracks.map(track => {
-        const mediaTrack = tracksWithImagesById.get(String(track.id));
-        return mediaTrack?.imageUrl
-          ? { ...track, imageUrl: mediaTrack.imageUrl }
-          : track;
-      });
-      const visibleSnapshotTracks = hydratedSnapshotTracks.filter(
+      const visibleSnapshotTracks = snapshotTracks.filter(
         track => !deletedProgramIdsRef.current.has(track.id)
       );
-      const visibleProgramTracks = (programTracksWithImages || [])
-        .filter(track => Boolean(track?.id))
-        .filter(track => !deletedProgramIdsRef.current.has(track.id));
       setProgramTracks(
         visibleSnapshotTracks.length > 0
           ? visibleSnapshotTracks
-          : visibleProgramTracks.length > 0
-            ? visibleProgramTracks.map(track => ({ ...track }))
-            : deriveProgramTracksFromProjects(allProjects)
+          : deriveProgramTracksFromProjects(allProjects)
       );
+
+      // Do not hold project/event visibility behind the slower image-bearing
+      // program-track request. Hydrate those optional covers after the list
+      // has already rendered from the fresh snapshot.
+      void getAllProgramTracks({ includeImages: true })
+        .then(programTracksWithImages => {
+          if (requestGeneration !== projectsLoadGenerationRef.current) {
+            return;
+          }
+
+          const tracksWithImagesById = new Map(
+            (programTracksWithImages || [])
+              .filter(track => Boolean(track?.id))
+              .map(track => [String(track.id), track])
+          );
+          const hydratedSnapshotTracks = snapshotTracks.map(track => {
+            const mediaTrack = tracksWithImagesById.get(String(track.id));
+            return mediaTrack?.imageUrl
+              ? { ...track, imageUrl: mediaTrack.imageUrl }
+              : track;
+          });
+          const visibleHydratedTracks = hydratedSnapshotTracks.filter(
+            track => !deletedProgramIdsRef.current.has(track.id)
+          );
+          const visibleProgramTracks = (programTracksWithImages || [])
+            .filter(track => Boolean(track?.id))
+            .filter(track => !deletedProgramIdsRef.current.has(track.id));
+
+          setProgramTracks(
+            visibleHydratedTracks.length > 0
+              ? visibleHydratedTracks
+              : visibleProgramTracks.length > 0
+                ? visibleProgramTracks.map(track => ({ ...track }))
+                : deriveProgramTracksFromProjects(allProjects)
+          );
+        })
+        .catch(() => null);
 
       if (Array.isArray(snapshot.volunteerJoinRecords)) {
 

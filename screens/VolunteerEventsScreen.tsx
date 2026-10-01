@@ -787,14 +787,8 @@ export default function VolunteerEventsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* SUB-FILTERS ROW (Upcoming / Sort) */}
+      {/* SORT CONTROLS */}
       <View style={styles.subFiltersRow}>
-        <View style={styles.dropdownBtn}>
-          <MaterialIcons name="event" size={16} color="#3c4043" />
-          <Text style={styles.dropdownBtnText}>Upcoming</Text>
-          <MaterialIcons name="keyboard-arrow-down" size={16} color="#3c4043" />
-        </View>
-
         <TouchableOpacity
           style={styles.dropdownBtn}
           onPress={() => setShowSortModal(true)}

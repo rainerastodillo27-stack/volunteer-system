@@ -30,11 +30,9 @@ import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/project
 import { getPrimaryProjectImageSource } from '../utils/projectMap';
 import { isAbortLikeError } from '../utils/requestErrors';
 import {
-  assertGoogleCalendarAccountMatchesUser,
+  connectPartnerGoogleCalendar,
   getGoogleAuthConfig,
-  resolveGoogleCalendarAccessToken,
   sendGoogleCalendarSyncEmail,
-  syncProjectsToGoogleCalendar,
 } from '../utils/googleCalendarSync';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 
@@ -100,7 +98,10 @@ export default function PartnerProgramManagementScreen() {
   const [calendarSyncing, setCalendarSyncing] = useState(false);
   const [calendarSyncMessage, setCalendarSyncMessage] = useState<string | null>(null);
   const loadGenerationRef = useRef(0);
-  const googleAuthConfig = useMemo(() => getGoogleAuthConfig(user?.email), [user?.email]);
+  const googleAuthConfig = useMemo(
+    () => getGoogleAuthConfig(user?.email, { serverExchange: true }),
+    [user?.email]
+  );
   const [googleAuthRequest, , promptGoogleAuth] = AuthSession.useAuthRequest(
     googleAuthConfig.request,
     googleAuthConfig.discovery
@@ -300,20 +301,14 @@ export default function PartnerProgramManagementScreen() {
       }
 
       const authResult = await promptGoogleAuth();
-      const accessToken = await resolveGoogleCalendarAccessToken(
+      const result = await connectPartnerGoogleCalendar(
         authResult,
         googleAuthRequest,
-        googleAuthConfig
+        googleAuthConfig,
+        approvedProposalCalendarProjectIds
       );
-      if (!accessToken) {
-        throw new Error('Google Calendar permission was not granted.');
-      }
-
-      await assertGoogleCalendarAccountMatchesUser(accessToken, user.email);
-
-      const result = await syncProjectsToGoogleCalendar(accessToken, approvedProposalCalendarProjects);
-      if (!result.success && result.synced === 0) {
-        throw new Error(result.errors[0] || 'Google Calendar sync failed.');
+      if (!result.connected || result.synced === 0) {
+        throw new Error('No approved projects or events were connected to Google Calendar.');
       }
 
       await sendGoogleCalendarSyncEmail({
@@ -323,9 +318,7 @@ export default function PartnerProgramManagementScreen() {
         role: 'partner',
       });
 
-      const confirmationMessage = result.failed > 0
-        ? `${result.synced} approved project or event item${result.synced === 1 ? '' : 's'} synced. ${result.failed} could not be synced.`
-        : `${result.synced} approved project or event item${result.synced === 1 ? '' : 's'} added or updated in your Google Calendar.`;
+      const confirmationMessage = `${result.synced} approved project or event item${result.synced === 1 ? '' : 's'} connected. Changes to linked event dates and times in Google Calendar will update NVC automatically.`;
       setCalendarSyncMessage(confirmationMessage);
       Alert.alert('Calendar Sync Complete', confirmationMessage);
     } catch (error) {
@@ -333,7 +326,7 @@ export default function PartnerProgramManagementScreen() {
     } finally {
       setCalendarSyncing(false);
     }
-  }, [approvedProposalCalendarProjects, googleAuthRequest, promptGoogleAuth, user]);
+  }, [approvedProposalCalendarProjectIds, approvedProposalCalendarProjects.length, googleAuthConfig, googleAuthRequest, promptGoogleAuth, user]);
 
   const handleOpenProposal = (card: ProgramCardConfig) => {
     navigation.navigate('Messages', {

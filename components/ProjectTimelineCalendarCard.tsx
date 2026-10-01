@@ -4,6 +4,7 @@ import { StyleSheet, Text, TouchableOpacity, View, Linking, Platform, useWindowD
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { addDays, addMonths, addWeeks, endOfWeek, format, isSameDay, isSameMonth, startOfWeek, subDays, subMonths, subWeeks } from 'date-fns';
 import type { AdminPlanningCalendar, AdminPlanningItem, Project } from '../models/types';
+import { getScheduledAttendanceDateKeys } from '../utils/attendanceSchedule';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 
 type TimelineEntry = {
@@ -16,6 +17,7 @@ type TimelineEntry = {
   laneLabel: string;
   projectId?: string;
   kind: 'project' | 'planning' | 'google';
+  occurrenceDateKeys?: string[];
   htmlLink?: string;
 };
 
@@ -74,6 +76,14 @@ function isValidDateValue(value?: string): boolean {
   }
 
   return !Number.isNaN(new Date(value).getTime());
+}
+
+function entryOccursOnDay(entry: TimelineEntry, day: Date): boolean {
+  const dateKey = format(day, 'yyyy-MM-dd');
+  if (entry.occurrenceDateKeys) {
+    return entry.occurrenceDateKeys.includes(dateKey);
+  }
+  return isSameDay(new Date(entry.startDate), day);
 }
 
 function formatRange(startValue: string, endValue: string): string {
@@ -271,6 +281,9 @@ export default function ProjectTimelineCalendarCard({
             laneLabel: getLaneLabel(project),
             projectId: project.id,
             kind: 'project',
+            occurrenceDateKeys: project.isEvent
+              ? getScheduledAttendanceDateKeys({ ...project, isEvent: true })
+              : undefined,
           }))
       : [];
 
@@ -386,8 +399,7 @@ export default function ProjectTimelineCalendarCard({
   // Filter events for the currently selected day
   const selectedDayEvents = useMemo(() => {
     return timelineEntries.filter(entry => {
-      const date = new Date(entry.startDate);
-      return !Number.isNaN(date.getTime()) && isSameDay(date, selectedDate);
+      return entryOccursOnDay(entry, selectedDate);
     });
   }, [timelineEntries, selectedDate]);
 
@@ -427,7 +439,7 @@ export default function ProjectTimelineCalendarCard({
   const renderBigCalendarDay = (day: Date, idx: number) => {
     const isCurrentMonth = isSameMonth(day, calendarDate);
     const isSelected = isSameDay(day, selectedDate);
-    const dayEvents = timelineEntries.filter(entry => isSameDay(new Date(entry.startDate), day));
+    const dayEvents = timelineEntries.filter(entry => entryOccursOnDay(entry, day));
 
     return (
       <TouchableOpacity
@@ -685,11 +697,11 @@ export default function ProjectTimelineCalendarCard({
                   {calendarDate.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
                 </Text>
                 <Text style={styles.dayViewCount}>
-                  {timelineEntries.filter(entry => isSameDay(new Date(entry.startDate), calendarDate)).length} events
+                  {timelineEntries.filter(entry => entryOccursOnDay(entry, calendarDate)).length} events
                 </Text>
               </View>
               {timelineEntries
-                .filter(entry => isSameDay(new Date(entry.startDate), calendarDate))
+                .filter(entry => entryOccursOnDay(entry, calendarDate))
                 .map(entry => {
                   const project = projects.find(p => p.id === entry.projectId);
                   return (
@@ -715,7 +727,7 @@ export default function ProjectTimelineCalendarCard({
                     </TouchableOpacity>
                   );
                 })}
-              {timelineEntries.filter(entry => isSameDay(new Date(entry.startDate), calendarDate)).length === 0 ? (
+              {timelineEntries.filter(entry => entryOccursOnDay(entry, calendarDate)).length === 0 ? (
                 <View style={styles.emptyTableState}>
                   <Text style={styles.emptyTableText}>No events scheduled for this day</Text>
                 </View>
@@ -860,7 +872,7 @@ export default function ProjectTimelineCalendarCard({
                 {monthGrid.map((day, index) => {
                   const isCurrentMonth = isSameMonth(day, calendarDate);
                   const isSelected = isSameDay(day, selectedDate);
-                  const hasEvents = timelineEntries.some(entry => isSameDay(new Date(entry.startDate), day));
+                  const hasEvents = timelineEntries.some(entry => entryOccursOnDay(entry, day));
 
                   return (
                     <TouchableOpacity
@@ -886,8 +898,8 @@ export default function ProjectTimelineCalendarCard({
                       >
                         {format(day, 'd')}
                       </Text>
-                      {hasEvents && !isSelected && (
-                        <View style={styles.miniEventDot} />
+                      {hasEvents && (
+                        <View style={[styles.miniEventDot, isSelected && styles.miniEventDotSelected]} />
                       )}
                     </TouchableOpacity>
                   );
@@ -1411,6 +1423,9 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: '#166534',
+  },
+  miniEventDotSelected: {
+    backgroundColor: '#ffffff',
   },
   upcomingEventsSection: {
     borderTopWidth: 1,

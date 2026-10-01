@@ -18,6 +18,8 @@ web-build/
 .web-export-check/
 .env
 .env.local
+client_secret*.json
+google-calendar-credentials.json
 
 .dev-pids/
 runtime/message-attachments/

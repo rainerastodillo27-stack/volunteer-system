@@ -47,6 +47,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
 
   getPartnerDashboardSnapshot,
+  getProjectsScreenSnapshot,
   REALTIME_STORAGE_CHANGE_OPTIONS,
 
   submitPartnerProgramProposal,
@@ -512,6 +513,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
   // Focus and realtime refreshes can overlap. Ignore an older response so it
   // cannot overwrite a newly approved proposal with pre-approval data.
   const dashboardLoadGenerationRef = React.useRef(0);
+  const proposalProjectsRefreshRequestRef = React.useRef(0);
+  const proposalProjectsAppliedGenerationRef = React.useRef(0);
 
 
 
@@ -543,11 +546,41 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   );
 
+  const refreshProposalProjects = React.useCallback(async () => {
+    if (!user?.id) {
+      return;
+    }
+
+    const requestGeneration = ++proposalProjectsRefreshRequestRef.current;
+    try {
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['projects', 'partnerApplications'],
+        true,
+        false,
+      );
+      if (requestGeneration !== proposalProjectsRefreshRequestRef.current) {
+        return;
+      }
+
+      proposalProjectsAppliedGenerationRef.current += 1;
+      setProjects(snapshot.projects || []);
+      setPartnerApplications(
+        (snapshot.partnerApplications || [])
+          .filter(application => application.partnerUserId === user.id)
+          .sort((left, right) => new Date(right.requestedAt).getTime() - new Date(left.requestedAt).getTime())
+      );
+    } catch (error) {
+      console.warn('[PartnerDashboardScreen] Approved project refresh skipped:', error);
+    }
+  }, [user?.id, user?.role]);
+
 
 
   const loadDashboardData = React.useCallback(async (forceRefresh = false) => {
 
     const requestGeneration = ++dashboardLoadGenerationRef.current;
+    const proposalProjectsGeneration = proposalProjectsAppliedGenerationRef.current;
 
     try {
 
@@ -569,19 +602,19 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       setPartners(ownedPartners);
 
-      setProjects(snapshot.projects);
+      if (proposalProjectsGeneration === proposalProjectsAppliedGenerationRef.current) {
+        setProjects(snapshot.projects);
+      }
       
       setPrograms(snapshot.programs || []);
 
-      setPartnerApplications(
-
-        snapshot.partnerApplications
-
-          .filter(application => application.partnerUserId === user.id)
-
-          .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
-
-      );
+      if (proposalProjectsGeneration === proposalProjectsAppliedGenerationRef.current) {
+        setPartnerApplications(
+          snapshot.partnerApplications
+            .filter(application => application.partnerUserId === user.id)
+            .sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime())
+        );
+      }
 
       setLoadError(null);
 
@@ -624,6 +657,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
     React.useCallback(() => {
 
       void loadDashboardData(true);
+      void refreshProposalProjects();
 
       return subscribeToStorageChanges(
 
@@ -643,13 +677,27 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
         ],
 
-        () => loadDashboardData(true),
+        event => {
+          const shouldRefreshProposalProjects = event.keys.some(key =>
+            ['projects', 'events', 'partnerProjectApplications'].includes(key)
+          );
+          const shouldRefreshDashboard = event.keys.some(key =>
+            ['partners', 'programs', 'adminPlanningCalendars'].includes(key)
+          );
+
+          if (shouldRefreshProposalProjects) {
+            void refreshProposalProjects();
+          }
+          if (shouldRefreshDashboard) {
+            void loadDashboardData(true);
+          }
+        },
 
         REALTIME_STORAGE_CHANGE_OPTIONS
 
       );
 
-    }, [loadDashboardData])
+    }, [loadDashboardData, refreshProposalProjects])
 
   );
 

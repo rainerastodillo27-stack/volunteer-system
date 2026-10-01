@@ -18,6 +18,8 @@ import traceback
 import re
 import mimetypes
 import hashlib
+import hmac
+import uuid
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, unquote_to_bytes
@@ -81,6 +83,21 @@ from .relational_mirror import (
     _primary_key_column,
     _row_to_item,
 )
+from .google_calendar_sync import (
+    DEFAULT_CHANNEL_TTL_SECONDS,
+    GoogleCalendarError,
+    decrypt_refresh_token,
+    encrypt_refresh_token,
+    exchange_authorization_code,
+    format_project_as_google_event,
+    get_google_email,
+    google_api_request,
+    normalize_schedule_value,
+    project_schedule,
+    refresh_access_token,
+    schedule_from_google_event,
+    stable_google_event_id,
+)
 import traceback
 
 
@@ -114,6 +131,8 @@ PUBLIC_API_PATHS = {
     "/auth/register",
     "/auth/password-reset/send",
     "/auth/password-reset/confirm",
+    "/google-calendar/partner/notifications",
+    "/api/google-calendar/partner/notifications",
 }
 ADMIN_ONLY_API_PREFIXES = (
     "/admin/",
@@ -5633,6 +5652,1020 @@ def _ensure_core_programs_exist() -> None:
     pass
 
 
+_google_calendar_scheduler_started = False
+_google_calendar_scheduler_lock = threading.Lock()
+_google_calendar_sync_locks: dict[str, threading.Lock] = {}
+_google_calendar_sync_locks_guard = threading.Lock()
+
+
+def _ensure_google_calendar_tables(connection: Any) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "select to_regclass('public.google_calendar_connections'), "
+            "to_regclass('public.google_calendar_event_links'), "
+            "to_regclass('public.google_calendar_event_links_google_event_idx'), "
+            "exists (select 1 from pg_attribute "
+            "where attrelid = to_regclass('public.google_calendar_event_links') "
+            "and attname = 'last_exported_repeat' and not attisdropped)"
+        )
+        existing = cursor.fetchone()
+        if existing and all(existing):
+            return
+        if existing and all(existing[:3]):
+            cursor.execute(
+                "alter table google_calendar_event_links add column if not exists "
+                "last_exported_repeat text not null default 'Does not repeat'"
+            )
+            return
+        cursor.execute(
+            """
+            create table if not exists google_calendar_connections (
+              partner_user_id text primary key,
+              google_email text not null,
+              calendar_id text not null default 'primary',
+              client_id text not null,
+              encrypted_refresh_token text not null,
+              sync_token text,
+              channel_id text,
+              channel_token_hash text,
+              resource_id text,
+              channel_expiration bigint,
+              updated_at text not null
+            )
+            """
+        )
+        cursor.execute(
+            """
+            create table if not exists google_calendar_event_links (
+              partner_user_id text not null,
+              project_id text not null,
+              google_event_id text not null,
+              last_exported_start text not null,
+              last_exported_end text not null,
+              last_exported_repeat text not null default 'Does not repeat',
+              updated_at text not null,
+              primary key (partner_user_id, project_id),
+              unique (partner_user_id, google_event_id)
+            )
+            """
+        )
+        cursor.execute(
+            "alter table google_calendar_event_links add column if not exists "
+            "last_exported_repeat text not null default 'Does not repeat'"
+        )
+        cursor.execute(
+            "create index if not exists google_calendar_event_links_google_event_idx "
+            "on google_calendar_event_links (google_event_id)"
+        )
+
+
+def _google_calendar_row(connection: Any, partner_user_id: str) -> dict[str, Any] | None:
+    from psycopg.rows import dict_row
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "select * from google_calendar_connections where partner_user_id = %s",
+            (partner_user_id,),
+        )
+        row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def _google_calendar_links(connection: Any, partner_user_id: str) -> list[dict[str, Any]]:
+    from psycopg.rows import dict_row
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "select * from google_calendar_event_links where partner_user_id = %s",
+            (partner_user_id,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def _lock_google_calendar_transaction(
+    connection: Any,
+    partner_user_id: str,
+    *,
+    wait: bool = False,
+) -> bool:
+    # A transaction advisory lock works with the Supabase transaction pooler
+    # and serializes sync cursors across API workers, including first connect
+    # when there is no connection row to lock yet.
+    lock_key = int.from_bytes(
+        hashlib.sha256(f"nvc-google-calendar:{partner_user_id}".encode("utf-8")).digest()[:8],
+        "big",
+        signed=True,
+    )
+    with connection.cursor() as cursor:
+        if wait:
+            cursor.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
+            return True
+        cursor.execute("select pg_try_advisory_xact_lock(%s)", (lock_key,))
+        row = cursor.fetchone()
+        return bool(row and row[0])
+
+
+def _google_calendar_upsert_link(
+    connection: Any,
+    partner_user_id: str,
+    project_id: str,
+    google_event_id: str,
+    start_value: str,
+    end_value: str,
+    repeat_value: str = "Does not repeat",
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            insert into google_calendar_event_links (
+              partner_user_id, project_id, google_event_id,
+              last_exported_start, last_exported_end, last_exported_repeat, updated_at
+            ) values (%s, %s, %s, %s, %s, %s, %s)
+            on conflict (partner_user_id, project_id) do update set
+              google_event_id = excluded.google_event_id,
+              last_exported_start = excluded.last_exported_start,
+              last_exported_end = excluded.last_exported_end,
+              last_exported_repeat = excluded.last_exported_repeat,
+              updated_at = excluded.updated_at
+            """,
+            (
+                partner_user_id,
+                project_id,
+                google_event_id,
+                start_value,
+                end_value,
+                repeat_value,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def _google_calendar_update_link_schedule(
+    connection: Any,
+    partner_user_id: str,
+    project_id: str,
+    start_value: str,
+    end_value: str,
+    repeat_value: str = "Does not repeat",
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            update google_calendar_event_links
+            set last_exported_start = %s, last_exported_end = %s,
+                last_exported_repeat = %s, updated_at = %s
+            where partner_user_id = %s and project_id = %s
+            """,
+            (
+                start_value,
+                end_value,
+                repeat_value,
+                datetime.now(timezone.utc).isoformat(),
+                partner_user_id,
+                project_id,
+            ),
+        )
+
+
+def _google_calendar_upsert_connection(
+    connection: Any,
+    *,
+    partner_user_id: str,
+    google_email: str,
+    client_id: str,
+    encrypted_refresh_token: str,
+    sync_token: str | None,
+    channel_id: str,
+    channel_token_hash: str,
+    resource_id: str,
+    channel_expiration: int,
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            insert into google_calendar_connections (
+              partner_user_id, google_email, calendar_id, client_id,
+              encrypted_refresh_token, sync_token, channel_id,
+              channel_token_hash, resource_id, channel_expiration, updated_at
+            ) values (%s, %s, 'primary', %s, %s, %s, %s, %s, %s, %s, %s)
+            on conflict (partner_user_id) do update set
+              google_email = excluded.google_email,
+              calendar_id = excluded.calendar_id,
+              client_id = excluded.client_id,
+              encrypted_refresh_token = excluded.encrypted_refresh_token,
+              sync_token = excluded.sync_token,
+              channel_id = excluded.channel_id,
+              channel_token_hash = excluded.channel_token_hash,
+              resource_id = excluded.resource_id,
+              channel_expiration = excluded.channel_expiration,
+              updated_at = excluded.updated_at
+            """,
+            (
+                partner_user_id,
+                google_email,
+                client_id,
+                encrypted_refresh_token,
+                sync_token,
+                channel_id,
+                channel_token_hash,
+                resource_id,
+                channel_expiration,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def _approved_partner_calendar_items(
+    connection: Any,
+    partner_user_id: str,
+) -> tuple[set[str], dict[str, tuple[str, dict[str, Any]]]]:
+    applications = _postgres_get_hot_items_by_field(
+        connection,
+        "partnerProjectApplications",
+        "partnerUserId",
+        partner_user_id,
+        include_media=False,
+    )
+    approved_roots: set[str] = set()
+    for application in applications:
+        if str(application.get("status") or "").strip() != "Approved":
+            continue
+        project_id = str(application.get("projectId") or "").strip()
+        if project_id and not project_id.startswith("program:"):
+            approved_roots.add(project_id)
+        details = application.get("proposalDetails")
+        if isinstance(details, dict):
+            for field_name in ("targetProjectId", "targetProgramId", "programId"):
+                target_id = str(details.get(field_name) or "").strip()
+                if target_id and not target_id.startswith("program:"):
+                    approved_roots.add(target_id)
+
+    partner_scope = _get_partner_project_scope(connection, partner_user_id)
+    items: dict[str, tuple[str, dict[str, Any]]] = {}
+    for key in ("projects", "events"):
+        for project in get_postgres_hot_storage_collection(connection, key, include_images=False):
+            if not isinstance(project, dict):
+                continue
+            project_id = str(project.get("id") or "").strip()
+            parent_id = str(project.get("parentProjectId") or project.get("parent_project_id") or "").strip()
+            is_event = bool(project.get("isEvent") or project.get("is_event"))
+            approved_record = project_id in approved_roots or (is_event and parent_id in approved_roots)
+            if project_id and project_id in partner_scope and approved_record:
+                # The projects collection is preferred when legacy records are duplicated.
+                items.setdefault(project_id, (key, project))
+    return approved_roots, items
+
+
+def _google_calendar_list_events(
+    access_token: str,
+    sync_token: str | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    events: list[dict[str, Any]] = []
+    page_token: str | None = None
+    next_sync_token = ""
+    while True:
+        query: dict[str, Any] = {
+            "maxResults": 2500,
+            "showDeleted": "true",
+            "singleEvents": "false",
+        }
+        if sync_token:
+            query["syncToken"] = sync_token
+        if page_token:
+            query["pageToken"] = page_token
+        page = google_api_request(
+            "/calendars/primary/events",
+            access_token,
+            query=query,
+        )
+        events.extend(item for item in page.get("items", []) if isinstance(item, dict))
+        page_token = page.get("nextPageToken")
+        if page_token:
+            continue
+        next_sync_token = str(page.get("nextSyncToken") or "")
+        break
+    if not next_sync_token:
+        raise GoogleCalendarError("Google Calendar did not return a synchronization cursor.")
+    return events, next_sync_token
+
+
+def _google_calendar_event_metadata(project: dict[str, Any]) -> dict[str, Any]:
+    event = format_project_as_google_event(project)
+    return {key: event[key] for key in ("summary", "description", "location") if key in event}
+
+
+def _google_calendar_comparison_project(
+    project: dict[str, Any],
+    link: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not link or not bool(project.get("isEvent") or project.get("is_event")):
+        return project
+    return {
+        **project,
+        "repeat": str(link.get("last_exported_repeat") or project.get("repeat") or project.get("repeatRule") or "Does not repeat"),
+    }
+
+
+def _apply_google_calendar_schedule(
+    connection: Any,
+    key: str,
+    project: dict[str, Any],
+    event: dict[str, Any],
+    *,
+    validated_schedule: tuple[str, str] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    project_id = str(project.get("id") or "").strip()
+    latest = _postgres_get_hot_item_by_id(
+        connection, key, project_id, include_media=False, for_update=True,
+    )
+    if not latest:
+        # Deletion is authoritative; a delayed Google notification must never
+        # recreate an event that was removed from NVC.
+        return project, False
+    project = latest
+    schedule = validated_schedule or schedule_from_google_event(event, project)
+    if not schedule:
+        return project, False
+    old_start, old_end = project_schedule(project)
+    new_start, new_end = schedule
+    if (
+        normalize_schedule_value(old_start) == normalize_schedule_value(new_start)
+        and normalize_schedule_value(old_end) == normalize_schedule_value(new_end)
+    ):
+        return project, False
+    updated = {
+        **project,
+        "startDate": new_start,
+        "endDate": new_end,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    from psycopg import sql
+
+    query = sql.SQL("update {} set start_date = %s, end_date = %s, updated_at = %s where {} = %s")
+    parameters = (new_start, new_end, updated["updatedAt"], project_id)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            query.format(
+                sql.Identifier("public", TABLE_SPECS[key]["table"]),
+                sql.Identifier(_primary_key_column(key)),
+            ),
+            parameters,
+        )
+    # Only schedule columns are written. Concurrent changes to the roster,
+    # title, media, tasks, or status cannot be overwritten by this import.
+    return updated, True
+
+
+def _process_google_calendar_event_changes(
+    connection: Any,
+    partner_user_id: str,
+    events: list[dict[str, Any]],
+    *,
+    full_sync: bool = False,
+) -> list[str]:
+    _, approved_items = _approved_partner_calendar_items(connection, partner_user_id)
+    links = _google_calendar_links(connection, partner_user_id)
+    links_by_event_id = {str(link.get("google_event_id") or ""): link for link in links}
+    changed_keys: list[str] = []
+    for event in events:
+        event_id = str(event.get("id") or "").strip()
+        link = links_by_event_id.get(event_id)
+        if not link or str(event.get("status") or "confirmed") == "cancelled":
+            continue
+        project_id = str(link.get("project_id") or "").strip()
+        entry = approved_items.get(project_id)
+        if not entry:
+            continue
+        key, project = entry
+        incoming_schedule = schedule_from_google_event(event, _google_calendar_comparison_project(project, link))
+        if not incoming_schedule:
+            continue
+        incoming_start, incoming_end = incoming_schedule
+        baseline_start = str(link.get("last_exported_start") or "")
+        baseline_end = str(link.get("last_exported_end") or "")
+        baseline_repeat = str(
+            link.get("last_exported_repeat")
+            or project.get("repeat")
+            or project.get("repeatRule")
+            or "Does not repeat"
+        )
+        differs_from_baseline = (
+            normalize_schedule_value(incoming_start) != normalize_schedule_value(baseline_start)
+            or normalize_schedule_value(incoming_end) != normalize_schedule_value(baseline_end)
+        )
+        if differs_from_baseline:
+            updated_project, schedule_changed = _apply_google_calendar_schedule(
+                connection,
+                key,
+                project,
+                event,
+                validated_schedule=incoming_schedule,
+            )
+            if schedule_changed and key not in changed_keys:
+                changed_keys.append(key)
+            # Only advance the comparison point after the official record has
+            # been brought into line with the Google event.
+            new_start, new_end = project_schedule(updated_project)
+            _google_calendar_update_link_schedule(
+                connection,
+                partner_user_id,
+                project_id,
+                new_start,
+                new_end,
+                baseline_repeat,
+            )
+        elif full_sync:
+            # A token reset can return unchanged events. Keep their baselines
+            # untouched so pending NVC edits can still be pushed back below.
+            continue
+    return changed_keys
+
+
+def _google_calendar_watch(
+    access_token: str,
+) -> tuple[str, str, str, int]:
+    address = os.getenv("GOOGLE_CALENDAR_WEBHOOK_URL", "").strip()
+    if not address.startswith("https://"):
+        raise GoogleCalendarError(
+            "The server needs a public HTTPS GOOGLE_CALENDAR_WEBHOOK_URL before partner calendar sync can be enabled."
+        )
+    channel_id = str(uuid.uuid4())
+    channel_token = secrets.token_urlsafe(32)
+    response = google_api_request(
+        "/calendars/primary/events/watch",
+        access_token,
+        method="POST",
+        payload={
+            "id": channel_id,
+            "type": "web_hook",
+            "address": address,
+            "token": channel_token,
+            "params": {"ttl": str(DEFAULT_CHANNEL_TTL_SECONDS)},
+        },
+    )
+    expiration = int(response.get("expiration") or 0)
+    if (
+        str(response.get("id") or "") != channel_id
+        or not response.get("resourceId")
+        or expiration <= int(time.time() * 1000)
+    ):
+        raise GoogleCalendarError("Google did not create a valid calendar notification channel.")
+    return (
+        channel_id,
+        channel_token,
+        str(response.get("resourceId") or ""),
+        expiration,
+    )
+
+
+def _google_calendar_stop_watch(access_token: str, channel_id: str, resource_id: str) -> None:
+    if not channel_id or not resource_id:
+        return
+    try:
+        google_api_request(
+            "/channels/stop",
+            access_token,
+            method="POST",
+            payload={"id": channel_id, "resourceId": resource_id},
+        )
+    except GoogleCalendarError:
+        pass
+
+
+def _connect_partner_google_calendar(
+    partner_user_id: str,
+    payload: dict[str, Any],
+) -> tuple[int, list[str]]:
+    if not isinstance(payload.get("projectIds"), list):
+        raise GoogleCalendarError("Select at least one approved project or event to sync.")
+    authorization_code = str(payload.get("authorizationCode") or "").strip()
+    client_id = str(payload.get("clientId") or "").strip()
+    redirect_uri = str(payload.get("redirectUri") or "").strip()
+    code_verifier = str(payload.get("codeVerifier") or "").strip()
+    requested_ids = {
+        str(value or "").strip()
+        for value in payload.get("projectIds", [])
+        if str(value or "").strip()
+    }
+    if not authorization_code or not client_id or not redirect_uri or not code_verifier:
+        raise GoogleCalendarError("Google authorization was incomplete. Please reconnect and try again.")
+    if not requested_ids or len(requested_ids) > 500:
+        raise GoogleCalendarError("Select at least one approved project or event to sync.")
+    key = os.getenv("GOOGLE_CALENDAR_TOKEN_ENCRYPTION_KEY", "").strip()
+    if not key:
+        raise GoogleCalendarError("The server is missing GOOGLE_CALENDAR_TOKEN_ENCRYPTION_KEY.")
+    webhook_url = os.getenv("GOOGLE_CALENDAR_WEBHOOK_URL", "").strip()
+    if not webhook_url.startswith("https://"):
+        raise GoogleCalendarError("The server needs a public HTTPS GOOGLE_CALENDAR_WEBHOOK_URL before partner calendar sync can be enabled.")
+
+    token_payload = exchange_authorization_code(
+        authorization_code,
+        client_id,
+        redirect_uri,
+        code_verifier,
+    )
+    access_token = str(token_payload.get("access_token") or "")
+    google_email = get_google_email(access_token)
+    old_connection: dict[str, Any] | None
+    changed_keys: list[str] = []
+    synced = 0
+    with get_connection() as connection:
+        _lock_google_calendar_transaction(connection, partner_user_id, wait=True)
+        _ensure_google_calendar_tables(connection)
+        user_record = _postgres_get_hot_item_by_id(connection, "users", partner_user_id, include_media=False)
+        expected_email = str((user_record or {}).get("email") or "").strip().lower()
+        if expected_email and expected_email != google_email:
+            raise GoogleCalendarError(
+                f"The Google account {google_email} does not match the email on this NVC account."
+            )
+        _, approved_items = _approved_partner_calendar_items(connection, partner_user_id)
+        selected_items = [approved_items[item_id] for item_id in sorted(requested_ids) if item_id in approved_items]
+        if not selected_items:
+            raise GoogleCalendarError("No requested project or event belongs to an approved proposal for this partner.")
+        old_connection = _google_calendar_row(connection, partner_user_id)
+        previous_links = {
+            str(link.get("project_id") or ""): link
+            for link in _google_calendar_links(connection, partner_user_id)
+        }
+
+        refresh_token = str(token_payload.get("refresh_token") or "").strip()
+        if not refresh_token and old_connection and str(old_connection.get("client_id") or "") == client_id:
+            refresh_token = decrypt_refresh_token(str(old_connection.get("encrypted_refresh_token") or ""))
+        if not refresh_token:
+            raise GoogleCalendarError("Google did not grant offline calendar access. Reconnect and approve calendar access.")
+        encrypted_refresh_token = encrypt_refresh_token(refresh_token)
+
+        for key_name, original_project in selected_items:
+            project = _postgres_get_hot_item_by_id(
+                connection, key_name, str(original_project.get("id") or ""),
+                include_media=False, for_update=True,
+            )
+            if not project:
+                continue
+            project_id = str(project.get("id") or "").strip()
+            event_id = stable_google_event_id(project_id)
+            try:
+                google_event = google_api_request(
+                    f"/calendars/primary/events/{event_id}",
+                    access_token,
+                )
+                is_new = False
+            except GoogleCalendarError as error:
+                if error.status_code != 404:
+                    raise
+                is_new = True
+                event_body = format_project_as_google_event(project)
+                try:
+                    google_event = google_api_request(
+                        "/calendars/primary/events",
+                        access_token,
+                        method="POST",
+                        payload={"id": event_id, **event_body},
+                    )
+                except GoogleCalendarError as insert_error:
+                    if insert_error.status_code != 409:
+                        raise
+                    google_event = google_api_request(
+                        f"/calendars/primary/events/{event_id}",
+                        access_token,
+                    )
+                    is_new = False
+
+            old_link = previous_links.get(project_id)
+            if not is_new:
+                incoming_schedule = schedule_from_google_event(google_event, _google_calendar_comparison_project(project, old_link))
+                current_start, current_end = project_schedule(project)
+                previous_start = str((old_link or {}).get("last_exported_start") or current_start)
+                previous_end = str((old_link or {}).get("last_exported_end") or current_end)
+                is_event = bool(project.get("isEvent") or project.get("is_event"))
+                current_repeat = str(project.get("repeat") or project.get("repeatRule") or "Does not repeat")
+                previous_repeat = str((old_link or {}).get("last_exported_repeat") or current_repeat)
+                google_changed = bool(incoming_schedule) and (
+                    normalize_schedule_value(incoming_schedule[0]) != normalize_schedule_value(previous_start)
+                    or normalize_schedule_value(incoming_schedule[1]) != normalize_schedule_value(previous_end)
+                )
+                legacy_all_day_schedule = (
+                    not old_link
+                    and incoming_schedule
+                    and "T" not in current_start
+                    and "T" not in current_end
+                    and not google_event.get("recurrence")
+                    and str(project.get("repeat") or project.get("repeatRule") or "Does not repeat") == "Does not repeat"
+                    and isinstance(google_event.get("start"), dict)
+                    and isinstance(google_event.get("end"), dict)
+                    and google_event["start"].get("date") == str(current_start)[:10]
+                    and google_event["end"].get("date") == str(current_end)[:10]
+                )
+                legacy_repeat_schedule = (
+                    not old_link
+                    and is_event
+                    and not google_event.get("recurrence")
+                    and bool(format_project_as_google_event(project).get("recurrence"))
+                    and isinstance(google_event.get("start"), dict)
+                    and isinstance(google_event.get("end"), dict)
+                    and normalize_schedule_value(str(
+                        google_event["start"].get("dateTime") or google_event["start"].get("date") or ""
+                    )) == normalize_schedule_value(current_start)
+                    and normalize_schedule_value(str(
+                        google_event["end"].get("dateTime") or google_event["end"].get("date") or ""
+                    )) == normalize_schedule_value(current_end)
+                )
+                if legacy_all_day_schedule:
+                    # The previous client exported all-day event ends as an
+                    # inclusive date. Treat that legacy representation as the
+                    # existing NVC schedule on first connection.
+                    google_changed = False
+                nvc_changed = (
+                    normalize_schedule_value(current_start) != normalize_schedule_value(previous_start)
+                    or normalize_schedule_value(current_end) != normalize_schedule_value(previous_end)
+                    or (is_event and current_repeat != previous_repeat)
+                )
+                if google_changed:
+                    project, schedule_changed = _apply_google_calendar_schedule(
+                        connection,
+                        key_name,
+                        project,
+                        google_event,
+                        validated_schedule=incoming_schedule,
+                    )
+                    if schedule_changed and key_name not in changed_keys:
+                        changed_keys.append(key_name)
+                if (not google_changed and (nvc_changed or legacy_all_day_schedule or legacy_repeat_schedule)) or (google_changed and is_event and current_repeat != previous_repeat):
+                    event_body = format_project_as_google_event(project)
+                    schedule_body = {field: event_body[field] for field in ("start", "end")}
+                    schedule_body["recurrence"] = event_body.get("recurrence", [])
+                    google_event = google_api_request(
+                        f"/calendars/primary/events/{event_id}",
+                        access_token,
+                        method="PATCH",
+                        payload=schedule_body,
+                        headers={"If-Match": str(google_event.get("etag") or "")}
+                        if google_event.get("etag") else None,
+                    )
+
+            # Preserve dates and times when refreshing a linked event from the
+            # app. Only its descriptive fields are sent on this PATCH.
+            if not is_new:
+                google_api_request(
+                    f"/calendars/primary/events/{event_id}",
+                    access_token,
+                    method="PATCH",
+                    payload=_google_calendar_event_metadata(project),
+                )
+
+            current_start, current_end = project_schedule(project)
+            current_repeat = str(project.get("repeat") or project.get("repeatRule") or "Does not repeat")
+            _google_calendar_upsert_link(
+                connection,
+                partner_user_id,
+                project_id,
+                event_id,
+                current_start,
+                current_end,
+                current_repeat,
+            )
+            synced += 1
+
+        # Establish an initial incremental-sync cursor before opening the push
+        # channel. Changes between this list and watch creation are replayed
+        # immediately after the connection has been persisted.
+        initial_events, sync_token = _google_calendar_list_events(access_token)
+        changed_keys.extend(
+            key_name
+            for key_name in _process_google_calendar_event_changes(
+                connection,
+                partner_user_id,
+                initial_events,
+                full_sync=True,
+            )
+            if key_name not in changed_keys
+        )
+        channel_id, channel_token, resource_id, expiration = _google_calendar_watch(access_token)
+        try:
+            _google_calendar_upsert_connection(
+                connection,
+                partner_user_id=partner_user_id,
+                google_email=google_email,
+                client_id=client_id,
+                encrypted_refresh_token=encrypted_refresh_token,
+                sync_token=sync_token,
+                channel_id=channel_id,
+                channel_token_hash=hashlib.sha256(channel_token.encode("utf-8")).hexdigest(),
+                resource_id=resource_id,
+                channel_expiration=expiration,
+            )
+            connection.commit()
+        except Exception:
+            _google_calendar_stop_watch(access_token, channel_id, resource_id)
+            raise
+
+    if old_connection:
+        _google_calendar_stop_watch(
+            access_token,
+            str(old_connection.get("channel_id") or ""),
+            str(old_connection.get("resource_id") or ""),
+        )
+
+    # Replay edits that may have happened while the first snapshot and watch
+    # were being established, then start regular push and incremental sync.
+    changed_keys.extend(
+        key_name
+        for key_name in _run_google_calendar_sync(
+            partner_user_id,
+            expected_channel_id=channel_id,
+            broadcast_changes=False,
+        )
+        if key_name not in changed_keys
+    )
+    return synced, changed_keys
+
+
+def _google_calendar_lock_for_user(partner_user_id: str) -> threading.Lock:
+    with _google_calendar_sync_locks_guard:
+        lock = _google_calendar_sync_locks.get(partner_user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _google_calendar_sync_locks[partner_user_id] = lock
+        return lock
+
+
+def _run_google_calendar_sync(
+    partner_user_id: str,
+    *,
+    expected_channel_id: str | None = None,
+    broadcast_changes: bool = True,
+) -> list[str]:
+    sync_lock = _google_calendar_lock_for_user(partner_user_id)
+    if not sync_lock.acquire(blocking=False):
+        return []
+    changed_keys: list[str] = []
+    committed_keys: list[str] = []
+    try:
+        with get_connection() as connection:
+            if not _lock_google_calendar_transaction(connection, partner_user_id):
+                return []
+            _ensure_google_calendar_tables(connection)
+            calendar_connection = _google_calendar_row(connection, partner_user_id)
+            if not calendar_connection:
+                return []
+            if expected_channel_id and str(calendar_connection.get("channel_id") or "") != expected_channel_id:
+                return []
+            sync_token = str(calendar_connection.get("sync_token") or "")
+
+            refresh_token = decrypt_refresh_token(str(calendar_connection.get("encrypted_refresh_token") or ""))
+            access_token = refresh_access_token(str(calendar_connection.get("client_id") or ""), refresh_token)
+            try:
+                google_events, next_sync_token = _google_calendar_list_events(access_token, sync_token or None)
+                full_sync = False
+            except GoogleCalendarError as error:
+                if error.status_code != 410:
+                    raise
+                google_events, next_sync_token = _google_calendar_list_events(access_token)
+                full_sync = True
+
+            _, current_approved_items = _approved_partner_calendar_items(connection, partner_user_id)
+            changed_keys.extend(
+                _process_google_calendar_event_changes(
+                    connection,
+                    partner_user_id,
+                    google_events,
+                    full_sync=full_sync,
+                )
+            )
+
+            # Changes made in NVC are sent back to Google only when Google is
+            # still at the last shared schedule. A newer Google edit wins and
+            # is imported on the next notification/reconciliation cycle.
+            links = _google_calendar_links(connection, partner_user_id)
+            links_by_project = {str(link.get("project_id") or ""): link for link in links}
+            google_events_by_id = {str(event.get("id") or ""): event for event in google_events}
+            for project_id, link in sorted(links_by_project.items()):
+                entry = current_approved_items.get(project_id)
+                if not entry:
+                    continue
+                project, key_name = _postgres_get_project_like_item_by_id(
+                    connection,
+                    project_id,
+                    include_media=False,
+                )
+                if not key_name or not project:
+                    continue
+                current_start, current_end = project_schedule(project)
+                previous_start = str(link.get("last_exported_start") or "")
+                previous_end = str(link.get("last_exported_end") or "")
+                is_event = bool(project.get("isEvent") or project.get("is_event"))
+                current_repeat = str(project.get("repeat") or project.get("repeatRule") or "Does not repeat")
+                previous_repeat = str(link.get("last_exported_repeat") or current_repeat)
+                nvc_changed = (
+                    normalize_schedule_value(current_start) != normalize_schedule_value(previous_start)
+                    or normalize_schedule_value(current_end) != normalize_schedule_value(previous_end)
+                    or (is_event and current_repeat != previous_repeat)
+                )
+                if not nvc_changed:
+                    continue
+
+                google_event_id = str(link.get("google_event_id") or "")
+                google_event = google_events_by_id.get(google_event_id)
+                if google_event is None:
+                    try:
+                        google_event = google_api_request(
+                            f"/calendars/primary/events/{google_event_id}",
+                            access_token,
+                        )
+                    except GoogleCalendarError as error:
+                        if error.status_code == 404:
+                            continue
+                        raise
+                if str(google_event.get("status") or "") == "cancelled":
+                    continue
+
+                google_schedule = schedule_from_google_event(google_event, _google_calendar_comparison_project(project, link))
+                if google_schedule and (
+                    normalize_schedule_value(google_schedule[0]) != normalize_schedule_value(previous_start)
+                    or normalize_schedule_value(google_schedule[1]) != normalize_schedule_value(previous_end)
+                ):
+                    updated_project, schedule_changed = _apply_google_calendar_schedule(
+                        connection,
+                        key_name,
+                        project,
+                        google_event,
+                        validated_schedule=google_schedule,
+                    )
+                    if schedule_changed and key_name not in changed_keys:
+                        changed_keys.append(key_name)
+                    new_start, new_end = project_schedule(updated_project)
+                    _google_calendar_update_link_schedule(
+                        connection,
+                        partner_user_id,
+                        project_id,
+                        new_start,
+                        new_end,
+                        previous_repeat,
+                    )
+                    if current_repeat == previous_repeat:
+                        continue
+                    # Preserve a newer official repeat rule while importing
+                    # only Google's dates/time, then send that official rule.
+                    project = updated_project
+                    current_start, current_end = new_start, new_end
+
+                event_body = format_project_as_google_event(project)
+                schedule_body = {field: event_body[field] for field in ("start", "end")}
+                schedule_body["recurrence"] = event_body.get("recurrence", [])
+                try:
+                    google_api_request(
+                        f"/calendars/primary/events/{google_event_id}",
+                        access_token,
+                        method="PATCH",
+                        payload=schedule_body,
+                        headers={"If-Match": str(google_event.get("etag") or "")}
+                        if google_event.get("etag") else None,
+                    )
+                except GoogleCalendarError as error:
+                    if error.status_code == 412:
+                        # The Google event changed after the comparison read.
+                        # Leave the baseline unchanged and process the newer
+                        # schedule on the next push or periodic sync.
+                        continue
+                    raise
+                _google_calendar_update_link_schedule(
+                    connection,
+                    partner_user_id,
+                    project_id,
+                    current_start,
+                    current_end,
+                    current_repeat,
+                )
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "update google_calendar_connections set sync_token = %s, updated_at = %s where partner_user_id = %s",
+                    (next_sync_token, datetime.now(timezone.utc).isoformat(), partner_user_id),
+                )
+            connection.commit()
+            committed_keys = list(changed_keys)
+
+        if changed_keys and broadcast_changes:
+            _invalidate_collection_cache(changed_keys)
+            _projects_snapshot_cache.clear()
+            loop = _realtime_event_loop
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    connection_manager.broadcast_storage_event(changed_keys),
+                    loop,
+                )
+
+        expiration = int(calendar_connection.get("channel_expiration") or 0)
+        if expiration and expiration <= int((time.time() + 24 * 60 * 60) * 1000):
+            _renew_google_calendar_watch(partner_user_id, access_token, calendar_connection)
+        return committed_keys
+    except GoogleCalendarError as error:
+        print(f"[WARN] Partner Google Calendar sync failed for {partner_user_id}: {error}", flush=True)
+        return committed_keys
+    except Exception as error:
+        print(
+            f"[WARN] Partner Google Calendar sync failed for {partner_user_id}: {type(error).__name__}",
+            flush=True,
+        )
+        return committed_keys
+    finally:
+        sync_lock.release()
+
+
+def _renew_google_calendar_watch(
+    partner_user_id: str,
+    access_token: str,
+    old_connection: dict[str, Any],
+) -> None:
+    try:
+        channel_id, channel_token, resource_id, expiration = _google_calendar_watch(access_token)
+    except GoogleCalendarError as error:
+        print(f"[WARN] Partner Google Calendar watch renewal failed for {partner_user_id}: {error}", flush=True)
+        return
+    with get_connection() as connection:
+        _ensure_google_calendar_tables(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update google_calendar_connections
+                set channel_id = %s, channel_token_hash = %s, resource_id = %s,
+                    channel_expiration = %s, updated_at = %s
+                where partner_user_id = %s and channel_id = %s
+                """,
+                (
+                    channel_id,
+                    hashlib.sha256(channel_token.encode("utf-8")).hexdigest(),
+                    resource_id,
+                    expiration,
+                    datetime.now(timezone.utc).isoformat(),
+                    partner_user_id,
+                    str(old_connection.get("channel_id") or ""),
+                ),
+            )
+            replaced = cursor.rowcount == 1
+        connection.commit()
+    if not replaced:
+        # A reconnect may have installed another channel after this sync
+        # committed. Stop only the unused replacement created here.
+        _google_calendar_stop_watch(access_token, channel_id, resource_id)
+        return
+    _google_calendar_stop_watch(
+        access_token,
+        str(old_connection.get("channel_id") or ""),
+        str(old_connection.get("resource_id") or ""),
+    )
+
+
+def _push_partner_google_calendar_item_sync(storage_key: str, project: dict[str, Any]) -> None:
+    project_id = str(project.get("id") or "").strip()
+    if storage_key not in {"projects", "events"} or not project_id:
+        return
+    with get_connection() as connection:
+        _ensure_google_calendar_tables(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select partner_user_id from google_calendar_event_links where project_id = %s",
+                (project_id,),
+            )
+            partner_user_ids = [str(row[0]) for row in cursor.fetchall() if row and row[0]]
+    for partner_user_id in partner_user_ids:
+        # Read the latest official record in the baseline-aware sync worker.
+        # A delayed save notification must not push an obsolete payload over
+        # a newer edit made in Google Calendar.
+        _run_google_calendar_sync(partner_user_id)
+
+
+async def _push_partner_google_calendar_item(storage_key: str, project: dict[str, Any]) -> None:
+    try:
+        await asyncio.to_thread(_push_partner_google_calendar_item_sync, storage_key, project)
+    except Exception as error:
+        print(f"[WARN] Official Google Calendar schedule push failed: {type(error).__name__}", flush=True)
+
+
+def _google_calendar_scheduler_loop() -> None:
+    while True:
+        time.sleep(60)
+        try:
+            with get_connection() as connection:
+                _ensure_google_calendar_tables(connection)
+                with connection.cursor() as cursor:
+                    cursor.execute("select partner_user_id from google_calendar_connections")
+                    partner_user_ids = [str(row[0]) for row in cursor.fetchall() if row and row[0]]
+            for partner_user_id in partner_user_ids:
+                _run_google_calendar_sync(partner_user_id)
+        except Exception as error:
+            print(f"[WARN] Partner Google Calendar scheduler skipped: {type(error).__name__}", flush=True)
+
+
+def _start_google_calendar_scheduler() -> None:
+    global _google_calendar_scheduler_started
+    with _google_calendar_scheduler_lock:
+        if _google_calendar_scheduler_started:
+            return
+        _google_calendar_scheduler_started = True
+    threading.Thread(target=_google_calendar_scheduler_loop, daemon=True).start()
+
+
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
@@ -5659,8 +6692,9 @@ def startup() -> None:
                 _ensure_password_reset_otp_table(connection)
                 ensure_volunteer_time_logs_table_shape(connection)
                 _ensure_reminder_tables(connection)
+                _ensure_google_calendar_tables(connection)
                 connection.commit()
-            print("[OK] Notification read-state, email OTP, volunteer time logs, and integration schemas ensured.")
+            print("[OK] Notification read-state, email OTP, volunteer time logs, Google Calendar, and integration schemas ensured.")
         except Exception as error:
             print(f"[WARN] Schema ensure skipped: {error}")
 
@@ -5693,6 +6727,7 @@ def startup() -> None:
 
     threading.Thread(target=_initialize_postgres_background, daemon=True).start()
     _start_event_reminder_scheduler()
+    _start_google_calendar_scheduler()
 
     # Auto-cleanup: Compress oversized base64 images to prevent slow API responses
     # TEMPORARILY DISABLED - was causing backend to hang on startup
@@ -11506,6 +12541,99 @@ def get_project_record_by_id(request: FastAPIRequest, item_id: str) -> dict[str,
     return {"key": key, "item": item}
 
 
+@app.post("/partner/google-calendar/connect")
+async def connect_partner_google_calendar(
+    request: FastAPIRequest,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    session = _get_session_user(request)
+    if _normalize_role(session) != "partner":
+        raise HTTPException(status_code=403, detail="Only partner accounts can connect a partner calendar.")
+    partner_user_id = str(session.get("sub") or "").strip()
+    try:
+        synced, changed_keys = await asyncio.to_thread(
+            _connect_partner_google_calendar,
+            partner_user_id,
+            payload,
+        )
+    except GoogleCalendarError as error:
+        status_code = 503 if any(
+            marker in str(error)
+            for marker in (
+                "not configured",
+                "missing GOOGLE_",
+                "public HTTPS",
+                "encryption is not configured",
+            )
+        ) else (403 if "does not match the email" in str(error) else 400)
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
+    except Exception as error:
+        print(f"[WARN] Partner Google Calendar connection failed: {type(error).__name__}", flush=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Google Calendar could not be connected. Please try again.",
+        ) from error
+
+    if changed_keys:
+        _invalidate_collection_cache(changed_keys)
+        _projects_snapshot_cache.clear()
+        await connection_manager.broadcast_storage_event(changed_keys)
+    return {"connected": True, "synced": synced, "changedKeys": changed_keys}
+
+
+@app.post("/api/google-calendar/partner/notifications", status_code=204)
+@app.post("/google-calendar/partner/notifications", status_code=204)
+async def google_calendar_partner_notification(
+    request: FastAPIRequest,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    channel_id = str(request.headers.get("x-goog-channel-id") or "").strip()
+    channel_token = str(request.headers.get("x-goog-channel-token") or "").strip()
+    resource_id = str(request.headers.get("x-goog-resource-id") or "").strip()
+    resource_state = str(request.headers.get("x-goog-resource-state") or "").strip().lower()
+    if not channel_id or not channel_token:
+        raise HTTPException(status_code=404, detail="Calendar channel was not found.")
+
+    try:
+        with get_connection() as connection:
+            _ensure_google_calendar_tables(connection)
+            from psycopg.rows import dict_row
+
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    select partner_user_id, channel_token_hash, resource_id
+                    from google_calendar_connections
+                    where channel_id = %s
+                    """,
+                    (channel_id,),
+                )
+                channel = cursor.fetchone()
+    except Exception as error:
+        print(f"[WARN] Google Calendar notification lookup failed: {type(error).__name__}", flush=True)
+        raise HTTPException(status_code=503, detail="Calendar notification could not be verified.") from error
+
+    if not channel:
+        raise HTTPException(status_code=404, detail="Calendar channel was not found.")
+    supplied_hash = hashlib.sha256(channel_token.encode("utf-8")).hexdigest()
+    expected_hash = str(channel.get("channel_token_hash") or "")
+    if not expected_hash or not hmac.compare_digest(supplied_hash, expected_hash):
+        raise HTTPException(status_code=404, detail="Calendar channel was not found.")
+    expected_resource_id = str(channel.get("resource_id") or "")
+    if expected_resource_id and resource_id != expected_resource_id:
+        raise HTTPException(status_code=404, detail="Calendar channel was not found.")
+
+    # Google notifications only say that the collection changed; changed event
+    # details are fetched using the persisted incremental sync token.
+    if resource_state in {"exists", "sync"}:
+        background_tasks.add_task(
+            _run_google_calendar_sync,
+            str(channel.get("partner_user_id") or ""),
+            expected_channel_id=channel_id,
+        )
+    return Response(status_code=204)
+
+
 @app.get("/storage/{key}/items/{item_id}")
 def get_storage_item_by_id(
     request: FastAPIRequest,
@@ -11572,8 +12700,14 @@ async def put_storage_item_by_id(
         raise HTTPException(status_code=400, detail="Item id does not match the route.")
     item["id"] = normalized_item_id
 
+    schedule_changed = False
     try:
         with get_connection() as connection:
+            previous_item = (
+                _postgres_get_hot_item_by_id(connection, key, normalized_item_id, include_media=False)
+                if key in {"projects", "events", "programs"}
+                else None
+            )
             if key == "users" and _postgres_get_hot_item_by_id(connection, "users", normalized_item_id) is None:
                 # Registration is the only supported account-creation path.
                 # Do not let a stale admin page or another delayed client PUT
@@ -11591,6 +12725,16 @@ async def put_storage_item_by_id(
             elif key in {"programs", "projects"}:
                 _reject_duplicate_named_writes(connection, key, [item])
             saved_item = _postgres_upsert_hot_item(connection, key, item)
+            if key in {"projects", "events", "programs"}:
+                schedule_changed = (
+                    previous_item is None
+                    or normalize_schedule_value(str(previous_item.get("startDate") or ""))
+                    != normalize_schedule_value(str(saved_item.get("startDate") or ""))
+                    or normalize_schedule_value(str(previous_item.get("endDate") or previous_item.get("startDate") or ""))
+                    != normalize_schedule_value(str(saved_item.get("endDate") or saved_item.get("startDate") or ""))
+                    or str(previous_item.get("repeat") or previous_item.get("repeatRule") or "Does not repeat")
+                    != str(saved_item.get("repeat") or saved_item.get("repeatRule") or "Does not repeat")
+                )
             changed_keys = [key]
             if key == "users" and _ensure_volunteer_profile_for_user(connection, item):
                 changed_keys.append("volunteers")
@@ -11621,6 +12765,8 @@ async def put_storage_item_by_id(
     ):
         _projects_snapshot_cache.clear()
     asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    if schedule_changed:
+        asyncio.create_task(_push_partner_google_calendar_item(key, saved_item))
     return {"status": "ok", "item": saved_item, "changedKeys": changed_keys}
 
 
@@ -11669,6 +12815,7 @@ async def _put_storage_item_once(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
         changed_keys = [key]
+        google_outbound_items: list[dict[str, Any]] = []
         with get_connection() as connection:
             try:
                 if key in {"projects", "events"}:
@@ -11682,6 +12829,28 @@ async def _put_storage_item_once(
                 removed_project_ids: set[str] = set()
                 if key in {"projects", "programs", "events"}:
                     current_items = get_postgres_hot_storage_collection(connection, key)
+                    existing_by_id = {
+                        str(current_item.get("id") or "").strip(): current_item
+                        for current_item in current_items
+                        if isinstance(current_item, dict) and str(current_item.get("id") or "").strip()
+                    }
+                    for next_item in payload.value:
+                        if not isinstance(next_item, dict):
+                            continue
+                        next_id = str(next_item.get("id") or "").strip()
+                        if not next_id:
+                            continue
+                        previous_item = existing_by_id.get(next_id)
+                        if (
+                            previous_item is None
+                            or normalize_schedule_value(str(previous_item.get("startDate") or ""))
+                            != normalize_schedule_value(str(next_item.get("startDate") or ""))
+                            or normalize_schedule_value(str(previous_item.get("endDate") or previous_item.get("startDate") or ""))
+                            != normalize_schedule_value(str(next_item.get("endDate") or next_item.get("startDate") or ""))
+                            or str(previous_item.get("repeat") or previous_item.get("repeatRule") or "Does not repeat")
+                            != str(next_item.get("repeat") or next_item.get("repeatRule") or "Does not repeat")
+                        ):
+                            google_outbound_items.append(next_item)
                     current_ids = {
                         str(item.get("id") or "").strip()
                         for item in current_items
@@ -11791,6 +12960,9 @@ async def _put_storage_item_once(
         _invalidate_collection_cache(changed_keys)
         _projects_snapshot_cache.clear()
         asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+        if key in {"projects", "programs", "events"}:
+            for project in google_outbound_items:
+                asyncio.create_task(_push_partner_google_calendar_item(key, project))
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
         with get_connection() as connection:

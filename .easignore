@@ -5,11 +5,17 @@ node_modules/
 .git/
 .env
 .env.*
+client_secret*.json
+google-calendar-credentials.json
 .venv/
 .dev-logs/
 .dev-pids/
 artifacts/
 dist/
+.web-export-check/
+.expo-export-check-*/
+.run-logs/
+.run-state/
 docs/
 migration_backups/
 playwright-report/
