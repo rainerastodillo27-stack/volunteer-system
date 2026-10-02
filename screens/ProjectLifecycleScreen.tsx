@@ -167,6 +167,7 @@ import {
   setStorageItem,
 
   setVolunteerAttendanceChecked,
+  updateEventTaskAssignments,
 
 } from '../models/storage';
 
@@ -1006,32 +1007,6 @@ function getTaskAssignedVolunteerIds(task: ProjectInternalTask, volunteersList?:
   });
 
   return Array.from(canonicalSet);
-}
-
-
-
-function getTaskAssignedVolunteerNames(task: ProjectInternalTask): string[] {
-
-  return Array.from(
-
-    new Set(
-
-      [
-
-        ...(Array.isArray(task.assignedVolunteerNames) ? task.assignedVolunteerNames : []),
-
-        task.assignedVolunteerName,
-
-      ]
-
-        .map(value => String(value || '').trim())
-
-        .filter(Boolean)
-
-    )
-
-  );
-
 }
 
 
@@ -5893,41 +5868,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       ? volunteers.find(volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId) || null
       : null;
 
-    const updatedTasks = (eventProject.internalTasks || []).map(task => {
-      if (task.id !== taskId) {
-        return task;
-      }
-
-      return {
-        ...task,
-        assignedVolunteerId: volunteerId || undefined,
-        assignedVolunteerName: targetVolunteer?.name || undefined,
-        assignedVolunteerIds: volunteerId ? [volunteerId] : undefined,
-        assignedVolunteerNames: targetVolunteer?.name ? [targetVolunteer.name] : undefined,
-        status: volunteerId ? 'Assigned' : 'Unassigned',
-        updatedAt: new Date().toISOString(),
-      } as ProjectInternalTask;
-    });
-
-    await saveEvent({
-      ...eventProject,
-      internalTasks: updatedTasks,
-      updatedAt: new Date().toISOString(),
-    });
+    const savedAssignment = await updateEventTaskAssignments(
+      eventProject.id,
+      taskId,
+      volunteerId ? [volunteerId] : [],
+    );
+    const assignedTask = savedAssignment.task;
 
     if (targetVolunteer && volunteerId) {
-      const assignedTask = updatedTasks.find(t => t.id === taskId);
-      if (assignedTask) {
-        void notifyVolunteerAboutTaskUpdate({
-          event: eventProject,
-          task: assignedTask,
-          volunteer: targetVolunteer,
-          actorUserId: user?.id,
-          action: 'assigned',
-        }).catch(notifErr => {
-          console.warn('[TASK] Failed to notify volunteer about task assignment:', notifErr);
-        });
-      }
+      void notifyVolunteerAboutTaskUpdate({
+        event: savedAssignment.event,
+        task: assignedTask,
+        volunteer: targetVolunteer,
+        actorUserId: user?.id,
+        action: 'assigned',
+      }).catch(notifErr => {
+        console.warn('[TASK] Failed to notify volunteer about task assignment:', notifErr);
+      });
     }
   };
 
@@ -5963,31 +5920,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         return;
       }
 
-      const updatedTask = {
-        ...targetTask,
-        assignedVolunteerIds: [...existingIds, volunteer.id],
-        assignedVolunteerId: volunteer.id,
-        assignedVolunteerName: volunteer.name,
-        assignedVolunteerNames: [
-          ...getTaskAssignedVolunteerNames(targetTask),
-          volunteer.name,
-        ],
-        status: 'Assigned' as const,
-        updatedAt: new Date().toISOString(),
-      };
-      const updatedTasks = (eventProject.internalTasks || []).map(task =>
-        task.id === targetTask.id ? updatedTask : task
+      const savedAssignment = await updateEventTaskAssignments(
+        eventProject.id,
+        taskId,
+        [],
+        { action: 'add', volunteerId: volunteer.id },
       );
-      const updatedEvent = {
-        ...eventProject,
-        internalTasks: updatedTasks,
-        updatedAt: new Date().toISOString(),
-      };
-
-      await saveProjectLikeRecord(updatedEvent);
+      const updatedEvent = savedAssignment.event;
+      const updatedTask = savedAssignment.task;
       setProjects(current => current.map(project =>
         project.id === eventProject.id ? updatedEvent : project
       ));
+      setSelectedProject(current => current?.id === updatedEvent.id
+        ? mergeProjectRefresh(current, updatedEvent)
+        : current
+      );
       showTaskSaveNotice(`${volunteer.name} was assigned to "${targetTask.title}".`, 1800);
       const fullVolunteer = volunteers.find(candidate =>
         candidate.id === volunteer.id || candidate.userId === volunteer.id ||
@@ -6018,41 +5965,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const handleRemoveVolunteerFromEventTask = async (eventProject: Project, taskId: string, volunteerId: string) => {
     const targetVolunteer = volunteers.find(volunteer => volunteer.id === volunteerId || volunteer.userId === volunteerId) || null;
-    const targetVolunteerIdentifiers = new Set(
-      [volunteerId, targetVolunteer?.id, targetVolunteer?.userId]
-        .map(value => String(value || '').trim())
-        .filter(Boolean)
-    );
     const originalTask = (eventProject.internalTasks || []).find(t => t.id === taskId);
-
-    const updatedTasks = (eventProject.internalTasks || []).map(task => {
-      if (task.id !== taskId) return task;
-
-      const nextAssignedIds = getTaskAssignedVolunteerIds(task, volunteers)
-        .filter(id => !targetVolunteerIdentifiers.has(id));
-
-      return {
-        ...task,
-        assignedVolunteerId: nextAssignedIds[0] || undefined,
-        assignedVolunteerName: nextAssignedIds[0]
-          ? volunteers.find(volunteer => volunteer.id === nextAssignedIds[0] || volunteer.userId === nextAssignedIds[0])?.name
-          : undefined,
-        assignedVolunteerIds: nextAssignedIds.length ? nextAssignedIds : undefined,
-        assignedVolunteerNames: nextAssignedIds.map(id => volunteers.find(volunteer => volunteer.id === id || volunteer.userId === id)?.name).filter(Boolean) as string[],
-        status: nextAssignedIds.length ? task.status : 'Unassigned',
-        updatedAt: new Date().toISOString(),
-      } as ProjectInternalTask;
-    });
-
-    await saveEvent({
-      ...eventProject,
-      internalTasks: updatedTasks,
-      updatedAt: new Date().toISOString(),
-    });
+    const savedAssignment = await updateEventTaskAssignments(
+      eventProject.id,
+      taskId,
+      [],
+      { action: 'remove', volunteerId },
+    );
 
     if (targetVolunteer && originalTask) {
       void notifyVolunteerAboutTaskUnassignment({
-        event: eventProject,
+        event: savedAssignment.event,
         task: originalTask,
         volunteer: targetVolunteer,
         actorUserId: user?.id,
@@ -9574,42 +9497,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           const targetVolunteer = volunteers.find(volunteer =>
             volunteer.id === volunteerId || volunteer.userId === volunteerId
           );
-          const targetVolunteerIdentifiers = new Set(
-            [volunteerId, targetVolunteer?.id, targetVolunteer?.userId]
-              .map(value => String(value || '').trim())
-              .filter(Boolean)
+          const savedAssignment = await updateEventTaskAssignments(
+            currentSelectedProject.id,
+            task.id,
+            [],
+            { action: 'remove', volunteerId },
           );
-          const existingIds = getTaskAssignedVolunteerIds(task, volunteers);
-          const nextIds = existingIds.filter(id => !targetVolunteerIdentifiers.has(id));
-          const assignable = getAssignableVolunteerOptions(currentSelectedProject);
-          const nextVolunteerNames = nextIds
-            .map(id =>
-              volunteers.find(v => v.id === id || v.userId === id)?.name ||
-              assignable.find(v => v.id === id)?.name ||
-              ''
-            )
-            .filter(Boolean);
-
-          const updatedTask: ProjectInternalTask = {
-            ...task,
-            assignedVolunteerId: nextIds[0] || undefined,
-            assignedVolunteerName: nextVolunteerNames[0] || undefined,
-            assignedVolunteerIds: nextIds.length > 0 ? nextIds : undefined,
-            assignedVolunteerNames: nextVolunteerNames.length > 0 ? nextVolunteerNames : undefined,
-            status: nextIds.length > 0 ? 'Assigned' : 'Unassigned',
-          };
-
-          const taskCards = Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : [];
-          const updatedTasks = taskCards.map(t => t.id === task.id ? updatedTask : t);
-
-          await saveProjectLikeRecord({ ...currentSelectedProject, internalTasks: updatedTasks });
+          const savedEvent = savedAssignment.event;
           clearStorageCache(['projects', 'events']);
           setProjects(currentProjects =>
             currentProjects.map(p =>
-              p.id === currentSelectedProject.id ? { ...currentSelectedProject, internalTasks: updatedTasks } : p
+              p.id === savedEvent.id ? savedEvent : p
             )
           );
-          setSelectedProject({ ...currentSelectedProject, internalTasks: updatedTasks });
+          setSelectedProject(savedEvent);
 
           const targetVol = targetVolunteer;
           if (targetVol) {
@@ -9623,7 +9524,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             });
           }
 
-          if (nextIds.length === 0) {
+          if ((savedAssignment.task.assignedVolunteerIds || []).length === 0) {
             setRemoveVolunteerPickerTaskId(null);
           }
         } catch (error) {
@@ -9656,26 +9557,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       onConfirm: async () => {
         setIsRemovingVolunteerId('ALL');
         try {
-          const updatedTask: ProjectInternalTask = {
-            ...task,
-            assignedVolunteerId: undefined,
-            assignedVolunteerName: undefined,
-            assignedVolunteerIds: undefined,
-            assignedVolunteerNames: undefined,
-            status: 'Unassigned',
-          };
-
-          const taskCards = Array.isArray(currentSelectedProject.internalTasks) ? currentSelectedProject.internalTasks : [];
-          const updatedTasks = taskCards.map(t => t.id === task.id ? updatedTask : t);
-
-          await saveProjectLikeRecord({ ...currentSelectedProject, internalTasks: updatedTasks });
+          const savedAssignment = await updateEventTaskAssignments(
+            currentSelectedProject.id,
+            task.id,
+            [],
+            { action: 'clear' },
+          );
+          const savedEvent = savedAssignment.event;
           clearStorageCache(['projects', 'events']);
           setProjects(currentProjects =>
             currentProjects.map(p =>
-              p.id === currentSelectedProject.id ? { ...currentSelectedProject, internalTasks: updatedTasks } : p
+              p.id === savedEvent.id ? savedEvent : p
             )
           );
-          setSelectedProject({ ...currentSelectedProject, internalTasks: updatedTasks });
+          setSelectedProject(savedEvent);
 
           for (const vid of existingIds) {
             const targetVol = volunteers.find(v => v.id === vid || v.userId === vid);

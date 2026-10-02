@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { PartnerTabParamList } from '../navigation/PartnerNavigator';
 import { getPartnerDashboardSnapshot, subscribeToStorageChanges } from '../models/storage';
@@ -36,28 +36,35 @@ export default function PartnerHomeScreen() {
   const { openNotifications, notificationCount } = useNotificationCenter();
   const [partner, setPartner] = React.useState<Partner | null>(null);
 
-  React.useEffect(() => {
-    if (!user?.id) return;
-    
-    const loadPartner = async () => {
-      try {
-        const snapshot = await getPartnerDashboardSnapshot(false, true);
-        const owned = snapshot.partners.find((p: Partner) => 
-          p.ownerUserId === user.id || 
-          (p.contactEmail && p.contactEmail.toLowerCase() === user.email?.toLowerCase())
-        );
-        setPartner(owned || null);
-      } catch (e) {}
-    };
-    
-    loadPartner();
-    const unsub = subscribeToStorageChanges(
-      ['partners', 'projects', 'events', 'programs', 'partnerProjectApplications'],
-      () => loadPartner()
-    );
-    
-    return () => unsub?.();
-  }, [user]);
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!user?.id) return undefined;
+
+      let isCurrent = true;
+      const loadPartner = async () => {
+        try {
+          const snapshot = await getPartnerDashboardSnapshot(false, true);
+          if (!isCurrent) return;
+          const owned = snapshot.partners.find((p: Partner) =>
+            p.ownerUserId === user.id ||
+            (p.contactEmail && p.contactEmail.toLowerCase() === user.email?.toLowerCase())
+          );
+          setPartner(owned || null);
+        } catch {}
+      };
+
+      void loadPartner();
+      const unsubscribe = subscribeToStorageChanges(
+        ['partners', 'projects', 'events', 'programs', 'partnerProjectApplications'],
+        () => loadPartner()
+      );
+
+      return () => {
+        isCurrent = false;
+        unsubscribe();
+      };
+    }, [user?.email, user?.id])
+  );
 
   const handleSeeMission = () => {
     navigation.navigate('Programs');

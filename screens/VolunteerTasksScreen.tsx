@@ -12,6 +12,7 @@ import {
   Image,
   Pressable,
   Platform,
+  AppState,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -741,6 +742,24 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       // A native client can miss the assignment event while backgrounded.
       // Force the authoritative snapshot whenever My Tasks is revisited.
       void loadVolunteerTasksCoalesced(true);
+
+      const unsubscribeStorage = subscribeToStorageChanges(
+        ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
+        () => loadVolunteerTasksCoalesced(true),
+        REALTIME_STORAGE_CHANGE_OPTIONS
+      );
+      const appStateSubscription = Platform.OS === 'web'
+        ? null
+        : AppState.addEventListener('change', nextState => {
+            if (nextState === 'active') {
+              void loadVolunteerTasksCoalesced(true);
+            }
+          });
+
+      return () => {
+        unsubscribeStorage();
+        appStateSubscription?.remove();
+      };
     }, [loadVolunteerTasksCoalesced])
   );
 
@@ -749,16 +768,6 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       void loadManagementData();
     }
   }, [activeTab, loadManagementData]);
-
-  useEffect(() => {
-    return subscribeToStorageChanges(
-      ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
-      async () => {
-        await loadVolunteerTasksCoalesced(true);
-      },
-      REALTIME_STORAGE_CHANGE_OPTIONS
-    );
-  }, [loadVolunteerTasksCoalesced]);
 
   // Refresh an already-open web tab when the user returns from the admin tab.
   // Browser tab switching does not always trigger navigation focus, so this
@@ -1214,6 +1223,10 @@ export default function VolunteerTasksScreen({ navigation }: any) {
           eventProject.id,
           taskId,
           nextAssignedVolunteerIds,
+          {
+            action: !volunteerId ? 'clear' : mode === 'remove' ? 'remove' : 'add',
+            ...(volunteerId ? { volunteerId } : {}),
+          },
         );
         const canonicalProject = savedAssignment.event;
         const canonicalProjects = allProjects.map(project =>

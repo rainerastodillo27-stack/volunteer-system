@@ -28,7 +28,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -386,24 +386,53 @@ class TTLCache:
     def __init__(self, ttl_seconds: int = 5):
         self.cache: dict[str, tuple[Any, float]] = {}
         self.ttl_seconds = ttl_seconds
+        self._lock = threading.RLock()
+        self._generation = 0
+        self._key_generations: dict[str, int] = {}
     
     def get(self, key: str) -> Any | None:
-        if key not in self.cache:
-            return None
-        value, timestamp = self.cache[key]
-        if time.time() - timestamp > self.ttl_seconds:
-            del self.cache[key]
-            return None
-        return value
+        with self._lock:
+            if key not in self.cache:
+                return None
+            value, timestamp = self.cache[key]
+            if time.monotonic() - timestamp > self.ttl_seconds:
+                del self.cache[key]
+                return None
+            return value
     
     def set(self, key: str, value: Any) -> None:
-        self.cache[key] = (value, time.time())
+        with self._lock:
+            self.cache[key] = (value, time.monotonic())
+
+    def get_or_load(self, key: str, load: Callable[[], Any]) -> Any:
+        """Retry a database read invalidated while it was in flight.
+
+        Do not hold the cache lock during database work: committed writes and
+        peer worker notifications must be able to invalidate immediately.
+        """
+        while True:
+            with self._lock:
+                cached = self.get(key)
+                if cached is not None:
+                    return cached
+                generation = (self._generation, self._key_generations.get(key, 0))
+            value = load()
+            with self._lock:
+                if generation != (self._generation, self._key_generations.get(key, 0)):
+                    continue
+                self.set(key, value)
+                return value
     
     def clear(self) -> None:
-        self.cache.clear()
+        with self._lock:
+            self._generation += 1
+            self._key_generations.clear()
+            self.cache.clear()
 
     def delete(self, key: str) -> None:
-        self.cache.pop(key, None)
+        with self._lock:
+            self._key_generations[key] = self._key_generations.get(key, 0) + 1
+            self.cache.pop(key, None)
 
 
 # Cache for projects snapshot.
@@ -825,6 +854,8 @@ class ReportSubmitPayload(BaseModel):
 class EventTaskAssignmentPayload(BaseModel):
     taskId: str
     volunteerIds: list[str] = []
+    action: str | None = None
+    volunteerId: str | None = None
 
 
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
@@ -2257,6 +2288,15 @@ class ConnectionManager:
     async def handle_cross_worker_event(self, event: dict[str, Any]) -> None:
         """Deliver a PostgreSQL bus event to this worker's live sockets."""
         kind = str(event.get("kind") or "").strip()
+        if kind == "realtime.connected":
+            # LISTEN has no replay after a disconnect. Discard values that may
+            # have missed invalidation and reconcile this worker's clients.
+            _invalidate_collection_cache()
+            _projects_snapshot_cache.clear()
+            _message_query_cache.clear()
+            await self.broadcast_storage_event(list(HOT_STORAGE_TABLES), publish=False)
+            return
+
         if kind == "storage.changed":
             keys = [str(key).strip() for key in (event.get("keys") or []) if str(key).strip()]
             _invalidate_cross_worker_storage_caches(keys)
@@ -3550,28 +3590,23 @@ def _get_cached_collection(
     # detail read must never populate the cache used by list screens, and a
     # lightweight read must never be returned to an explicit preview request.
     cache_key = f"collection:{key}:images:{1 if include_images else 0}"
-    cached = _storage_collection_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    if is_hot_storage_key(key):
-        if key == "volunteerTimeLogs":
-            value = _get_admin_dashboard_collection(connection, key, include_images=include_images)
+    def load_collection() -> Any:
+        if is_hot_storage_key(key):
+            if key == "volunteerTimeLogs":
+                value = _get_admin_dashboard_collection(connection, key, include_images=include_images)
+            else:
+                value = get_postgres_hot_storage_collection(
+                    connection,
+                    key,
+                    include_images=include_images,
+                )
+        elif key in SPECIAL_STORAGE_KEYS:
+            value = _get_special_storage_collection(connection, key, include_images=include_images)
         else:
-            value = get_postgres_hot_storage_collection(
-                connection,
-                key,
-                include_images=include_images,
-            )
-    elif key in SPECIAL_STORAGE_KEYS:
-        value = _get_special_storage_collection(connection, key, include_images=include_images)
-    else:
-        value = None
+            value = None
+        return value if include_images else _strip_lightweight_media(key, value)
 
-    if not include_images:
-        value = _strip_lightweight_media(key, value)
-    _storage_collection_cache.set(cache_key, value)
-    return value
+    return _storage_collection_cache.get_or_load(cache_key, load_collection)
 
 
 def _json_text_field_expression(column_name: str, field_name: str) -> str:
@@ -3926,13 +3961,10 @@ def _get_cached_media_light_collection(
     include_images: bool = True,
 ) -> list[dict[str, Any]]:
     cache_key = f"collection:media:{key}:{1 if include_images else 0}"
-    cached = _storage_collection_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    value = _get_media_light_collection(connection, key, include_images=include_images)
-    _storage_collection_cache.set(cache_key, value)
-    return value
+    return _storage_collection_cache.get_or_load(
+        cache_key,
+        lambda: _get_media_light_collection(connection, key, include_images=include_images),
+    )
 
 
 # Fetches a single hot-storage row by item id.
@@ -5372,7 +5404,7 @@ def _build_projects_snapshot(
             )
         except Exception as e:
             print(f"[ERROR] Failed to fetch projects: {type(e).__name__}: {e}", flush=True)
-            raw_projects = []
+            raise
         
         try:
             raw_events = _get_cached_media_light_collection(
@@ -5380,7 +5412,7 @@ def _build_projects_snapshot(
             )
         except Exception as e:
             print(f"[ERROR] Failed to fetch events: {type(e).__name__}: {e}", flush=True)
-            raw_events = []
+            raise
 
     if include_status_updates:
         try:
@@ -5397,7 +5429,7 @@ def _build_projects_snapshot(
             ) or []
         except Exception as e:
             print(f"[ERROR] Failed to fetch programs: {type(e).__name__}: {e}", flush=True)
-            raw_programs_table = []
+            raise
 
     if include_program_tracks:
         # Convert programs table records to ProgramTrack format
@@ -7181,22 +7213,19 @@ def startup() -> None:
     def _warm_projects_snapshot_cache() -> None:
         try:
             with get_connection() as connection:
-                full_snapshot = _build_projects_snapshot(connection, None, None, None, True)
-                _projects_snapshot_cache.set("snapshot:images-v4:None:None:*:1", full_snapshot)
-                _projects_snapshot_cache.set(
+                _projects_snapshot_cache.get_or_load(
+                    "snapshot:images-v4:None:None:*:1",
+                    lambda: _build_projects_snapshot(connection, None, None, None, True),
+                )
+                _projects_snapshot_cache.get_or_load(
                     "snapshot:images-v4:None:None:projects:0",
-                    _build_projects_snapshot(connection, None, None, {"projects"}, False),
+                    lambda: _build_projects_snapshot(connection, None, None, {"projects"}, False),
                 )
-                lightweight_snapshot = _build_projects_snapshot(
-                    connection,
-                    None,
-                    None,
-                    {"projects", "statusUpdates"},
-                    False,
-                )
-                _projects_snapshot_cache.set(
-                    "snapshot:images-v4:None:None:projects,statusUpdates:0",
-                    {
+                def load_lightweight_snapshot() -> dict[str, Any]:
+                    lightweight_snapshot = _build_projects_snapshot(
+                        connection, None, None, {"projects", "statusUpdates"}, False,
+                    )
+                    return {
                         "projects": lightweight_snapshot.get("projects", []),
                         "statusUpdates": lightweight_snapshot.get("statusUpdates", []),
                         "volunteerProfile": None,
@@ -7204,36 +7233,38 @@ def startup() -> None:
                         "timeLogs": [],
                         "partnerApplications": [],
                         "volunteerJoinRecords": [],
-                    },
+                    }
+                _projects_snapshot_cache.get_or_load(
+                    "snapshot:images-v4:None:None:projects,statusUpdates:0",
+                    load_lightweight_snapshot,
                 )
                 print("[OK] Warmed projects snapshot cache.")
 
-                # Pre-warm admin dashboard collections in parallel. Each
-                # worker gets its own connection so the first dashboard load
-                # does not wait for eleven sequential collection queries.
-                def _warm_dashboard_key(key: str) -> tuple[str, Any]:
-                    with get_connection() as dashboard_connection:
-                        return key, _get_admin_dashboard_collection(
-                            dashboard_connection,
-                            key,
-                            include_images=False,
-                        )
+            # Release the snapshot connection before dashboard jobs borrow
+            # their own connections, and reserve pool capacity for live reads.
+            from .db import _get_pool_max_size
 
-                items: dict[str, Any] = {}
-                with ThreadPoolExecutor(
-                    # Leave pool headroom for health checks and real users
-                    # while the worker warms its dashboard cache.
-                    max_workers=min(len(_ADMIN_DASHBOARD_KEYS), 4)
-                ) as executor:
-                    futures = {
-                        executor.submit(_warm_dashboard_key, key): key
-                        for key in _ADMIN_DASHBOARD_KEYS
-                    }
-                    for future in as_completed(futures):
-                        key, value = future.result()
-                        items[key] = value
-                _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, {"items": items})
-                print("[OK] Warmed admin dashboard snapshot cache.")
+            def _warm_dashboard_key(key: str) -> tuple[str, Any]:
+                with get_connection() as dashboard_connection:
+                    return key, _get_admin_dashboard_collection(
+                        dashboard_connection,
+                        key,
+                        include_images=False,
+                    )
+
+            items: dict[str, Any] = {}
+            with ThreadPoolExecutor(
+                max_workers=min(len(_ADMIN_DASHBOARD_KEYS), 4, max(1, _get_pool_max_size() - 1))
+            ) as executor:
+                futures = {
+                    executor.submit(_warm_dashboard_key, key): key
+                    for key in _ADMIN_DASHBOARD_KEYS
+                }
+                for future in as_completed(futures):
+                    key, value = future.result()
+                    items[key] = value
+            _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, {"items": items})
+            print("[OK] Warmed admin dashboard snapshot cache.")
         except Exception as error:
             print(f"[WARN] Cache warmup skipped: {error}")
 
@@ -9538,19 +9569,16 @@ def get_projects_snapshot(
             # startup. Recheck after taking a variant-specific lock so only
             # the first request performs the database build.
             with _get_projects_snapshot_lock(cache_key):
-                cached_snapshot = _projects_snapshot_cache.get(cache_key)
-                if cached_snapshot is None:
+                def load_snapshot() -> dict[str, Any]:
                     with get_connection() as connection:
-                        snapshot = _build_projects_snapshot(
+                        return _build_projects_snapshot(
                             connection,
                             user_id,
                             role,
                             requested_fields,
                             include_images,
                         )
-                    _projects_snapshot_cache.set(cache_key, snapshot)
-                else:
-                    snapshot = cached_snapshot
+                snapshot = _projects_snapshot_cache.get_or_load(cache_key, load_snapshot)
 
         # Apply pagination to projects if limit is specified
         all_projects = snapshot.get("projects", [])
@@ -10944,15 +10972,27 @@ async def update_event_task_assignments(
         for value in (payload.volunteerIds or [])
         if str(value or "").strip()
     ]
+    assignment_action = str(payload.action or "replace").strip().lower()
+    action_volunteer_id = str(payload.volunteerId or "").strip()
+    if assignment_action not in {"replace", "add", "remove", "clear"}:
+        raise HTTPException(status_code=400, detail="Unsupported task assignment action.")
+    if assignment_action in {"add", "remove"} and not action_volunteer_id:
+        raise HTTPException(status_code=400, detail="Volunteer id is required for this task assignment action.")
     if not normalized_event_id or not task_id:
         raise HTTPException(status_code=400, detail="Event id and task id are required.")
 
     with get_connection() as connection:
-        project, project_storage_key = _postgres_get_project_like_item_by_id(
+        # Serialize assignment edits for this event. Without a row lock, two
+        # clients can read the same stale task list and the later write can
+        # restore an assignment that the first client removed.
+        project = _postgres_get_hot_item_by_id(
             connection,
+            "events",
             normalized_event_id,
+            include_media=False,
+            for_update=True,
         )
-        if project is None or project_storage_key != "events" or not bool(project.get("isEvent")):
+        if project is None or not bool(project.get("isEvent")):
             raise HTTPException(status_code=404, detail="Event not found.")
 
         role = _normalize_role(session)
@@ -10997,19 +11037,88 @@ async def update_event_task_assignments(
             for value in (record.get("volunteerId"), record.get("volunteerUserId"))
             if str(value or "").strip()
         )
+        existing_ids = list(
+            dict.fromkeys(
+                [
+                    str(value or "").strip()
+                    for value in (target_task.get("assignedVolunteerIds") or [])
+                    if str(value or "").strip()
+                ]
+                + [str(target_task.get("assignedVolunteerId") or "").strip()]
+            )
+        )
+        existing_ids = [volunteer_id for volunteer_id in existing_ids if volunteer_id]
+        existing_names = list(target_task.get("assignedVolunteerNames") or [])
+        name_by_id = {
+            str(volunteer_id or "").strip(): str(existing_names[index] or "").strip()
+            for index, volunteer_id in enumerate(target_task.get("assignedVolunteerIds") or [])
+            if str(volunteer_id or "").strip() and index < len(existing_names)
+        }
+        primary_id = str(target_task.get("assignedVolunteerId") or "").strip()
+        primary_name = str(target_task.get("assignedVolunteerName") or "").strip()
+        if primary_id and primary_name:
+            name_by_id.setdefault(primary_id, primary_name)
+
         canonical_ids: list[str] = []
         canonical_names: list[str] = []
-        for requested_id in requested_volunteer_ids:
+        if assignment_action == "replace":
+            for requested_id in requested_volunteer_ids:
+                volunteer = _postgres_get_hot_item_by_id(
+                    connection,
+                    "volunteers",
+                    requested_id,
+                    include_media=False,
+                )
+                if volunteer is None:
+                    volunteer = _postgres_get_volunteer_by_user_id(connection, requested_id)
+                if volunteer is None:
+                    raise HTTPException(status_code=404, detail="One of the selected volunteers was not found.")
+
+                profile_id = str(volunteer.get("id") or "").strip()
+                user_id = str(volunteer.get("userId") or "").strip()
+                if not ({profile_id, user_id} & event_member_identifiers):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Volunteers must join this event before they can be assigned to a task.",
+                    )
+                if profile_id and profile_id not in canonical_ids:
+                    canonical_ids.append(profile_id)
+                    canonical_names.append(str(volunteer.get("name") or "Volunteer").strip() or "Volunteer")
+        elif assignment_action == "clear":
+            canonical_ids = []
+            canonical_names = []
+        elif assignment_action == "remove":
             volunteer = _postgres_get_hot_item_by_id(
                 connection,
                 "volunteers",
-                requested_id,
+                action_volunteer_id,
                 include_media=False,
             )
             if volunteer is None:
-                volunteer = _postgres_get_volunteer_by_user_id(connection, requested_id)
+                volunteer = _postgres_get_volunteer_by_user_id(connection, action_volunteer_id)
+            remove_ids = {action_volunteer_id}
+            if volunteer is not None:
+                remove_ids.update(
+                    value
+                    for value in (
+                        str(volunteer.get("id") or "").strip(),
+                        str(volunteer.get("userId") or "").strip(),
+                    )
+                    if value
+                )
+            canonical_ids = [volunteer_id for volunteer_id in existing_ids if volunteer_id not in remove_ids]
+            canonical_names = [name_by_id.get(volunteer_id) or "Volunteer" for volunteer_id in canonical_ids]
+        else:
+            volunteer = _postgres_get_hot_item_by_id(
+                connection,
+                "volunteers",
+                action_volunteer_id,
+                include_media=False,
+            )
             if volunteer is None:
-                raise HTTPException(status_code=404, detail="One of the selected volunteers was not found.")
+                volunteer = _postgres_get_volunteer_by_user_id(connection, action_volunteer_id)
+            if volunteer is None:
+                raise HTTPException(status_code=404, detail="The selected volunteer was not found.")
 
             profile_id = str(volunteer.get("id") or "").strip()
             user_id = str(volunteer.get("userId") or "").strip()
@@ -11018,6 +11127,8 @@ async def update_event_task_assignments(
                     status_code=403,
                     detail="Volunteers must join this event before they can be assigned to a task.",
                 )
+            canonical_ids = list(existing_ids)
+            canonical_names = [name_by_id.get(volunteer_id) or "Volunteer" for volunteer_id in canonical_ids]
             if profile_id and profile_id not in canonical_ids:
                 canonical_ids.append(profile_id)
                 canonical_names.append(str(volunteer.get("name") or "Volunteer").strip() or "Volunteer")

@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { NativeModules } from 'react-native';
+import { AppState, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAbortLikeError } from '../utils/requestErrors';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
@@ -100,6 +100,14 @@ const authSessionInvalidationListeners = new Set<() => void>();
 export function subscribeToAuthSessionInvalidated(listener: () => void): () => void {
   authSessionInvalidationListeners.add(listener);
   return () => authSessionInvalidationListeners.delete(listener);
+}
+
+function isAppForeground(): boolean {
+  if (getPlatformOS() === 'web') {
+    return typeof document === 'undefined' || !document.hidden;
+  }
+
+  return AppState.currentState !== 'background' && AppState.currentState !== 'inactive';
 }
 
 function notifyInvalidAuthSession(path: string): void {
@@ -273,9 +281,9 @@ const CONVERSATION_CACHE_TTL_MS = 30000;
 // The directory changes much less often than messages. Reusing it avoids a
 // full user/profile read every time Messages regains focus on web or mobile.
 const MESSAGE_USERS_CACHE_TTL_MS = 60000;
-// WebSocket notifications are the primary path. Keep the fallback and
-// notification debounce short so lightweight record changes reach an open
-// screen as close to real time as the network allows.
+// WebSocket notifications are the primary path. Reconcile active subscribers
+// once per second as a fallback, including when a socket is open but has missed
+// an event. Message and group-chat changes use their dedicated live sockets.
 const STORAGE_CHANGE_POLL_INTERVAL_MS = 1000;
 const STORAGE_CHANGE_RECONNECT_DELAY_MS = 500;
 // WebSocket events already arrive after the database commit. A zero-delay
@@ -284,6 +292,10 @@ const STORAGE_CHANGE_RECONNECT_DELAY_MS = 500;
 const STORAGE_CHANGE_DEBOUNCE_MS = 0;
 const STORAGE_CHANGE_CALLBACK_COOLDOWN_MS = 0;
 const LOCAL_ONLY_STORAGE_KEYS = new Set([STORAGE_KEYS.CURRENT_USER, STORAGE_KEYS.APP_SETTINGS]);
+const DEDICATED_REALTIME_STORAGE_KEYS = new Set([
+  STORAGE_KEYS.MESSAGES,
+  STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+]);
 const NEGROS_OCCIDENTAL_BOUNDS = {
   minLatitude: 9.85,
   maxLatitude: 11.05,
@@ -520,7 +532,7 @@ function getSubscribedRemoteStorageKeys(): string[] {
   const keys = new Set<string>();
   for (const subscriber of storageChangeSubscribers.values()) {
     for (const key of subscriber.watchedKeys) {
-      if (!LOCAL_ONLY_STORAGE_KEYS.has(key)) {
+      if (!LOCAL_ONLY_STORAGE_KEYS.has(key) && !DEDICATED_REALTIME_STORAGE_KEYS.has(key)) {
         keys.add(key);
       }
     }
@@ -532,7 +544,7 @@ async function pollSharedStorageChanges(): Promise<void> {
   if (
     sharedStoragePollInFlight ||
     !hasStorageChangeSubscribers() ||
-    sharedStorageSocket?.readyState === WebSocket.OPEN
+    !isAppForeground()
   ) {
     return;
   }
@@ -4659,6 +4671,7 @@ export async function updateEventTaskAssignments(
   eventId: string,
   taskId: string,
   volunteerIds: string[],
+  operation?: { action: 'add' | 'remove' | 'clear'; volunteerId?: string },
 ): Promise<{ event: Project; task: ProjectInternalTask }> {
   const payload = await requestApiJson<{
     event?: Project | null;
@@ -4673,6 +4686,7 @@ export async function updateEventTaskAssignments(
       body: JSON.stringify({
         taskId,
         volunteerIds,
+        ...operation,
       }),
     }
   );

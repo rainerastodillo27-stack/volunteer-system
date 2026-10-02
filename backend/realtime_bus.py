@@ -109,19 +109,28 @@ def _listen_forever() -> None:
             with connection.cursor() as cursor:
                 cursor.execute(f"listen {REALTIME_CHANNEL}")
             print("[OK] Cross-worker realtime listener started.", flush=True)
+            # PostgreSQL cannot replay notifications missed while disconnected.
+            # Ask this worker to reconcile caches and clients after subscribing.
+            if _listener_callback is not None:
+                _listener_callback({"kind": "realtime.connected"})
 
-            for notification in connection.notifies(timeout=5):
-                if _stop_event.is_set():
-                    return
-                try:
-                    envelope = json.loads(notification.payload)
-                    if not isinstance(envelope, dict) or envelope.get("origin") == _ORIGIN:
-                        continue
-                    event = envelope.get("event")
-                    if isinstance(event, dict) and _listener_callback is not None:
-                        _listener_callback(event)
-                except Exception as error:
-                    print(f"[WARN] Invalid realtime event ignored: {type(error).__name__}", flush=True)
+            # An idle timeout ends the notification iterator, not the LISTEN
+            # subscription. Keep this session alive so notifications cannot
+            # fall into a gap between closing and reopening DB connections.
+            # The bounded wait still lets shutdown stop the listener promptly.
+            while not _stop_event.is_set():
+                for notification in connection.notifies(timeout=5):
+                    if _stop_event.is_set():
+                        return
+                    try:
+                        envelope = json.loads(notification.payload)
+                        if not isinstance(envelope, dict) or envelope.get("origin") == _ORIGIN:
+                            continue
+                        event = envelope.get("event")
+                        if isinstance(event, dict) and _listener_callback is not None:
+                            _listener_callback(event)
+                    except Exception as error:
+                        print(f"[WARN] Invalid realtime event ignored: {type(error).__name__}", flush=True)
         except Exception as error:  # pragma: no cover - depends on deployment DB
             print(f"[WARN] Cross-worker realtime listener reconnecting: {type(error).__name__}: {error}", flush=True)
             _stop_event.wait(2)
@@ -154,4 +163,3 @@ def stop() -> None:
     _stop_event.set()
     with _publisher_lock:
         _close_publisher_connection()
-
