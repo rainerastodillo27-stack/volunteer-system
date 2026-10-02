@@ -39,6 +39,11 @@ type NominatimResult = {
   address?: Record<string, string | undefined>;
 };
 
+type PhotonFeature = {
+  geometry?: { coordinates?: [number, number] };
+  properties?: Record<string, string | number | undefined>;
+};
+
 const REQUEST_TIMEOUT_MS = 8000;
 const POLITICAL_COMPONENT_TYPES = /^(?:political|country|locality|postal_town|neighborhood|sublocality(?:_level_\d+)?|administrative_area_level_\d+)$/;
 const NOMINATIM_PLACE_FIELDS = new Set([
@@ -163,6 +168,45 @@ function readNominatimResult(
   return { latitude, longitude, address: result.display_name || address };
 }
 
+function readPhotonResult(
+  feature: PhotonFeature,
+  selection: LocationSelection,
+  address: string,
+): GeocodedLocation | null {
+  const properties = feature.properties || {};
+  const [longitude, latitude] = feature.geometry?.coordinates || [];
+  const placeName = typeof properties.name === 'string' ? properties.name : '';
+  const displayAddress = [
+    placeName,
+    properties.district,
+    properties.city,
+    properties.state,
+    properties.country,
+  ].filter((part): part is string => typeof part === 'string' && Boolean(part.trim()))
+    .filter((part, index, parts) => parts.findIndex(value => normalizePlaceName(value) === normalizePlaceName(part)) === index)
+    .join(', ');
+  const result: NominatimResult = {
+    lat: latitude,
+    lon: longitude,
+    name: placeName,
+    display_name: displayAddress,
+    class: typeof properties.osm_key === 'string' ? properties.osm_key : undefined,
+    category: typeof properties.osm_key === 'string' ? properties.osm_key : undefined,
+    type: typeof properties.osm_value === 'string' ? properties.osm_value : undefined,
+    addresstype: typeof properties.type === 'string' ? properties.type : undefined,
+    address: {
+      ...Object.fromEntries(Object.entries(properties).map(([key, value]) => [
+        key === 'countrycode' ? 'country_code' : key,
+        typeof value === 'string' ? value : undefined,
+      ])),
+      country_code: typeof properties.countrycode === 'string'
+        ? properties.countrycode.toLowerCase()
+        : undefined,
+    },
+  };
+  return readNominatimResult(result, selection, address);
+}
+
 function cleanAddress(value: string): string {
   return value.replace(/\s*\([^)]{1,12}\)/g, '').replace(/,\s*Philippines\s*$/i, '').trim();
 }
@@ -246,29 +290,35 @@ export async function resolveLocationCoordinates(
     }
   }
 
-  // One country-restricted request returns several candidates, avoiding a
-  // chain of progressively broader searches that silently drops the barangay.
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(contextualQuery)}&format=json&countrycodes=ph&addressdetails=1&limit=5`,
-      { signal: controller.signal },
-    );
-    if (response.ok) {
-      const results: unknown = await response.json();
-      if (Array.isArray(results)) {
-        for (const result of results) {
-          if (!result || typeof result !== 'object') continue;
-          const location = readNominatimResult(result as NominatimResult, selection, cleanedAddress);
-          if (location) return location;
-        }
+  // Photon provides OSM-backed forward search without requiring a browser
+  // caller to set the User-Agent header that Nominatim requires. Try the
+  // selected-locality query variants and still validate each result against
+  // the selected barangay, city, and province before placing the marker.
+  for (const query of queries) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(
+        `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&lang=en&limit=5`,
+        { signal: controller.signal },
+      );
+      if (!response.ok) continue;
+      const payload: unknown = await response.json();
+      const features = payload && typeof payload === 'object' &&
+        Array.isArray((payload as { features?: unknown }).features)
+        ? (payload as { features: unknown[] }).features
+        : [];
+      for (const feature of features) {
+        if (!feature || typeof feature !== 'object') continue;
+        const location = readPhotonResult(feature as PhotonFeature, selection, cleanedAddress);
+        if (location) return location;
       }
+    } catch {
+      // An unavailable service will not be helped by retrying query variants.
+      break;
+    } finally {
+      clearTimeout(timeout);
     }
-  } catch {
-    // Leave unresolved selections available for an explicit manual map pin.
-  } finally {
-    clearTimeout(timeout);
   }
 
   // The legacy city table has no province metadata. It is only an explicitly
