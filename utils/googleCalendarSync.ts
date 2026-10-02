@@ -569,6 +569,9 @@ export async function syncProjectsToGoogleCalendar(
       ] : []),
     ]);
     const retainedGoogleIds = new Set(Array.from(retainedRecordIds, id => getStableGoogleEventId({ id })));
+    const retainedNvcTitles = new Set(
+      syncItems.map(item => item.title.trim().toLocaleLowerCase()).filter(Boolean)
+    );
     const legacyUnjoinedGoogleIds = new Set(
       cleanupOptions.role === 'volunteer' ? cleanupOptions.unjoinedEventProjects.map(getStableGoogleEventId) : []
     );
@@ -630,7 +633,13 @@ export async function syncProjectsToGoogleCalendar(
           /(?:^|\n)📂 Category: [^\n]+/.test(String(existingEvent.description || '')) &&
           /(?:^|\n)📌 Status: [^\n]+/.test(String(existingEvent.description || '')) &&
           /(?:^|\n)👥 Volunteers Needed: \d+(?:\n|$)/.test(String(existingEvent.description || ''));
-        if (!isOwnedStaleEvent && !isLegacyNvcEvent) continue;
+        const summary = String(existingEvent.summary || '').trim();
+        const isLegacyManualNvcCopy =
+          !Object.keys(privateProperties).some(key => key.startsWith('nvc')) &&
+          !/^\[(?:Event|Project|Planning)\] /.test(summary) &&
+          !retainedNvcTitles.has(summary.toLocaleLowerCase()) &&
+          /(?:^|\n)Volunteer slots: \d+\s*$/.test(String(existingEvent.description || ''));
+        if (!isOwnedStaleEvent && !isLegacyNvcEvent && !isLegacyManualNvcCopy) continue;
 
         const deleteResponse = await fetch(`${GOOGLE_CALENDAR_API}/${encodeURIComponent(eventId)}`, {
           method: 'DELETE',

@@ -328,13 +328,13 @@ export default function VolunteerDashboardScreen() {
       });
 
       if (!result.success) {
-        const message = `${result.synced} joined event${result.synced === 1 ? '' : 's'} synced, ${result.removed} old unjoined event${result.removed === 1 ? '' : 's'} removed, ${result.failed} failed.`;
+        const message = `${result.synced} joined event${result.synced === 1 ? '' : 's'} synced, ${result.removed} stale NVC calendar entr${result.removed === 1 ? 'y' : 'ies'} removed, ${result.failed} failed.`;
         setSyncStatus({ type: 'error', message });
         Alert.alert('Calendar Partially Synced', `${message}\n\n${result.errors.slice(0, 2).join('\n')}`);
         return;
       }
 
-      const successMessage = `${result.synced} joined event${result.synced === 1 ? '' : 's'} added or updated${result.removed > 0 ? `; ${result.removed} old unjoined NVC event${result.removed === 1 ? '' : 's'} removed` : ''} in your Google Calendar.`;
+      const successMessage = `${result.synced} joined event${result.synced === 1 ? '' : 's'} added or updated${result.removed > 0 ? `; ${result.removed} stale NVC calendar entr${result.removed === 1 ? 'y' : 'ies'} removed` : ''} in your Google Calendar.`;
       setSyncStatus({ type: 'success', message: successMessage });
       Alert.alert(
         'Calendar Synced',
