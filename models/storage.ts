@@ -1377,18 +1377,20 @@ export async function getApiAuthHeaders(): Promise<Record<string, string>> {
 async function getMessagesWebSocketUrl(userId: string): Promise<string | null> {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
   const token = await getApiAuthToken();
-  return token && typeof document === 'undefined'
-    ? `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`
-    : wsBaseUrl;
+  const authQuery = token && typeof document === 'undefined'
+    ? `?token=${encodeURIComponent(token)}`
+    : '';
+  return `${wsBaseUrl}/ws/messages/${encodeURIComponent(userId)}${authQuery}`;
 }
 
 // Builds the websocket URL used for shared storage change notifications.
 async function getStorageWebSocketUrl(): Promise<string | null> {
   const wsBaseUrl = getApiBaseUrl().replace(/^http/i, 'ws');
   const token = await getApiAuthToken();
-  return token && typeof document === 'undefined'
-    ? `${wsBaseUrl}/ws/storage?token=${encodeURIComponent(token)}`
-    : wsBaseUrl;
+  const authQuery = token && typeof document === 'undefined'
+    ? `?token=${encodeURIComponent(token)}`
+    : '';
+  return `${wsBaseUrl}/ws/storage${authQuery}`;
 }
 
 async function delay(ms: number): Promise<void> {
