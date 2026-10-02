@@ -19,8 +19,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  clearStorageCache,
   getProgramModuleFromProposalProjectId,
-  getPartnerDashboardSnapshot,
+  getProjectsScreenSnapshot,
+  getStorageItemsFast,
   REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
 } from '../models/storage';
@@ -79,6 +81,37 @@ function getProgramAccent(module: AdvocacyFocus): string {
   return '#166534';
 }
 
+function mergePartnerProgramCatalog(
+  programs: Project[],
+  projects: Project[],
+  partnerApplications: PartnerProjectApplication[],
+): Project[] {
+  const proposalProjectIds = new Set(
+    partnerApplications.map(application => String(application.projectId || '').trim()).filter(Boolean)
+  );
+  const proposalTitles = new Set(
+    partnerApplications
+      .map(application => String(application.proposalDetails?.proposedTitle || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const legacyProgramProjects = projects.filter(project => {
+    const id = String(project.id || '').trim();
+    const title = String(project.title || '').trim().toLowerCase();
+    return !project.isEvent &&
+      !project.parentProjectId &&
+      !id.startsWith('project-proposal-') &&
+      !proposalProjectIds.has(id) &&
+      !proposalTitles.has(title) &&
+      title.includes('program');
+  });
+  const byId = new Map<string, Project>();
+  [...legacyProgramProjects, ...programs].forEach(program => {
+    const id = String(program.id || '').trim();
+    if (id) byId.set(id, program);
+  });
+  return Array.from(byId.values());
+}
+
 export default function PartnerProgramManagementScreen() {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
@@ -119,20 +152,93 @@ export default function PartnerProgramManagementScreen() {
 
     if (showRefresh) {
       setRefreshing(true);
+      clearStorageCache(['adminPlanningCalendars']);
     }
 
+    // Start supporting requests alongside the catalog request, but do not
+    // wait for them before showing the programs list.
+    const detailsRequest = getProjectsScreenSnapshot(
+      user,
+      ['projects', 'partnerApplications'],
+      showRefresh,
+      false,
+    );
+    const calendarsRequest = getStorageItemsFast(['adminPlanningCalendars']);
+    const detailsResultRef: { current: Awaited<typeof detailsRequest> | null } = { current: null };
+    const catalogResultRef: { current: Project[] | null } = { current: null };
+
+    void detailsRequest
+      .then(snapshot => {
+        if (requestGeneration !== loadGenerationRef.current) return;
+        detailsResultRef.current = snapshot;
+        const applications = (snapshot.partnerApplications || [])
+          .filter(application => application.partnerUserId === user.id);
+        setPartnerApplications(applications);
+        setAllProjects(snapshot.projects || []);
+        setPrograms(current => mergePartnerProgramCatalog(
+          catalogResultRef.current ?? current,
+          snapshot.projects || [],
+          applications,
+        ));
+      })
+      .catch(error => {
+        if (requestGeneration === loadGenerationRef.current && !isAbortLikeError(error)) {
+          console.warn('[PartnerProgramManagementScreen] Project details refresh skipped:', error);
+        }
+      });
+
+    void calendarsRequest
+      .then(items => {
+        if (requestGeneration !== loadGenerationRef.current) return;
+        const calendars = (items.adminPlanningCalendars as AdminPlanningCalendar[] | null) || [];
+        setPlanningCalendars(calendars);
+        setPlanningItems(
+          calendars
+            .flatMap(calendar => calendar.planningItems || [])
+            .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime())
+        );
+      })
+      .catch(error => {
+        if (!isAbortLikeError(error)) {
+          console.warn('[PartnerProgramManagementScreen] Calendar refresh skipped:', error);
+        }
+      });
+
     try {
-      const snapshot = await getPartnerDashboardSnapshot(true, true);
+      // Only fetch the catalog for the initial paint. The old full dashboard
+      // refresh also loaded unrelated volunteer/report data and media.
+      const snapshot = await getProjectsScreenSnapshot(
+        user,
+        ['programs'],
+        showRefresh,
+        false,
+      );
       if (requestGeneration !== loadGenerationRef.current) return;
-      setPrograms(
-        (snapshot.programs || []).filter(program => !program.isEvent && !program.parentProjectId)
-      );
-      setPartnerApplications(
-        (snapshot.partnerApplications || []).filter(application => application.partnerUserId === user.id)
-      );
-      setAllProjects(snapshot.projects || []);
-      setPlanningCalendars(snapshot.adminPlanningCalendars || []);
-      setPlanningItems(snapshot.adminPlanningItems || []);
+      const catalogPrograms = (snapshot.programs || [])
+        .filter(program => !program.isEvent && !program.parentProjectId);
+      catalogResultRef.current = catalogPrograms;
+      setPrograms(mergePartnerProgramCatalog(
+        catalogPrograms,
+        detailsResultRef.current?.projects || [],
+        (detailsResultRef.current?.partnerApplications || [])
+          .filter(application => application.partnerUserId === user.id),
+      ));
+      setLoading(false);
+
+      // Fetch program cover images separately after the lightweight catalog
+      // has rendered. A slow image payload must not keep the whole screen blank.
+      void getProjectsScreenSnapshot(user, ['programs'], false, true)
+        .then(mediaSnapshot => {
+          if (requestGeneration !== loadGenerationRef.current) return;
+          const programsById = new Map((mediaSnapshot.programs || []).map(program => [program.id, program]));
+          setPrograms(current => current.map(program => {
+            const mediaProgram = programsById.get(program.id);
+            return mediaProgram?.imageUrl ? { ...program, imageUrl: mediaProgram.imageUrl } : program;
+          }));
+        })
+        .catch(error => {
+          console.warn('[PartnerProgramManagementScreen] Program image refresh skipped:', error);
+        });
     } catch (error) {
       if (requestGeneration !== loadGenerationRef.current) return;
       if (!isAbortLikeError(error)) {
