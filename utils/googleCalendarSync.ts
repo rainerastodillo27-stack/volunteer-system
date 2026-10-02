@@ -121,6 +121,7 @@ export function getGoogleAuthConfig(
   };
 
   const isAndroid = Platform.OS === 'android';
+  const useAuthorizationCode = isAndroid || options.serverExchange === true;
   const redirectUri = AuthSession.makeRedirectUri(
     isAndroid ? { native: GOOGLE_NATIVE_REDIRECT_URI } : undefined
   );
@@ -132,10 +133,12 @@ export function getGoogleAuthConfig(
     // The partner's server-side connection needs an authorization code so the
     // backend can retain an encrypted refresh token and watch for calendar edits.
     // Other calendar sync callers keep their existing browser flow.
-    responseType: isAndroid || options.serverExchange
+    responseType: useAuthorizationCode
       ? AuthSession.ResponseType.Code
       : AuthSession.ResponseType.Token,
-    usePKCE: isAndroid || options.serverExchange,
+    // AuthSession defaults an undefined value to true. The browser token flow
+    // must pass false explicitly so Google receives no PKCE parameters.
+    usePKCE: useAuthorizationCode,
     extraParams: {
       access_type: options.serverExchange ? 'offline' : 'online',
       prompt: options.serverExchange ? 'consent select_account' : 'select_account',
