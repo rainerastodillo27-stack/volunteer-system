@@ -448,6 +448,10 @@ _PROJECT_SNAPSHOT_CACHE_KEYS = {
     "volunteers",
     "volunteerMatches",
     "volunteerProjectJoins",
+    # Volunteer task snapshots include role-scoped attendance logs. A log
+    # write must invalidate those snapshots on every API worker, not only the
+    # worker that handled the write.
+    "volunteerTimeLogs",
     "partnerProjectApplications",
     "statusUpdates",
 }
