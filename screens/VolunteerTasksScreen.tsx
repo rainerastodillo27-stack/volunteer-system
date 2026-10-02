@@ -303,9 +303,16 @@ function getTaskAssignedVolunteerNames(task: ProjectInternalTask): string[] {
   );
 }
 
-function getTaskVolunteerLimit(task: Pick<ProjectInternalTask, 'volunteersNeeded'>): number {
+function getTaskVolunteerLimit(
+  task: Pick<ProjectInternalTask, 'volunteersNeeded'>,
+  eventVolunteerEstimate?: number,
+): number {
   const parsedLimit = Number(task.volunteersNeeded);
-  return Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1;
+  const taskLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1;
+  const parsedEventLimit = Number(eventVolunteerEstimate);
+  return Number.isInteger(parsedEventLimit) && parsedEventLimit > 0
+    ? Math.min(taskLimit, parsedEventLimit)
+    : taskLimit;
 }
 
 // Event membership has existed in both forms over time: some records store
@@ -1137,9 +1144,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         mode === 'assign' &&
         currentTask &&
         !isAlreadyAssigned &&
-        currentAssignedVolunteerIds.length >= getTaskVolunteerLimit(currentTask)
+        currentAssignedVolunteerIds.length >= getTaskVolunteerLimit(currentTask, eventProject.volunteersNeeded)
       ) {
-        const taskVolunteerLimit = getTaskVolunteerLimit(currentTask);
+        const taskVolunteerLimit = getTaskVolunteerLimit(currentTask, eventProject.volunteersNeeded);
         Alert.alert(
           'Assignment Limit Reached',
           `This task can have at most ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'} assigned.`

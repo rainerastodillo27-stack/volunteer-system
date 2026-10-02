@@ -82,7 +82,7 @@ RELATIONAL_TABLE_DDL = [
       rejection_reason text,
       created_at text,
       profile_photo text,
-      social_media text not null default '{}'
+      social_media text not null default '{{}}'
     )
     """,
     "create index if not exists users_email_idx on users (lower(coalesce(email, '')))",
@@ -123,7 +123,7 @@ RELATIONAL_TABLE_DDL = [
       region text,
       province text,
       city_municipality text,
-      social_media text not null default '{}'
+      social_media text not null default '{{}}'
     )
     """,
     "create index if not exists partners_owner_user_id_idx on partners (owner_user_id)",
@@ -173,7 +173,7 @@ RELATIONAL_TABLE_DDL = [
             hobbies_and_interests text,
             special_skills text,
             rejection_reason text,
-            social_media text not null default '{}'
+            social_media text not null default '{{}}'
         )
     """,
     "create index if not exists volunteers_user_id_idx on volunteers (user_id)",

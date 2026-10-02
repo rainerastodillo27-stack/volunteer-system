@@ -1012,12 +1012,16 @@ function getTaskAssignedVolunteerIds(task: ProjectInternalTask, volunteersList?:
 
 
 
-function getTaskVolunteerLimit(task: Pick<ProjectInternalTask, 'volunteersNeeded'>): number {
-
+function getTaskVolunteerLimit(
+  task: Pick<ProjectInternalTask, 'volunteersNeeded'>,
+  eventVolunteerEstimate?: number,
+): number {
   const parsedLimit = Number(task.volunteersNeeded);
-
-  return Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1;
-
+  const taskLimit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 1;
+  const parsedEventLimit = Number(eventVolunteerEstimate);
+  return Number.isInteger(parsedEventLimit) && parsedEventLimit > 0
+    ? Math.min(taskLimit, parsedEventLimit)
+    : taskLimit;
 }
 
 
@@ -5949,7 +5953,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         return;
       }
 
-      const taskVolunteerLimit = getTaskVolunteerLimit(targetTask);
+      const taskVolunteerLimit = getTaskVolunteerLimit(targetTask, eventProject.volunteersNeeded);
       if (existingIds.length >= taskVolunteerLimit) {
         Alert.alert(
           'Assignment Limit Reached',
@@ -9082,9 +9086,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     );
 
-    const taskVolunteerLimit = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+    const taskVolunteerEstimate = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
 
-    if (taskVolunteerLimit === null) {
+    if (taskVolunteerEstimate === null) {
 
       Alert.alert('Validation Error', 'Enter a whole number of volunteers needed (at least 1).');
 
@@ -9092,11 +9096,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     }
 
+    const eventVolunteerEstimate = Number(currentSelectedProject.volunteersNeeded);
+    if (
+      Number.isInteger(eventVolunteerEstimate) &&
+      eventVolunteerEstimate > 0 &&
+      taskVolunteerEstimate > eventVolunteerEstimate
+    ) {
+      Alert.alert(
+        'Task Estimate Exceeds Event Limit',
+        `This task estimate cannot exceed the event total of ${eventVolunteerEstimate} volunteers. Lower the estimate before saving.`,
+      );
+      return;
+    }
+
+    const taskVolunteerLimit = getTaskVolunteerLimit(
+      { volunteersNeeded: taskVolunteerEstimate },
+      currentSelectedProject.volunteersNeeded,
+    );
+
     if (normalizedAssignedVolunteerIds.length > taskVolunteerLimit) {
 
       Alert.alert(
         'Too Many Volunteers Assigned',
-        `This task allows ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'}, but ${normalizedAssignedVolunteerIds.length} are selected. Remove ${normalizedAssignedVolunteerIds.length - taskVolunteerLimit} assignment${normalizedAssignedVolunteerIds.length - taskVolunteerLimit === 1 ? '' : 's'} or increase the estimate.`
+        `This task allows at most ${taskVolunteerLimit} assigned volunteer${taskVolunteerLimit === 1 ? '' : 's'} based on the task and event estimates, but ${normalizedAssignedVolunteerIds.length} are selected. Remove ${normalizedAssignedVolunteerIds.length - taskVolunteerLimit} assignment${normalizedAssignedVolunteerIds.length - taskVolunteerLimit === 1 ? '' : 's'}.`
       );
 
       return;
@@ -9201,7 +9223,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       skillsNeeded: normalizedSkills,
 
-      volunteersNeeded: taskVolunteerLimit,
+      volunteersNeeded: taskVolunteerEstimate,
 
       createdAt:
 
@@ -9339,18 +9361,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       return;
     }
 
-    const taskVolunteerLimit = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+    const taskVolunteerEstimate = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
     const selectedVolunteerCount = new Set(taskDraft.assignedVolunteerIds.map(id => id.trim()).filter(Boolean)).size;
 
-    if (taskVolunteerLimit === null) {
+    if (taskVolunteerEstimate === null) {
       Alert.alert('Validation Error', 'Enter a whole number of volunteers needed (at least 1).');
       return;
     }
+    const eventVolunteerEstimate = Number(currentSelectedProject.volunteersNeeded);
+    if (
+      Number.isInteger(eventVolunteerEstimate) &&
+      eventVolunteerEstimate > 0 &&
+      taskVolunteerEstimate > eventVolunteerEstimate
+    ) {
+      Alert.alert(
+        'Task Estimate Exceeds Event Limit',
+        `This task estimate cannot exceed the event total of ${eventVolunteerEstimate} volunteers. Lower the estimate before saving.`,
+      );
+      return;
+    }
+    const taskVolunteerLimit = getTaskVolunteerLimit(
+      { volunteersNeeded: taskVolunteerEstimate },
+      currentSelectedProject.volunteersNeeded,
+    );
 
     if (selectedVolunteerCount > taskVolunteerLimit) {
       Alert.alert(
         'Too Many Volunteers Assigned',
-        `This task allows ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'}, but ${selectedVolunteerCount} are selected. Remove extra assignments before saving.`
+        `This task allows at most ${taskVolunteerLimit} assigned volunteer${taskVolunteerLimit === 1 ? '' : 's'} based on the task and event estimates, but ${selectedVolunteerCount} are selected. Remove extra assignments before saving.`
       );
       return;
     }
@@ -18912,7 +18950,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               id === volunteerId || id === selectedVolunteer?.id || id === selectedVolunteer?.userId
             );
 
-            const taskVolunteerLimit = getTaskVolunteerLimit(selectedTask);
+            const taskVolunteerLimit = getTaskVolunteerLimit(selectedTask, activeSelectedProject.volunteersNeeded);
 
             if (!alreadyAssigned && assignedVolunteerIds.length >= taskVolunteerLimit) {
 
@@ -20213,7 +20251,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         const assignedVolunteerIds = getTaskAssignedVolunteerIds(task, volunteers);
 
-                        const needed = getTaskVolunteerLimit(task);
+                        const needed = getTaskVolunteerLimit(task, activeSelectedProject.volunteersNeeded);
 
                         const assignedCount = assignedVolunteerIds.length;
 
@@ -20446,7 +20484,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     return taskCards.some(task => {
                       const assignedIds = getTaskAssignedVolunteerIds(task, volunteers);
-                      const taskHasRoom = assignedIds.length < getTaskVolunteerLimit(task);
+                      const taskHasRoom = assignedIds.length < getTaskVolunteerLimit(task, activeSelectedProject.volunteersNeeded);
                       const alreadyAssignedToTask = assignedIds.some(id => volunteerIdentifiers.has(id));
                       return taskHasRoom && !alreadyAssignedToTask;
                     });
@@ -20478,7 +20516,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 getTaskAssignedVolunteerIds(t, volunteers).some(vid => vid === uv.id || vid === uv.userId)
                               ).length;
                               const availableTasks = taskCards.filter(t => {
-                                const needed = getTaskVolunteerLimit(t);
+                                const needed = getTaskVolunteerLimit(t, activeSelectedProject.volunteersNeeded);
                                 const assigned = getTaskAssignedVolunteerIds(t, volunteers);
                                 const alreadyIn = assigned.some(vid => vid === uv.id || vid === uv.userId);
                                 return !alreadyIn && assigned.length < needed;
@@ -20795,15 +20833,28 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       {(() => {
 
-                        const taskVolunteerLimit = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+                        const taskEstimate = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+                        const taskVolunteerLimit = taskEstimate === null
+                          ? null
+                          : getTaskVolunteerLimit(
+                              { volunteersNeeded: taskEstimate },
+                              activeSelectedProject?.volunteersNeeded,
+                            );
                         const selectedVolunteerCount = taskDraft.assignedVolunteerIds.length;
                         const limitExceeded = taskVolunteerLimit !== null && selectedVolunteerCount > taskVolunteerLimit;
+                        const eventVolunteerEstimate = Number(activeSelectedProject?.volunteersNeeded);
+                        const estimateExceedsEvent = taskEstimate !== null &&
+                          Number.isInteger(eventVolunteerEstimate) &&
+                          eventVolunteerEstimate > 0 &&
+                          taskEstimate > eventVolunteerEstimate;
 
                         return (
 
-                          <Text style={{ fontSize: 11, color: limitExceeded ? '#b91c1c' : '#64748b', marginBottom: 12 }}>
+                          <Text style={{ fontSize: 11, color: limitExceeded || estimateExceedsEvent ? '#b91c1c' : '#64748b', marginBottom: 12 }}>
 
-                            {taskVolunteerLimit === null
+                            {estimateExceedsEvent
+                              ? `Task estimate cannot exceed the event total of ${eventVolunteerEstimate} volunteers. Lower it before saving.`
+                              : taskVolunteerLimit === null
                               ? 'Enter a whole number of at least 1.'
                               : `${selectedVolunteerCount} of ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'} assigned${limitExceeded ? ' — remove extra assignments before saving' : ''}.`}
 
@@ -20827,9 +20878,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           if (!id || taskDraft.assignedVolunteerIds.includes(id)) return;
 
-                          const taskVolunteerLimit = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+                          const taskEstimate = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+                          const taskVolunteerLimit = taskEstimate === null
+                            ? null
+                            : getTaskVolunteerLimit(
+                                { volunteersNeeded: taskEstimate },
+                                activeSelectedProject?.volunteersNeeded,
+                              );
 
-                          if (taskVolunteerLimit === null) {
+                          if (taskEstimate === null || taskVolunteerLimit === null) {
                             Alert.alert('Validation Error', 'Enter a whole number of volunteers needed before assigning volunteers.');
                             return;
                           }
@@ -20837,7 +20894,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           if (taskDraft.assignedVolunteerIds.length >= taskVolunteerLimit) {
                             Alert.alert(
                               'Assignment Limit Reached',
-                              `This task can have at most ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'} assigned.`
+                              `This task can have at most ${taskVolunteerLimit} volunteer${taskVolunteerLimit === 1 ? '' : 's'} assigned based on the task and event estimates.`
                             );
                             return;
                           }
@@ -20852,8 +20909,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <Picker.Item
                           label={
-                            parseTaskVolunteerLimit(taskDraft.volunteersNeeded) !== null &&
-                              taskDraft.assignedVolunteerIds.length >= parseTaskVolunteerLimit(taskDraft.volunteersNeeded)!
+                            (() => {
+                              const taskEstimate = parseTaskVolunteerLimit(taskDraft.volunteersNeeded);
+                              return taskEstimate !== null &&
+                                taskDraft.assignedVolunteerIds.length >= getTaskVolunteerLimit(
+                                  { volunteersNeeded: taskEstimate },
+                                  activeSelectedProject?.volunteersNeeded,
+                                );
+                            })()
                               ? 'Assignment limit reached'
                               : 'Select volunteer'
                           }

@@ -12974,28 +12974,47 @@ def get_admin_dashboard_snapshot(request: FastAPIRequest) -> dict[str, Any]:
 
 
 def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
-    """Reject project writes where a task has more assignees than its estimate."""
+    """Reject task assignments above either the task estimate or event estimate."""
     for item in items:
         if not isinstance(item, dict):
             continue
+
+        event_limit = None
+        raw_event_limit = item.get("volunteersNeeded")
+        if raw_event_limit is not None and str(raw_event_limit).strip() != "":
+            try:
+                parsed_event_limit = float(raw_event_limit)
+            except (TypeError, ValueError):
+                parsed_event_limit = 0.0
+            if parsed_event_limit.is_integer() and parsed_event_limit > 0:
+                event_limit = int(parsed_event_limit)
 
         for task in item.get("internalTasks") or []:
             if not isinstance(task, dict):
                 continue
 
+            task_limit = None
             raw_limit = task.get("volunteersNeeded")
-            if raw_limit is None or str(raw_limit).strip() == "":
-                # Preserve older field-officer/task records that predate the
-                # per-task estimate field. New task writes always provide it.
+            if raw_limit is not None and str(raw_limit).strip() != "":
+                try:
+                    parsed_limit = float(raw_limit)
+                except (TypeError, ValueError) as error:
+                    raise ValueError("Each task's estimated volunteer count must be a whole number of at least 1.") from error
+
+                if not parsed_limit.is_integer() or parsed_limit < 1:
+                    raise ValueError("Each task's estimated volunteer count must be a whole number of at least 1.")
+                task_limit = int(parsed_limit)
+
+            if task_limit is not None and event_limit is not None and task_limit > event_limit:
+                task_title = str(task.get("title") or "Untitled task").strip()
+                raise ValueError(
+                    f"Task '{task_title}' estimate cannot exceed the event total estimate of {event_limit} volunteers."
+                )
+
+            assignment_limits = [limit for limit in (task_limit, event_limit) if limit is not None]
+            if not assignment_limits:
                 continue
-
-            try:
-                parsed_limit = float(raw_limit)
-            except (TypeError, ValueError) as error:
-                raise ValueError("Each task's estimated volunteer count must be a whole number of at least 1.") from error
-
-            if not parsed_limit.is_integer() or parsed_limit < 1:
-                raise ValueError("Each task's estimated volunteer count must be a whole number of at least 1.")
+            assignment_limit = min(assignment_limits)
 
             assigned_ids = {
                 str(task.get("assignedVolunteerId") or "").strip(),
@@ -13005,11 +13024,14 @@ def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
                 ],
             }
             assigned_ids.discard("")
-            if len(assigned_ids) > int(parsed_limit):
+            if len(assigned_ids) > assignment_limit:
                 task_title = str(task.get("title") or "Untitled task").strip()
+                limit_source = "event estimate" if event_limit == assignment_limit and (
+                    task_limit is None or event_limit < task_limit
+                ) else "task estimate"
                 raise ValueError(
-                    f"Task '{task_title}' allows at most {int(parsed_limit)} volunteer"
-                    f"{'s' if int(parsed_limit) != 1 else ''} to be assigned."
+                    f"Task '{task_title}' allows at most {assignment_limit} volunteer"
+                    f"{'s' if assignment_limit != 1 else ''} to be assigned based on the {limit_source}."
                 )
 
 
