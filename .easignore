@@ -2,7 +2,7 @@ node_modules/
 .npm-cache/
 .npm-cache-eas/
 .expo/
-.git/
+.git
 .env
 .env.*
 client_secret*.json
