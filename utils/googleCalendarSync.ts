@@ -624,12 +624,8 @@ export async function syncProjectsToGoogleCalendar(
           !retainedRecordIds.has(privateProperties.nvcProjectId);
         const isLegacyNvcEvent =
           !Object.keys(privateProperties).some(key => key.startsWith('nvc')) &&
-          (cleanupOptions.role === 'admin'
-            ? /^nvc[0-9a-f]{2,16}$/.test(eventId)
-            : legacyUnjoinedGoogleIds.has(eventId)) &&
-          (cleanupOptions.role === 'admin'
-            ? /^\[(Event|Project)\] /.test(String(existingEvent.summary || ''))
-            : String(existingEvent.summary || '').startsWith('[Event] ')) &&
+          (/^nvc[0-9a-f]{2,16}$/.test(eventId) || legacyUnjoinedGoogleIds.has(eventId)) &&
+          /^\[(Event|Project)\] /.test(String(existingEvent.summary || '')) &&
           /(?:^|\n)📂 Category: [^\n]+/.test(String(existingEvent.description || '')) &&
           /(?:^|\n)📌 Status: [^\n]+/.test(String(existingEvent.description || '')) &&
           /(?:^|\n)👥 Volunteers Needed: \d+(?:\n|$)/.test(String(existingEvent.description || ''));
