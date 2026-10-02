@@ -235,6 +235,25 @@ def partner_calendar_event_properties(partner_user_id: str, project_id: str) -> 
     }
 
 
+def _is_legacy_generated_nvc_event(event: dict[str, Any], event_id: str) -> bool:
+    """Match the old client export's stable ID, title prefix, and generated fields."""
+    summary = str(event.get("summary") or "")
+    description = str(event.get("description") or "")
+    generated_markers = (
+        (chr(0x1F4C2) + " Category: ", r"[^\n]+"),
+        (chr(0x1F4CC) + " Status: ", r"[^\n]+"),
+        (chr(0x1F465) + " Volunteers Needed: ", r"\d+(?:\n|$)"),
+    )
+    return bool(
+        re.fullmatch(r"nvc[0-9a-f]{2,16}", event_id)
+        and re.match(r"^\[(?:Event|Project)\] .+", summary)
+        and all(
+            re.search(r"(?:^|\n)" + re.escape(marker) + suffix, description)
+            for marker, suffix in generated_markers
+        )
+    )
+
+
 def is_stale_partner_calendar_event(
     event: dict[str, Any],
     partner_user_id: str,
@@ -277,6 +296,11 @@ def is_stale_partner_calendar_event(
     if linked_project_id:
         # A persisted link identifies legacy server exports that had no marker.
         return linked_project_id not in approved_project_ids
+
+    if _is_legacy_generated_nvc_event(event, event_id):
+        # A recognized NVC record can be removed when its proposal is no longer
+        # approved, even if its event ID remains in the system's inventory.
+        return True
 
     if event_id in known_projects_by_event_id:
         # An untagged copy of an existing record may belong to another role
