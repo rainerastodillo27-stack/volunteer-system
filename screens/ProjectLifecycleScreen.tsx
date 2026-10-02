@@ -62,6 +62,7 @@ import { showSystemPrompt } from '../components/SystemAlertModal';
 import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
 import { getActiveProjectGroupJoinCount } from '../utils/projectVolunteers';
+import { mergeProjectRefresh } from '../utils/projectRecordRefresh';
 
 import {
 
@@ -4594,7 +4595,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-        return allProjects.find(project => project.id === currentSelectedProject.id) || null;
+        const refreshedProject = allProjects.find(project => project.id === currentSelectedProject.id);
+        return refreshedProject
+          ? mergeProjectRefresh(currentSelectedProject, refreshedProject)
+          : null;
 
       });
 
@@ -5307,7 +5311,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         if (!fullProject) {
           return;
         }
-        setSelectedProject(current => current?.id === project.id ? fullProject : current);
+        setSelectedProject(current => current?.id === project.id
+          ? mergeProjectRefresh(current, fullProject, true)
+          : current);
       }),
 
       loadStatusUpdates(project.id),
@@ -7142,37 +7148,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    const selectedUpdatedAt = new Date(selectedProject.updatedAt || '').getTime();
-
-    const listedUpdatedAt = new Date(listedProject.updatedAt || '').getTime();
-
-    // The project list intentionally omits heavy media, while the detail read
-    // loads the complete record. Both records normally share the same
-    // updatedAt value, so prefer the detail record when it is the one carrying
-    // the uploaded cover or document attachment instead of falling back to the
-    // lightweight list item and hiding the image.
-    const selectedHasMedia = Boolean(selectedProject.imageUrl?.trim()) ||
-      (Array.isArray(selectedProject.attachments) && selectedProject.attachments.length > 0);
-    const listedHasMedia = Boolean(listedProject.imageUrl?.trim()) ||
-      (Array.isArray(listedProject.attachments) && listedProject.attachments.length > 0);
-
-    if (selectedHasMedia && !listedHasMedia) {
-      return { ...listedProject, ...selectedProject };
-    }
-
-    if (listedHasMedia && !selectedHasMedia) {
-      return { ...selectedProject, ...listedProject };
-    }
-
-    if (!Number.isNaN(selectedUpdatedAt) && !Number.isNaN(listedUpdatedAt) && selectedUpdatedAt > listedUpdatedAt) {
-
-      return selectedProject;
-
-    }
-
-
-
-    return listedProject;
+    return mergeProjectRefresh(selectedProject, listedProject);
 
   };
 
