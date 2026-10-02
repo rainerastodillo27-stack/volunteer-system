@@ -93,7 +93,10 @@ export default function PartnerNavigator() {
     };
 
     void loadUnreadCount();
-    const unsubMessages = subscribeToMessages(user.id, loadUnreadCount);
+    const unsubMessages = subscribeToMessages(user.id, event => {
+      if (event.type === 'typing') return;
+      void loadUnreadCount();
+    });
     const unsubStorage = subscribeToStorageChanges(['messages', 'users'], loadUnreadCount);
     return () => {
       unsubMessages();

@@ -482,7 +482,8 @@ export default function VolunteerDashboardScreen() {
 
   useEffect(() => {
     if (!user?.id) return;
-    return subscribeToMessages(user.id, () => {
+    return subscribeToMessages(user.id, event => {
+      if (event.type === 'typing') return;
       void loadDashboardData();
     });
   }, [user?.id, loadDashboardData]);

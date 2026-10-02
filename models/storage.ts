@@ -454,8 +454,10 @@ async function flushStorageSubscriberNotification(subscriber: StorageChangeSubsc
   }
 }
 
-function notifyStorageChanged(changedKeys: string[]) {
-  broadcastStorageChangeToOtherTabs(changedKeys);
+function notifyStorageChanged(changedKeys: string[], broadcastToOtherTabs = true) {
+  if (broadcastToOtherTabs) {
+    broadcastStorageChangeToOtherTabs(changedKeys);
+  }
 
   for (const subscriber of storageChangeSubscribers.values()) {
     if (!changedKeys.some(key => subscriber.watchedKeys.has(key))) {
@@ -486,7 +488,7 @@ function queueSharedStorageChangedKeys(changedKeys: string[]) {
   }
 }
 
-function handleExternalStorageChange(changedKeys: string[]) {
+function handleExternalStorageChange(changedKeys: string[], broadcastToOtherTabs = true) {
   const normalizedKeys = Array.from(new Set(changedKeys.filter(Boolean)));
   if (normalizedKeys.length === 0) {
     return;
@@ -505,7 +507,11 @@ function handleExternalStorageChange(changedKeys: string[]) {
     return;
   }
 
-  queueSharedStorageChangedKeys(normalizedKeys);
+  if (broadcastToOtherTabs) {
+    queueSharedStorageChangedKeys(normalizedKeys);
+  } else {
+    notifyStorageChanged(normalizedKeys, false);
+  }
 }
 
 function handleCrossTabStoragePayload(payload: unknown) {
@@ -525,7 +531,9 @@ function handleCrossTabStoragePayload(payload: unknown) {
   const changedKeys = Array.isArray(event.keys)
     ? event.keys.filter((key): key is string => typeof key === 'string')
     : [];
-  handleExternalStorageChange(changedKeys);
+  // This event has already crossed tabs. Refresh local subscribers without
+  // echoing it back to the other tabs indefinitely.
+  handleExternalStorageChange(changedKeys, false);
 }
 
 function getSubscribedRemoteStorageKeys(): string[] {

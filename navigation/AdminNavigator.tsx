@@ -417,7 +417,10 @@ export default function AdminNavigator() {
 
     loadAllNotifications();
 
-    const unsubMessages = subscribeToMessages(user.id, loadAllNotifications);
+    const unsubMessages = subscribeToMessages(user.id, event => {
+      if (event.type === 'typing') return;
+      void loadAllNotifications();
+    });
     const unsubStorage = subscribeToStorageChanges([
       'messages',
       'partnerReports',
