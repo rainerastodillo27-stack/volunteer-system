@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { loadGoogleMaps } from '../utils/webGoogleMaps';
-import { inferCoordinatesFromPlace } from '../utils/projectMap';
+import { resolveLocationCoordinates, type LocationSelection } from '../utils/locationGeocoding';
 
 export interface LocationMapPickerProps {
   latitude?: string | number;
@@ -25,6 +25,9 @@ export interface LocationMapPickerProps {
   label?: string;
   hint?: string;
   isDesktop?: boolean;
+  locationSelection?: LocationSelection;
+  isResolvingLocation?: boolean;
+  locationError?: string;
 }
 
 const MapHost = 'div' as any;
@@ -56,20 +59,41 @@ export default function LocationMapPicker({
   label = 'Pin Location on Map',
   hint = 'Click anywhere on the map or drag the pin to set the exact location.',
   isDesktop = true,
+  locationSelection = {},
+  isResolvingLocation = false,
+  locationError,
 }: LocationMapPickerProps) {
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const nativeMapRef = useRef<any>(null);
+  const onLocationChangeRef = useRef(onLocationChange);
+  const requestGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  const mapListenersRef = useRef<any[]>([]);
+  onLocationChangeRef.current = onLocationChange;
 
   const [searchQuery, setSearchQuery] = useState(address || '');
   const [isSearching, setIsSearching] = useState(false);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
-  const parsedLat = typeof latitude === 'number' ? latitude : parseFloat(String(latitude || ''));
-  const parsedLng = typeof longitude === 'number' ? longitude : parseFloat(String(longitude || ''));
-  const hasValidCoords = !isNaN(parsedLat) && !isNaN(parsedLng) && parsedLat !== 0 && parsedLng !== 0;
+  const parsedLat = typeof latitude === 'number' ? latitude : parseFloat(String(latitude ?? ''));
+  const parsedLng = typeof longitude === 'number' ? longitude : parseFloat(String(longitude ?? ''));
+  const hasValidCoords = Number.isFinite(parsedLat) && Number.isFinite(parsedLng) &&
+    Math.abs(parsedLat) <= 90 && Math.abs(parsedLng) <= 180 &&
+    !(parsedLat === 0 && parsedLng === 0);
+  const latestPointRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  latestPointRef.current = hasValidCoords ? { latitude: parsedLat, longitude: parsedLng } : null;
+  const locationContext = JSON.stringify([
+    address,
+    locationSelection.barangay || '',
+    locationSelection.city || '',
+    locationSelection.province || '',
+  ]);
+  const locationContextRef = useRef(locationContext);
+  locationContextRef.current = locationContext;
 
   const currentLat = hasValidCoords ? parsedLat : DEFAULT_LAT;
   const currentLng = hasValidCoords ? parsedLng : DEFAULT_LNG;
@@ -80,12 +104,24 @@ export default function LocationMapPicker({
     longitudeDelta: hasValidCoords ? 0.04 : 0.3,
   };
 
-  // Sync searchQuery when external address changes (and input is not focused)
+  // A changed selection invalidates searches and reverse lookups from the previous place.
   useEffect(() => {
-    if (address && address !== searchQuery && !isSearching) {
-      setSearchQuery(address);
-    }
-  }, [address]);
+    requestGenerationRef.current += 1;
+    setSearchQuery(address);
+    setIsSearching(false);
+    setSearchError(null);
+  }, [locationContext]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
+      mapListenersRef.current.forEach(listener => listener?.remove?.());
+      mapListenersRef.current = [];
+      markerRef.current?.setMap?.(null);
+    };
+  }, []);
 
   // Reverse geocode a lat/lng using Google Geocoder or Nominatim fallback
   const reverseGeocode = useCallback(
@@ -129,6 +165,35 @@ export default function LocationMapPicker({
     []
   );
 
+  const handleCoordinateChange = useCallback(
+    async (coordinate: { latitude: number; longitude: number }) => {
+      const requestGeneration = ++requestGenerationRef.current;
+      const context = locationContextRef.current;
+      latestPointRef.current = coordinate;
+      setIsSearching(false);
+      setSearchError(null);
+      if (mapInstanceRef.current && markerRef.current) {
+        markerRef.current.setPosition({ lat: coordinate.latitude, lng: coordinate.longitude });
+        markerRef.current.setMap(mapInstanceRef.current);
+      }
+      // Save the point immediately. Reverse geocoding may only enrich this same point.
+      onLocationChangeRef.current(coordinate);
+
+      const resolvedAddress = await reverseGeocode(coordinate.latitude, coordinate.longitude);
+      const latestPoint = latestPointRef.current;
+      if (!mountedRef.current || requestGeneration !== requestGenerationRef.current ||
+          context !== locationContextRef.current || !latestPoint ||
+          latestPoint.latitude !== coordinate.latitude || latestPoint.longitude !== coordinate.longitude) {
+        return;
+      }
+      if (resolvedAddress) {
+        setSearchQuery(resolvedAddress);
+        onLocationChangeRef.current({ ...coordinate, address: resolvedAddress });
+      }
+    },
+    [reverseGeocode]
+  );
+
   // Initialize and update Google Map
   useEffect(() => {
     if (Platform.OS !== 'web' || !mapElementRef.current) return;
@@ -156,7 +221,7 @@ export default function LocationMapPicker({
 
           const marker = new googleMaps.maps.Marker({
             position: centerPos,
-            map: map,
+            map: hasValidCoords ? map : null,
             draggable: true,
             title: 'Drag pin to set exact location',
             animation: (googleMaps.maps as any).Animation?.DROP,
@@ -164,48 +229,29 @@ export default function LocationMapPicker({
           markerRef.current = marker;
 
           // Click on map to reposition pin
-          (map as any).addListener('click', async (e: any) => {
-            const clickedLat = e.latLng.lat();
-            const clickedLng = e.latLng.lng();
-            (marker as any).setPosition(e.latLng);
-
-            const resolvedAddr = await reverseGeocode(clickedLat, clickedLng);
-            if (resolvedAddr) {
-              setSearchQuery(resolvedAddr);
-            }
-            onLocationChange({
-              latitude: clickedLat,
-              longitude: clickedLng,
-              address: resolvedAddr || undefined,
-            });
-          });
+          mapListenersRef.current.push((map as any).addListener('click', (e: any) => {
+            void handleCoordinateChange({ latitude: e.latLng.lat(), longitude: e.latLng.lng() });
+          }));
 
           // Drag pin to reposition
-          (marker as any).addListener('dragend', async () => {
+          mapListenersRef.current.push((marker as any).addListener('dragend', () => {
             const pos = (marker as any).getPosition();
-            const draggedLat = pos.lat();
-            const draggedLng = pos.lng();
-
-            const resolvedAddr = await reverseGeocode(draggedLat, draggedLng);
-            if (resolvedAddr) {
-              setSearchQuery(resolvedAddr);
+            if (pos) {
+              void handleCoordinateChange({ latitude: pos.lat(), longitude: pos.lng() });
             }
-            onLocationChange({
-              latitude: draggedLat,
-              longitude: draggedLng,
-              address: resolvedAddr || undefined,
-            });
-          });
+          }));
 
           setIsMapLoaded(true);
           setMapError(null);
         } else {
-          // Map already exists; check if marker position changed externally
+          // An unresolved selection has a map center, but no saved pin.
+          markerRef.current?.setMap?.(hasValidCoords ? mapInstanceRef.current : null);
+          if (!hasValidCoords) return;
           const currentMarkerPos = (markerRef.current as any)?.getPosition?.();
           if (currentMarkerPos) {
             const latDiff = Math.abs(currentMarkerPos.lat() - currentLat);
             const lngDiff = Math.abs(currentMarkerPos.lng() - currentLng);
-            if (latDiff > 0.0001 || lngDiff > 0.0001) {
+            if (latDiff > 0.0000001 || lngDiff > 0.0000001) {
               const newPos = { lat: currentLat, lng: currentLng };
               (markerRef.current as any)?.setPosition?.(newPos);
               mapInstanceRef.current.setCenter(newPos);
@@ -226,192 +272,69 @@ export default function LocationMapPicker({
     return () => {
       cancelled = true;
     };
-  }, [currentLat, currentLng, hasValidCoords]);
+  }, [currentLat, currentLng, hasValidCoords, locationContext]);
 
   useEffect(() => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web' || !hasValidCoords) return;
     nativeMapRef.current?.animateToRegion?.(nativeRegion, 300);
   }, [currentLat, currentLng, hasValidCoords]);
 
-  const handleNativeCoordinateChange = useCallback(
-    async (coordinate: { latitude: number; longitude: number }) => {
-      const resolvedAddr = await reverseGeocode(coordinate.latitude, coordinate.longitude);
-      if (resolvedAddr) {
-        setSearchQuery(resolvedAddr);
-      }
-      onLocationChange({
-        latitude: coordinate.latitude,
-        longitude: coordinate.longitude,
-        address: resolvedAddr || undefined,
-      });
-    },
-    [onLocationChange, reverseGeocode]
-  );
-
-  // Handle address search
   const handleSearch = async () => {
-    const rawQuery = searchQuery.trim();
-    if (!rawQuery) return;
+    const query = searchQuery.trim();
+    if (!query) return;
 
-    // Strip parenthetical region codes like "(NIR)", "(BARMM)", "(CAR)" that
-    // geocoding services don't recognise, and trim excess whitespace/commas.
-    const cleanQuery = rawQuery
-      .replace(/\s*\([^)]{1,10}\)/g, '')   // remove short parenthetical codes
-      .replace(/,\s*,/g, ',')
-      .trim();
-
-    const parts = cleanQuery.split(',').map(p => p.trim()).filter(Boolean);
-    const rawCity = parts.length >= 2 ? parts[parts.length >= 3 ? 1 : 0] : parts[0];
-    const cleanCity = rawCity ? rawCity.replace(/^City of\s+/i, '').replace(/\s+City$/i, '').trim() : '';
-
-    // Check local DB coordinates for the city/place as an anchor
-    const localCoords = inferCoordinatesFromPlace(cleanQuery, [], false) ||
-      (cleanCity ? inferCoordinatesFromPlace(cleanCity, [], false) : null) ||
-      inferCoordinatesFromPlace(cleanQuery, [], true);
-
-    const distanceKm = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-      const R = 6371;
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLng = ((lng2 - lng1) * Math.PI) / 180;
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLng / 2) *
-          Math.sin(dLng / 2);
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    };
-
-    const MAX_BARANGAY_DISTANCE_KM = 25;
-
-    // Build smart queries to try:
-    const queriesToTry = Array.from(new Set([
-      // If barangay + city: try "${barangay}, ${cleanCity}, Philippines"
-      ...(parts.length >= 3 && cleanCity ? [`${parts[0]}, ${cleanCity}, Philippines`] : []),
-      `${cleanQuery}, Philippines`,
-      cleanQuery,
-      // City with "City of" stripped
-      ...(cleanCity ? [`${cleanCity}, Philippines`] : []),
-      // city + region (drop barangay prefix if 3+ parts)
-      ...(parts.length >= 3 ? [parts.slice(1).join(', ')] : []),
-    ]));
-
+    const requestGeneration = ++requestGenerationRef.current;
+    const context = locationContextRef.current;
     setIsSearching(true);
+    setSearchError(null);
+
     try {
-      let foundLat: number | null = null;
-      let foundLng: number | null = null;
-      let foundAddress: string = cleanQuery;
-
-      for (const query of queriesToTry) {
-        if (foundLat !== null) break;
-
-        // 1. Try Google Geocoder if available
-        if (typeof window !== 'undefined' && (window as any).google?.maps?.Geocoder) {
-          try {
-            const geocoder = new (window as any).google.maps.Geocoder();
-            const geocodeOptions: any = {
-              address: query,
-              componentRestrictions: { country: 'PH' },
-            };
-            if (localCoords) {
-              const delta = 0.25;
-              geocodeOptions.bounds = {
-                south: localCoords.latitude - delta,
-                west: localCoords.longitude - delta,
-                north: localCoords.latitude + delta,
-                east: localCoords.longitude + delta,
-              };
-            }
-
-            const gResult = await new Promise<any>((resolve, reject) => {
-              geocoder.geocode(geocodeOptions, (results: any, status: string) => {
-                if (status === 'OK' && results && results[0]) {
-                  resolve(results[0]);
-                } else {
-                  reject(new Error(status));
-                }
-              });
-            });
-
-            if (gResult?.geometry?.location) {
-              const resLat = gResult.geometry.location.lat();
-              const resLng = gResult.geometry.location.lng();
-              if (!localCoords || distanceKm(localCoords.latitude, localCoords.longitude, resLat, resLng) <= MAX_BARANGAY_DISTANCE_KM) {
-                foundLat = resLat;
-                foundLng = resLng;
-                foundAddress = gResult.formatted_address || query;
-                break;
-              }
-            }
-          } catch (e) {
-            // Fall through to Nominatim
-          }
-        }
-
-        // 2. Fallback to Nominatim search
-        if (foundLat === null || foundLng === null) {
-          try {
-            const response = await fetch(
-              `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
-              {
-                headers: {
-                  'User-Agent': 'NVC-Connect-Volunteer-System/1.0',
-                },
-              }
-            );
-            const data = await response.json();
-            if (data && data.length > 0 && data[0].lat && data[0].lon) {
-              const resLat = parseFloat(data[0].lat);
-              const resLng = parseFloat(data[0].lon);
-              if (!localCoords || distanceKm(localCoords.latitude, localCoords.longitude, resLat, resLng) <= MAX_BARANGAY_DISTANCE_KM) {
-                foundLat = resLat;
-                foundLng = resLng;
-                foundAddress = data[0].display_name;
-                break;
-              }
-            }
-          } catch (e) {
-            // try next query
-          }
-        }
+      const result = await resolveLocationCoordinates(query, locationSelection, {
+        allowCityFallback: !locationSelection.barangay,
+      });
+      if (!mountedRef.current || requestGeneration !== requestGenerationRef.current ||
+          context !== locationContextRef.current) {
+        return;
+      }
+      if (!result) {
+        setSearchError(locationSelection.barangay
+          ? 'Could not locate this barangay. Click the map to choose the event location.'
+          : 'Location not found. Try another address or click the map to choose a location.');
+        return;
       }
 
-      // 3. Fall back to local DB coordinates if search yielded no valid in-bounds point
-      if (foundLat === null && localCoords) {
-        foundLat = localCoords.latitude;
-        foundLng = localCoords.longitude;
-        foundAddress = cleanQuery;
+      latestPointRef.current = { latitude: result.latitude, longitude: result.longitude };
+      setSearchQuery(result.address || query);
+      if (mapInstanceRef.current && markerRef.current) {
+        const newPosition = { lat: result.latitude, lng: result.longitude };
+        markerRef.current.setPosition(newPosition);
+        markerRef.current.setMap(mapInstanceRef.current);
+        mapInstanceRef.current.setCenter(newPosition);
+        mapInstanceRef.current.setZoom(15);
       }
-
-      if (foundLat !== null && foundLng !== null) {
-        setSearchQuery(foundAddress);
-        if (mapInstanceRef.current && markerRef.current) {
-          const newPos = { lat: foundLat, lng: foundLng };
-          markerRef.current.setPosition(newPos);
-          mapInstanceRef.current.setCenter(newPos);
-          mapInstanceRef.current.setZoom(15);
-        }
-        nativeMapRef.current?.animateToRegion?.({
-          latitude: foundLat,
-          longitude: foundLng,
-          latitudeDelta: 0.04,
-          longitudeDelta: 0.04,
-        }, 300);
-        onLocationChange({
-          latitude: foundLat,
-          longitude: foundLng,
-          address: foundAddress,
-        });
-      } else {
-        alert('Location not found. Try searching with city or municipality name.');
+      nativeMapRef.current?.animateToRegion?.({
+        latitude: result.latitude,
+        longitude: result.longitude,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04,
+      }, 300);
+      onLocationChangeRef.current(result);
+    } catch (error) {
+      if (mountedRef.current && requestGeneration === requestGenerationRef.current &&
+          context === locationContextRef.current) {
+        console.warn('[LocationMapPicker] Search failed:', error);
+        setSearchError('Could not find the location. Try again or click the map to choose a point.');
       }
-    } catch (e) {
-      console.warn('[LocationMapPicker] Search error:', e);
-      alert('Could not complete search. Please try again.');
     } finally {
-      setIsSearching(false);
+      if (mountedRef.current && requestGeneration === requestGenerationRef.current &&
+          context === locationContextRef.current) {
+        setIsSearching(false);
+      }
     }
   };
+
+  const isLocating = isSearching || isResolvingLocation;
+  const displayedLocationError = searchError || locationError;
 
 
   return (
@@ -432,7 +355,12 @@ export default function LocationMapPicker({
           placeholder="Search location or address on map"
           placeholderTextColor="#94a3b8"
           value={searchQuery}
-          onChangeText={setSearchQuery}
+          onChangeText={value => {
+            requestGenerationRef.current += 1;
+            setIsSearching(false);
+            setSearchError(null);
+            setSearchQuery(value);
+          }}
           onSubmitEditing={handleSearch}
           returnKeyType="search"
           multiline={!isDesktop}
@@ -481,17 +409,17 @@ export default function LocationMapPicker({
             showsScale
             toolbarEnabled
             onPress={(event: any) => {
-              void handleNativeCoordinateChange(event.nativeEvent.coordinate);
+              void handleCoordinateChange(event.nativeEvent.coordinate);
             }}
           >
-            <NativeMarker
+            {hasValidCoords && <NativeMarker
               coordinate={{ latitude: currentLat, longitude: currentLng }}
               draggable
               title="Drag pin to set exact location"
               onDragEnd={(event: any) => {
-                void handleNativeCoordinateChange(event.nativeEvent.coordinate);
+                void handleCoordinateChange(event.nativeEvent.coordinate);
               }}
-            />
+            />}
           </NativeMapView>
         ) : (
           <View style={styles.nativeFallback}>
@@ -520,12 +448,15 @@ export default function LocationMapPicker({
 
       {/* Pinned Coordinates Status Footer */}
       <View style={styles.footerRow}>
-        <View style={styles.coordBadge}>
-          <MaterialIcons name="place" size={13} color="#166534" />
-          <Text style={styles.coordText}>
-            {hasValidCoords
+        <View style={[styles.coordBadge, !hasValidCoords && styles.coordBadgeUnresolved]}>
+          {isLocating
+            ? <ActivityIndicator size="small" color="#166534" />
+            : <MaterialIcons name="place" size={13} color={hasValidCoords ? '#166534' : '#92400e'} />}
+          <Text style={[styles.coordText, !hasValidCoords && styles.coordTextUnresolved]}>
+            {isLocating ? 'Locating selected area...'
+              : hasValidCoords
               ? `Pin: ${parsedLat.toFixed(5)}, ${parsedLng.toFixed(5)}`
-              : 'Pin placed at default center. Click or drag to adjust.'}
+              : 'No pin selected. Click the map to choose a location.'}
           </Text>
         </View>
         {searchQuery ? (
@@ -534,6 +465,9 @@ export default function LocationMapPicker({
           </Text>
         ) : null}
       </View>
+      {displayedLocationError && !isLocating ? (
+        <Text style={styles.locationError}>{displayedLocationError}</Text>
+      ) : null}
     </View>
   );
 }
@@ -694,6 +628,18 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#166534',
+  },
+  coordBadgeUnresolved: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  coordTextUnresolved: {
+    color: '#92400e',
+  },
+  locationError: {
+    fontSize: 11,
+    color: '#b45309',
+    lineHeight: 16,
   },
   addressSummary: {
     fontSize: 11,

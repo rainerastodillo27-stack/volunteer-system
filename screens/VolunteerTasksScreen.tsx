@@ -573,6 +573,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
   const tasksReloadQueuedRef = useRef(false);
   const tasksReloadForceRef = useRef(false);
+  const attendanceMutationGenerationRef = useRef(0);
   const managementDataLoadInFlightRef = useRef<Promise<void> | null>(null);
   const managementDataLoadedRef = useRef(false);
   const managementDataUserIdRef = useRef<string | null>(null);
@@ -636,6 +637,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   }, [user?.id]);
 
   const loadVolunteerTasks = React.useCallback(async (forceRefresh = false) => {
+    const attendanceMutationGeneration = attendanceMutationGenerationRef.current;
     try {
       if (!user?.id) {
         setTasks([]);
@@ -658,6 +660,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         forceRefresh,
         false,
       );
+      if (attendanceMutationGeneration !== attendanceMutationGenerationRef.current) return;
       const projects = snapshot.projects || [];
       const currentVolunteerProfile = snapshot.volunteerProfile || null;
       const nextVolunteerTimeLogs = snapshot.timeLogs || [];
@@ -686,6 +689,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       setLoadError(null);
       setLoading(false);
     } catch (error) {
+      if (attendanceMutationGeneration !== attendanceMutationGenerationRef.current) return;
       console.error('Error loading volunteer tasks:', error);
       setTasks([]);
       setAllProjects([]);
@@ -864,6 +868,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         undefined,
         attendancePhoto
       );
+      attendanceMutationGenerationRef.current += 1;
       const nextVolunteerTimeLogs = [createdLog, ...volunteerTimeLogs.filter(log => log.id !== createdLog.id)].sort(
         (left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime()
       );

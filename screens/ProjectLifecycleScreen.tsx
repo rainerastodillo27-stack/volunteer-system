@@ -40,6 +40,7 @@ import {
 import { Picker } from '@react-native-picker/picker';
 
 import LocationMapPicker from '../components/LocationMapPicker';
+import { resolveLocationCoordinates, LocationSelection } from '../utils/locationGeocoding';
 
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -2350,6 +2351,9 @@ interface InlineProjectFormProps {
   projectLocationCities: any[];
 
   projectLocationBarangays?: any[];
+  projectMapLocationSelection?: LocationSelection;
+  projectLocationResolving?: boolean;
+  projectLocationError?: string | null;
 
   handlePickProjectImage: () => void;
 
@@ -2416,6 +2420,9 @@ const InlineProjectForm = React.memo(({
   projectLocationCities,
 
   projectLocationBarangays,
+  projectMapLocationSelection,
+  projectLocationResolving,
+  projectLocationError,
 
   handlePickProjectImage,
 
@@ -3080,6 +3087,9 @@ const InlineProjectForm = React.memo(({
               latitude={projectDraft.latitude}
               longitude={projectDraft.longitude}
               address={projectDraft.address}
+              locationSelection={projectMapLocationSelection}
+              isResolvingLocation={projectLocationResolving}
+              locationError={projectLocationError || undefined}
               label="Project Location on Google Maps"
               hint="Click anywhere on the map or drag the pin to set the project's exact location."
               height={280}
@@ -3407,6 +3417,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const lastRouteNavTimestampRef = React.useRef((route?.params as any)?.navTimestamp);
   const projectsLoadGenerationRef = React.useRef(0);
   const programTracksLoadGenerationRef = React.useRef(0);
+  const volunteerTimeLogsLoadGenerationRef = React.useRef(0);
   const deletedProjectIdsRef = React.useRef<Set<string>>(new Set());
   const deletedProgramIdsRef = React.useRef<Set<string>>(new Set());
 
@@ -3970,6 +3981,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [projectLocationCities, setProjectLocationCities] = useState<PHCityMunicipality[]>([]);
 
   const [projectLocationBarangays, setProjectLocationBarangays] = useState<PHBarangay[]>([]);
+  const projectLocationLookupGenerationRef = React.useRef(0);
+  const [projectLocationResolving, setProjectLocationResolving] = useState(false);
+  const [projectLocationError, setProjectLocationError] = useState<string | null>(null);
+
+  const projectMapLocationSelection: LocationSelection = {
+    city: projectLocationCities.find(city => city.code === projectCityCode)?.name,
+    province: projectLocationCities.find(city => city.code === projectCityCode)?.provinceName,
+    barangay: projectDraft.isEvent
+      ? projectLocationBarangays.find(barangay => barangay.code === projectBarangayCode)?.name
+      : undefined,
+  };
+
+  useEffect(() => () => { projectLocationLookupGenerationRef.current += 1; }, []);
 
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
 
@@ -4138,6 +4162,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
   const resetProjectLocationSelection = () => {
+    projectLocationLookupGenerationRef.current += 1;
+    setProjectLocationResolving(false);
+    setProjectLocationError(null);
 
     setProjectRegionCode('');
 
@@ -5231,17 +5258,22 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const loadVolunteerTimeLogs = async () => {
 
+    const requestGeneration = ++volunteerTimeLogsLoadGenerationRef.current;
+
     try {
 
       // Attendance photos are submitted by another account, so always read
       // this collection fresh instead of rendering a stale local snapshot.
       clearStorageCache(['volunteerTimeLogs']);
       const logs = (await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs')) || [];
+      if (requestGeneration !== volunteerTimeLogsLoadGenerationRef.current) return;
       setVolunteerTimeLogs(
         logs.sort((left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime())
       );
 
     } catch (error) {
+
+      if (requestGeneration !== volunteerTimeLogsLoadGenerationRef.current) return;
 
       setLoadError({
 
@@ -5662,6 +5694,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
   const closeProjectModal = () => {
+    projectLocationLookupGenerationRef.current += 1;
+    setProjectLocationResolving(false);
+    setProjectLocationError(null);
 
     setShowProjectModal(false);
 
@@ -5684,6 +5719,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Opens the project modal in edit mode using the selected project values.
 
   const openEditProjectModal = (project: Project) => {
+    projectLocationLookupGenerationRef.current += 1;
+    setProjectLocationResolving(false);
+    setProjectLocationError(null);
 
     setEditingProjectId(project.id);
 
@@ -6117,6 +6155,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   // Updates a single project draft field without replacing the entire object.
 
   const handleProjectDraftChange = <K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]) => {
+    if (key === 'latitude' || key === 'longitude' || key === 'address') {
+      projectLocationLookupGenerationRef.current += 1;
+      setProjectLocationResolving(false);
+      setProjectLocationError(null);
+    }
 
     setProjectDraft(current => ({ ...current, [key]: value }));
 
@@ -6194,172 +6237,43 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   };
 
-  // Helper: Auto-updates latitude/longitude when address is set from location selection.
-  // Accurately resolves Philippine barangay, city, and province coordinates.
-  const updateLocationCoordinatesFromAddress = async (address: string, preferExact = false) => {
-    if (!address) {
-      handleProjectDraftChange('latitude', '');
-      handleProjectDraftChange('longitude', '');
-      return;
-    }
-
-    // Great-circle distance helper (km)
-    const distanceKm = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
-      const R = 6371;
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLng = ((lng2 - lng1) * Math.PI) / 180;
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    };
-
-    // Clean address components:
-    // Strip parenthetical region codes (e.g. "(NIR)", "(BARMM)", "(CAR)")
-    const cleanAddress = address.replace(/\s*\([^)\s]{1,10}\)/g, '').trim();
-    const rawParts = cleanAddress.split(',').map(p => p.trim()).filter(Boolean);
-
-    // Look up selected city / province metadata if available from state
-    const currentCity = projectLocationCities.find(c => c.code === projectCityCode);
-    const currentBarangay = projectLocationBarangays.find(b => b.code === projectBarangayCode);
-
-    // Get city center coordinates from local database (guaranteed accurate anchor)
-    const cityCandidates = [
-      currentCity?.displayName,
-      currentCity?.name,
-      ...(rawParts.length >= 2 ? [rawParts[rawParts.length - 2]] : []),
-      cleanAddress,
-    ].filter(Boolean) as string[];
-
-    let localCoords: { latitude: number; longitude: number } | null = null;
-    for (const cand of cityCandidates) {
-      localCoords = inferCoordinatesFromPlace(cand, [], false);
-      if (localCoords) break;
-    }
-    if (!localCoords) {
-      localCoords = inferCoordinatesFromPlace(cleanAddress, [], true);
-    }
-
-    // Identify barangay and city components for high-precision geocoding
-    const barangayName = currentBarangay?.name || (rawParts.length >= 3 ? rawParts[0] : '');
-    const cityRaw = currentCity?.displayName || (rawParts.length >= 2 ? rawParts[rawParts.length >= 3 ? 1 : 0] : '');
-    const cleanCity = cityRaw.replace(/^City of\s+/i, '').replace(/\s+City$/i, '').trim();
-    const provinceName = currentCity?.provinceName || '';
-
-    // If no barangay is selected and we already have city-level coordinates:
-    // Apply city center immediately! (Avoids Nominatim returning roads with city in their name)
-    if (!barangayName && localCoords && !preferExact) {
-      handleProjectDraftChange('latitude', String(localCoords.latitude));
-      handleProjectDraftChange('longitude', String(localCoords.longitude));
-      return;
-    }
-
-    // Maximum distance from known city center (25 km is safe for any barangay within a city)
-    const MAX_BARANGAY_DISTANCE_KM = 25;
-
-    // Queries to try, ordered from most specific Philippine address to broader
-    const exactQueries = Array.from(new Set([
-      // 1. Specific Barangay + City + Province
-      ...(barangayName && cleanCity && provinceName ? [`${barangayName}, ${cleanCity}, ${provinceName}, Philippines`] : []),
-      // 2. Specific Barangay + City
-      ...(barangayName && cleanCity ? [`${barangayName}, ${cleanCity}, Philippines`] : []),
-      // 3. Clean full address + Philippines
-      `${cleanAddress}, Philippines`,
-      cleanAddress,
-      // 4. City + Province (drop barangay)
-      ...(cleanCity && provinceName ? [`${cleanCity}, ${provinceName}, Philippines`] : []),
-      ...(cleanCity ? [`${cleanCity}, Philippines`] : []),
-    ])).filter(Boolean);
+  // Use the selection passed by the change handler, which is newer than
+  // React state during that handler. Only the latest lookup may move the pin.
+  const updateLocationCoordinatesFromAddress = async (
+    address: string,
+    preferExact = false,
+    selection: LocationSelection = projectMapLocationSelection,
+  ) => {
+    const generation = ++projectLocationLookupGenerationRef.current;
+    setProjectDraft(current => ({ ...current, latitude: '', longitude: '' }));
+    setProjectLocationError(null);
+    setProjectLocationResolving(Boolean(address.trim()));
+    if (!address.trim()) return;
 
     try {
-      // 1. Try Google Maps Geocoder if loaded
-      const googleMaps = typeof window !== 'undefined' ? (window as any).google?.maps : null;
-      if (googleMaps?.Geocoder) {
-        for (const query of exactQueries) {
-          try {
-            const geocodeOptions: any = {
-              address: query,
-              componentRestrictions: { country: 'PH' },
-            };
-            if (localCoords) {
-              const delta = 0.25; // ~27 km bounding box
-              geocodeOptions.bounds = {
-                south: localCoords.latitude - delta,
-                west: localCoords.longitude - delta,
-                north: localCoords.latitude + delta,
-                east: localCoords.longitude + delta,
-              };
-            }
-
-            const geocoder = new googleMaps.Geocoder();
-            const result = await new Promise<any>((resolve, reject) => {
-              geocoder.geocode(geocodeOptions, (results: any[], status: string) => {
-                if (status === 'OK' && results?.[0]?.geometry?.location) {
-                  resolve(results[0]);
-                } else {
-                  reject(new Error(status));
-                }
-              });
-            });
-
-            const loc = result.geometry.location;
-            const resLat = loc.lat();
-            const resLng = loc.lng();
-
-            // Sanity check: must be within reasonable distance of city center if city is known
-            if (localCoords && distanceKm(localCoords.latitude, localCoords.longitude, resLat, resLng) > MAX_BARANGAY_DISTANCE_KM) {
-              continue;
-            }
-
-            handleProjectDraftChange('latitude', String(resLat));
-            handleProjectDraftChange('longitude', String(resLng));
-            return;
-          } catch {
-            // Try next query
-          }
-        }
+      const location = await resolveLocationCoordinates(address, selection, {
+        allowCityFallback: !selection.barangay && !preferExact,
+      });
+      if (generation !== projectLocationLookupGenerationRef.current) return;
+      if (!location) {
+        setProjectLocationError(selection.barangay
+          ? `Could not locate ${selection.barangay} in ${selection.city || 'the selected city'}. Search for a venue or place the pin on the map.`
+          : 'Could not locate this address. Search again or place the pin on the map.');
+        return;
       }
-
-      // 2. Try OpenStreetMap Nominatim
-      for (const query of exactQueries) {
-        try {
-          const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
-            {
-              headers: {
-                'User-Agent': 'NVC-Connect-Volunteer-System/1.0',
-              },
-            }
-          );
-          const data = await response.json();
-          if (data && data.length > 0 && data[0].lat && data[0].lon) {
-            const resLat = parseFloat(data[0].lat);
-            const resLng = parseFloat(data[0].lon);
-
-            // Sanity check: must be within reasonable distance of city center
-            if (localCoords && distanceKm(localCoords.latitude, localCoords.longitude, resLat, resLng) > MAX_BARANGAY_DISTANCE_KM) {
-              continue;
-            }
-
-            handleProjectDraftChange('latitude', String(resLat));
-            handleProjectDraftChange('longitude', String(resLng));
-            return;
-          }
-        } catch {
-          // Try next query
-        }
-      }
+      setProjectDraft(current => ({
+        ...current,
+        latitude: String(location.latitude),
+        longitude: String(location.longitude),
+      }));
     } catch (error) {
-      console.warn('[Geocoder] Live geocoding request failed:', error);
-    }
-
-    // 3. Fallback to known local city / province coordinates if live geocoding failed or was rejected
-    if (localCoords) {
-      handleProjectDraftChange('latitude', String(localCoords.latitude));
-      handleProjectDraftChange('longitude', String(localCoords.longitude));
+      if (generation !== projectLocationLookupGenerationRef.current) return;
+      console.warn('[Geocoder] Location lookup failed:', error);
+      setProjectLocationError('Location search is unavailable. Try again or place the pin on the map.');
+    } finally {
+      if (generation === projectLocationLookupGenerationRef.current) {
+        setProjectLocationResolving(false);
+      }
     }
   };
 
@@ -6378,6 +6292,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     handleProjectDraftChange('latitude', String(lat));
 
     handleProjectDraftChange('longitude', String(lng));
+    const generation = projectLocationLookupGenerationRef.current;
 
 
 
@@ -6400,6 +6315,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       );
 
       const data = await response.json();
+      if (generation !== projectLocationLookupGenerationRef.current) return;
 
       if (data && data.display_name) {
 
@@ -6511,7 +6427,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     handleProjectDraftChange('address', newAddress);
 
-    updateLocationCoordinatesFromAddress(newAddress);
+    void updateLocationCoordinatesFromAddress(newAddress, false, {
+      city: selectedCity?.name,
+      province: selectedCity?.provinceName,
+    });
 
   };
 
@@ -6561,9 +6480,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       handleProjectDraftChange('address', newAddress);
 
-      updateLocationCoordinatesFromAddress(
+      void updateLocationCoordinatesFromAddress(
         [newAddress, projectPlaceVenue.trim()].filter(Boolean).join(', '),
         true,
+        { city: selectedCity?.name, province: selectedCity?.provinceName },
       );
 
       return;
@@ -6584,9 +6504,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     handleProjectDraftChange('address', newAddress);
 
-    updateLocationCoordinatesFromAddress(
+    void updateLocationCoordinatesFromAddress(
       [newAddress, projectPlaceVenue.trim()].filter(Boolean).join(', '),
       true,
+      {
+        city: selectedCity?.name,
+        province: selectedCity?.provinceName,
+        barangay: selectedBarangay?.name,
+      },
     );
 
   };
@@ -7487,7 +7412,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       Number.isFinite(parsedLatitude) &&
 
-      Number.isFinite(parsedLongitude);
+      Number.isFinite(parsedLongitude) &&
+      Math.abs(parsedLatitude) <= 90 &&
+      Math.abs(parsedLongitude) <= 180 &&
+      !(parsedLatitude === 0 && parsedLongitude === 0);
 
     const selectedLocationRegion = PHRegions.find(region => region.code === effectiveProjectRegionCode);
 
@@ -7533,46 +7461,28 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    const hasDraftCoords = Boolean(
-      projectDraft.latitude &&
-      projectDraft.longitude &&
-      !isNaN(parseFloat(projectDraft.latitude)) &&
-      !isNaN(parseFloat(projectDraft.longitude))
-    );
-    const draftCoords = hasDraftCoords
-      ? { latitude: parseFloat(projectDraft.latitude), longitude: parseFloat(projectDraft.longitude) }
-      : null;
-
-    const resolvedCoordinates =
-      (hasManualCoordinates
-        ? { latitude: parsedLatitude, longitude: parsedLongitude }
-        : null) ||
-      draftCoords ||
-      inferCoordinatesFromPlace(resolvedAddress, projects) ||
-
-      (existingProject
-
-        ? {
-
-          latitude: existingProject.location.latitude,
-
-          longitude: existingProject.location.longitude,
-
-        }
-
-        : null);
-
-
-
-    if (!resolvedCoordinates) {
-
-      failProjectSaveValidation(projectDraft.isEvent ? 'Enter a recognizable barangay, city, municipality, or venue so the map can place this event.' : 'Enter a recognizable city, municipality, or venue so the map can place this project.');
-
+    if (projectDraft.isEvent && projectLocationResolving) {
+      failProjectSaveValidation('Wait for the selected barangay location to finish loading, or place the event pin on the map.');
       return;
-
     }
 
+    // Event coordinates must come from the current validated search or an
+    // explicitly placed pin. Never reuse the old event/city pin after a
+    // barangay change has cleared the draft coordinates.
+    const resolvedCoordinates = hasManualCoordinates
+      ? { latitude: parsedLatitude, longitude: parsedLongitude }
+      : !projectDraft.isEvent
+        ? inferCoordinatesFromPlace(resolvedAddress, projects) || (existingProject?.location
+          ? { latitude: existingProject.location.latitude, longitude: existingProject.location.longitude }
+          : null)
+        : null;
 
+    if (!resolvedCoordinates) {
+      failProjectSaveValidation(projectDraft.isEvent
+        ? 'Choose a verified location for the selected barangay, or place the event pin on the map.'
+        : 'Enter a recognizable city, municipality, or venue so the map can place this project.');
+      return;
+    }
 
     const now = new Date().toISOString();
 
@@ -10021,6 +9931,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         projectLocationCities={projectLocationCities}
 
         projectLocationBarangays={projectLocationBarangays}
+        projectMapLocationSelection={projectMapLocationSelection}
+        projectLocationResolving={projectLocationResolving}
+        projectLocationError={projectLocationError}
 
         handlePickProjectImage={handlePickProjectImage}
 
@@ -10302,6 +10215,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             latitude={projectDraft.latitude}
             longitude={projectDraft.longitude}
             address={[projectDraft.address, projectPlaceVenue.trim()].filter(Boolean).join(', ')}
+            locationSelection={projectMapLocationSelection}
+            isResolvingLocation={projectLocationResolving}
+            locationError={projectLocationError || undefined}
             label="Event Location on Google Maps"
             hint="Click or drag the pin to set the exact event location."
             height={200}
@@ -14139,6 +14055,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         latitude={projectDraft.latitude}
                         longitude={projectDraft.longitude}
                         address={[projectDraft.address, projectPlaceVenue.trim()].filter(Boolean).join(', ')}
+                        locationSelection={projectMapLocationSelection}
+                        isResolvingLocation={projectLocationResolving}
+                        locationError={projectLocationError || undefined}
                         label="Event Location on Google Maps"
                         hint="Click anywhere on the map or drag the pin to set the exact event location."
                         height={240}
