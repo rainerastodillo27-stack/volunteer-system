@@ -2106,7 +2106,7 @@ class ConnectionManager:
         # short-lived inbox cache. Otherwise a client can receive the realtime
         # event and then immediately read an old unread count from a different
         # worker for up to the cache TTL.
-        _message_query_cache.clear()
+        _invalidate_collection_cache(["messages"])
         payload = {"type": "message.changed", "message": message}
         recipients = {message["senderId"], message["recipientId"]}
         publish_task = (
@@ -2129,7 +2129,7 @@ class ConnectionManager:
     ) -> None:
         if not message_ids:
             return
-        _message_query_cache.clear()
+        _invalidate_collection_cache(["messages"])
         payload = {
             "type": "message.deleted",
             "messageIds": message_ids,
@@ -2200,6 +2200,7 @@ class ConnectionManager:
         *,
         publish: bool = True,
     ) -> None:
+        _invalidate_collection_cache(["projectGroupMessages"])
         payload = {"type": "project-group-message.changed", "message": message}
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
@@ -2228,6 +2229,7 @@ class ConnectionManager:
     ) -> None:
         if not message_ids:
             return
+        _invalidate_collection_cache(["projectGroupMessages"])
         payload = {
             "type": "project-group-message.deleted",
             "projectId": project_id,
@@ -3529,6 +3531,10 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
     if keys is None:
         _storage_collection_cache.clear()
         _admin_dashboard_cache.clear()
+        _projects_snapshot_cache.clear()
+        _message_query_cache.clear()
+        _typing_direct_access_cache.clear()
+        _typing_group_recipients_cache.clear()
         return
     for key in keys:
         _storage_collection_cache.delete(_collection_cache_key(str(key)))
@@ -3540,11 +3546,26 @@ def _invalidate_collection_cache(keys: list[str] | set[str] | tuple[str, ...] | 
         _storage_collection_cache.delete(f"dashboard:{key}:images:1")
     if "messages" in keys:
         _message_query_cache.clear()
-    elif "users" in keys:
+    if "users" in keys:
         _message_query_cache.delete("users:directory")
+        _typing_direct_access_cache.clear()
     # Invalidate admin dashboard cache whenever any of its constituent keys change.
     if any(k in _ADMIN_DASHBOARD_KEYS for k in keys):
         _admin_dashboard_cache.delete(_ADMIN_DASHBOARD_CACHE_KEY)
+    # Project snapshots and group-chat recipient sets derive their data from
+    # several storage collections. Tie their invalidation to the same changed
+    # keys signal used for collection caches so all mutation paths agree.
+    if any(key in _PROJECT_SNAPSHOT_CACHE_KEYS for key in keys):
+        _projects_snapshot_cache.clear()
+    group_membership_keys = {
+        "projects",
+        "events",
+        "volunteers",
+        "volunteerProjectJoins",
+        "partnerProjectApplications",
+    }
+    if any(key in group_membership_keys for key in keys):
+        _typing_group_recipients_cache.clear()
 
 
 def _invalidate_cross_worker_storage_caches(keys: list[str]) -> None:
@@ -3561,8 +3582,6 @@ def _invalidate_cross_worker_storage_caches(keys: list[str]) -> None:
         return
 
     _invalidate_collection_cache(normalized_keys)
-    if any(key in _PROJECT_SNAPSHOT_CACHE_KEYS for key in normalized_keys):
-        _projects_snapshot_cache.clear()
 
 
 def _get_cached_collection(
@@ -10384,8 +10403,9 @@ async def update_partner_project_application_details(
 
         connection.commit()
 
-    _invalidate_collection_cache(broadcast_keys)
-    asyncio.create_task(connection_manager.broadcast_storage_event(broadcast_keys))
+    changed_keys = list(dict.fromkeys(broadcast_keys))
+    _invalidate_collection_cache(changed_keys)
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
     for changed_message in changed_message_events:
         asyncio.create_task(connection_manager.broadcast_message_event(changed_message))
     return {"application": updated_application}
@@ -10953,8 +10973,10 @@ async def review_volunteer_match(
 
     # Broadcast is best-effort and should not block the reviewer response when
     # a stale websocket takes a while to time out.
+    changed_keys = list(dict.fromkeys(broadcast_keys))
+    _invalidate_collection_cache(changed_keys)
     asyncio.create_task(
-        connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+        connection_manager.broadcast_storage_event(changed_keys)
     )
     return {"match": updated_match}
 
@@ -11240,9 +11262,9 @@ async def join_project(
 
         connection.commit()
 
-    asyncio.create_task(
-        connection_manager.broadcast_storage_event([project_storage_key, "volunteerProjectJoins", "volunteers"])
-    )
+    changed_keys = list(dict.fromkeys([project_storage_key, "volunteerProjectJoins", "volunteers"]))
+    _invalidate_collection_cache(changed_keys)
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
     return {"project": updated_project, "volunteerProfile": volunteer_profile}
 
 
@@ -12619,10 +12641,12 @@ def get_storage_item(
 
 
 @app.post("/admin/cache/clear")
-def clear_backend_caches() -> dict[str, str]:
-    _projects_snapshot_cache.clear()
-    _storage_collection_cache.clear()
-    _admin_dashboard_cache.clear()
+async def clear_backend_caches(request: FastAPIRequest) -> dict[str, str]:
+    _require_admin_session(request)
+    _invalidate_collection_cache()
+    await connection_manager.broadcast_storage_event(
+        list(HOT_STORAGE_TABLES) + list(SPECIAL_STORAGE_KEYS)
+    )
     return {"status": "ok", "message": "All backend caches cleared"}
 
 
@@ -13824,8 +13848,10 @@ async def submit_report(request: FastAPIRequest, payload: ReportSubmitPayload) -
 
             saved_report = _postgres_upsert_hot_item(connection, "partnerReports", report)
             connection.commit()
+        changed_keys = list(dict.fromkeys(broadcast_keys))
+        _invalidate_collection_cache(changed_keys)
         asyncio.create_task(
-            connection_manager.broadcast_storage_event(list(dict.fromkeys(broadcast_keys)))
+            connection_manager.broadcast_storage_event(changed_keys)
         )
         return {"report": saved_report}
     except HTTPException:
