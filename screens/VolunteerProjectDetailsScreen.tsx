@@ -8,7 +8,6 @@ import {
   Alert,
   Image,
   ActivityIndicator,
-  Dimensions,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { format } from 'date-fns';
@@ -64,20 +63,11 @@ export default function VolunteerProjectDetailsScreen({
   const [loading, setLoading] = useState(true);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [isBookmarked, setIsBookmarked] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(false);
+  const [contentWidth, setContentWidth] = useState(0);
+  const isDesktop = contentWidth >= 1024;
   const hasLoadedOnceRef = useRef(false);
   const loadInFlightRef = useRef(false);
   const reloadQueuedRef = useRef(false);
-
-  useEffect(() => {
-    const checkLayout = () => {
-      const { width } = Dimensions.get('window');
-      setIsDesktop(width >= 1024);
-    };
-    checkLayout();
-    const subscription = Dimensions.addEventListener('change', checkLayout);
-    return () => subscription.remove();
-  }, []);
 
   useEffect(() => {
     navigation?.setOptions?.({
@@ -324,12 +314,12 @@ export default function VolunteerProjectDetailsScreen({
   };
 
   const renderLeftColumn = () => (
-    <View style={styles.leftColumn}>
+    <View style={[styles.leftColumn, !isDesktop && styles.leftColumnMobile]}>
       {/* Hero Card */}
       <View style={styles.heroCard}>
-        <View style={[styles.heroRow, !isDesktop && { flexDirection: 'column' }]}>
+        <View style={[styles.heroRow, !isDesktop && styles.heroRowMobile]}>
           {projectImageSource && (
-            <View style={[styles.heroImageContainer, !isDesktop && { width: '100%', height: 220 }]}>
+            <View style={[styles.heroImageContainer, isDesktop ? styles.heroImageDesktop : styles.heroImageMobile]}>
               <Image source={projectImageSource} style={styles.heroImage} resizeMode="cover" fadeDuration={0} />
               <View style={styles.imageOverlayBadges}>
                 <View style={styles.overlayBadgeGreen} {...({} as any)}>
@@ -339,7 +329,7 @@ export default function VolunteerProjectDetailsScreen({
             </View>
           )}
 
-          <View style={[styles.heroDetails, !isDesktop && { minWidth: '100%' }]}>
+          <View style={[styles.heroDetails, !isDesktop && styles.heroDetailsMobile]}>
             <Text style={styles.heroTitle}>{project.title}</Text>
 
             <View style={[styles.statusBadge, { backgroundColor: isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : isFull ? '#fde8e8' : '#e6f4ea' }]}>
@@ -407,7 +397,7 @@ export default function VolunteerProjectDetailsScreen({
           <View style={[styles.overviewCell, !isDesktop && { width: '47%', minWidth: 100 }]} {...({} as any)}>
             <MaterialIcons name="calendar-today" size={20} color="#166534" style={{ marginBottom: 6 }} />
             <Text style={styles.cellLabel}>Date</Text>
-            <Text style={styles.cellValue} numberOfLines={1}>
+            <Text style={styles.cellValue}>
               {project.startDate ? format(new Date(project.startDate), 'MMM d, yyyy') : 'TBD'}
             </Text>
             <Text style={styles.cellSub}>
@@ -418,7 +408,7 @@ export default function VolunteerProjectDetailsScreen({
           <View style={[styles.overviewCell, !isDesktop && { width: '47%', minWidth: 100 }]} {...({} as any)}>
             <MaterialIcons name="access-time" size={20} color="#166534" style={{ marginBottom: 6 }} />
             <Text style={styles.cellLabel}>Time</Text>
-            <Text style={styles.cellValue} numberOfLines={1}>
+            <Text style={styles.cellValue}>
               {project.startDate ? format(new Date(project.startDate), 'h:mm a') : 'TBD'}
             </Text>
             <Text style={styles.cellSub}>
@@ -585,7 +575,10 @@ export default function VolunteerProjectDetailsScreen({
   );
 
   return (
-    <View style={styles.container}>
+    <View
+      style={styles.container}
+      onLayout={event => setContentWidth(event.nativeEvent.layout.width)}
+    >
       {/* Top Navbar */}
       <View style={styles.navbar}>
         <TouchableOpacity onPress={handleBack} style={styles.navBackBtn}>
@@ -595,7 +588,7 @@ export default function VolunteerProjectDetailsScreen({
 
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, !isDesktop && { padding: 16 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={[styles.scrollContent, !isDesktop && { padding: 16 }]} showsVerticalScrollIndicator={false}>
         <View style={[styles.layoutGrid, { flexDirection: isDesktop ? 'row' : 'column' }]}>
           {renderLeftColumn()}
           {isDesktop && renderRightColumn()}
@@ -608,6 +601,7 @@ export default function VolunteerProjectDetailsScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    minWidth: 0,
     backgroundColor: '#f8fafc',
   },
   centerWrapper: {
@@ -654,12 +648,20 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 24,
   },
+  scrollView: {
+    flex: 1,
+  },
   layoutGrid: {
     gap: 24,
   },
   leftColumn: {
     flex: 2.2,
+    minWidth: 0,
     gap: 16,
+  },
+  leftColumnMobile: {
+    flex: 0,
+    width: '100%',
   },
   rightColumn: {
     flex: 1,
@@ -677,13 +679,25 @@ const styles = StyleSheet.create({
     gap: 20,
     flexWrap: 'wrap',
   },
+  heroRowMobile: {
+    flexDirection: 'column',
+    flexWrap: 'nowrap',
+    alignItems: 'stretch',
+    gap: 16,
+  },
   heroImageContainer: {
-    width: 320,
-    height: 200,
     borderRadius: 12,
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: '#f1f5f9',
+  },
+  heroImageDesktop: {
+    width: 320,
+    height: 200,
+  },
+  heroImageMobile: {
+    width: '100%',
+    aspectRatio: 1.6,
   },
   heroImage: {
     width: '100%',
@@ -723,6 +737,11 @@ const styles = StyleSheet.create({
     minWidth: 260,
     gap: 8,
   },
+  heroDetailsMobile: {
+    flex: 0,
+    minWidth: 0,
+    width: '100%',
+  },
   heroTitle: {
     fontSize: 22,
     fontWeight: '800',
@@ -745,6 +764,9 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   metaText: {
+    flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
     fontSize: 13,
     color: '#475569',
     fontWeight: '600',
