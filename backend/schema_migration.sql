@@ -69,6 +69,7 @@ CREATE TABLE public.users (
   approved_by text,
   approved_at text,
   rejection_reason text,
+  social_media text NOT NULL DEFAULT '{}',
   CONSTRAINT users_pkey PRIMARY KEY (users_id)
 );
 
@@ -108,6 +109,7 @@ CREATE TABLE public.volunteers (
   created_at text,
   skills text[] NOT NULL DEFAULT '{}',
   past_projects text[] NOT NULL DEFAULT '{}',
+  social_media text NOT NULL DEFAULT '{}',
   CONSTRAINT volunteers_pkey PRIMARY KEY (volunteers_id)
 );
 
@@ -134,6 +136,7 @@ CREATE TABLE public.partners (
   created_at text,
   registration_documents jsonb NOT NULL DEFAULT '{}',
   advocacy_focus text[] NOT NULL DEFAULT '{}',
+  social_media text NOT NULL DEFAULT '{}',
   CONSTRAINT partners_pkey PRIMARY KEY (partners_id)
 );
 

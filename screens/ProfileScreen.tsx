@@ -41,6 +41,7 @@ import { VolunteerRecognitionStatus } from '../models/storage';
 import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, VolunteerAffiliation, PartnerSectorType, AdvocacyFocus, SocialMediaInfo } from '../models/types';
 import { getAttachmentLabel, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
+import { mergeSocialMediaInfo } from '../utils/socialMedia';
 import { TASK_SKILL_OPTIONS } from '../utils/skills';
 import VolunteerImpactMap from '../components/VolunteerImpactMap';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
@@ -438,7 +439,9 @@ export default function ProfileScreen() {
     setNameDraft(user.name || '');
     setEmailDraft(user.email || '');
     setPhoneDraft(user.phone || '');
-    setSocialMediaDraft(user.socialMedia || volunteerProfile?.socialMedia || partnerProfiles[0]?.socialMedia || {});
+    setSocialMediaDraft(
+      mergeSocialMediaInfo(user.socialMedia, volunteerProfile?.socialMedia, partnerProfiles[0]?.socialMedia)
+    );
     setNewPasswordDraft('');
     setConfirmPasswordDraft('');
     setUserTypeDraft(user.userType || 'Adult');
@@ -818,7 +821,6 @@ export default function ProfileScreen() {
           email: normalizedEmail,
           phone: normalizedPhone,
           skills: skillsDraft,
-          skillsDescription: '',
           availability: baseVolunteerProfile.availability || {
             daysPerWeek: 0,
             hoursPerWeek: 0,
@@ -830,7 +832,6 @@ export default function ProfileScreen() {
           // Engagement status is derived from active event participation and
           // must not be changed by editing the profile.
           engagementStatus: baseVolunteerProfile.engagementStatus || 'Open to Volunteer',
-          background: '',
           createdAt: baseVolunteerProfile.createdAt || new Date().toISOString(),
           gender: genderDraft,
           dateOfBirth: dateOfBirthDraft,
@@ -1265,7 +1266,9 @@ export default function ProfileScreen() {
           <View style={styles.detailInfoCard}>
             <Text style={styles.detailInfoLabel}>Social Media</Text>
             <Text style={styles.detailInfoValue}>
-              {formatSocialMediaInfo(user?.socialMedia || volunteerProfile?.socialMedia || partnerProfiles[0]?.socialMedia) || 'Not provided'}
+              {formatSocialMediaInfo(
+                mergeSocialMediaInfo(user?.socialMedia, volunteerProfile?.socialMedia, partnerProfiles[0]?.socialMedia)
+              ) || 'Not provided'}
             </Text>
           </View>
           <View style={styles.detailInfoCard}>

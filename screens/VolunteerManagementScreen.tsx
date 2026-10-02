@@ -45,6 +45,7 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
 import { downloadXlsxFile } from '../utils/xlsxDownload';
+import { formatSocialMediaInfo, mergeSocialMediaInfo } from '../utils/socialMedia';
 
 type VolunteerDocumentField = 'validIdPhoto' | 'certificationsOrTrainings';
 
@@ -864,6 +865,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const profileName = (selectedUser?.name || selectedVolunteer.name || '').trim() || 'Unnamed volunteer';
     const profileEmail = (selectedUser?.email || selectedVolunteer.email || '').trim().toLowerCase();
     const profilePhone = (selectedUser?.phone || selectedVolunteer.phone || '').trim();
+    const profileSocialMedia = mergeSocialMediaInfo(
+      selectedVolunteer.socialMedia,
+      selectedUser?.volunteerMembershipSheet?.socialMedia,
+      selectedUser?.socialMedia,
+    );
+    const profileSocialMediaLabel = formatSocialMediaInfo(profileSocialMedia) || 'Not provided';
     const profileSkills = membershipSheet?.skills?.length ? membershipSheet.skills : selectedVolunteer.skills;
     const certificateUri = getVolunteerDocumentUri(
       selectedVolunteer,
@@ -875,10 +882,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       selectedUser,
       'validIdPhoto',
     );
-    const availableDaysLabel = selectedVolunteer.availability?.availableDays?.length
-      ? selectedVolunteer.availability.availableDays.join(', ')
-      : '-';
-
     return (
       <View style={styles.container}>
         <UserAccountDetailsModal
@@ -1019,7 +1022,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       { label: 'Date of Birth', value: membershipSheet?.dateOfBirth || selectedVolunteer.dateOfBirth || '-' },
                       { label: 'Civil Status', value: membershipSheet?.civilStatus || selectedVolunteer.civilStatus || '-' },
                       { label: 'Volunteer Status', value: selectedVolunteerEngagementStatus },
-                      { label: 'Available on', value: availableDaysLabel },
                     ].map(field => (
                       <View key={field.label} style={styles.applicationFieldRow}>
                         <Text style={styles.applicationFieldLabel}>{field.label}</Text>
@@ -1040,6 +1042,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       { label: 'Region', value: membershipSheet?.homeAddressRegion || selectedVolunteer.homeAddressRegion || '-' },
                       { label: 'City / Municipality', value: membershipSheet?.homeAddressCityMunicipality || selectedVolunteer.homeAddressCityMunicipality || '-' },
                       { label: 'Barangay', value: membershipSheet?.homeAddressBarangay || selectedVolunteer.homeAddressBarangay || '-' },
+                      { label: 'Social Media', value: profileSocialMediaLabel },
                     ].map(field => (
                       <View key={field.label} style={styles.applicationFieldRow}>
                         <Text style={styles.applicationFieldLabel}>{field.label}</Text>
@@ -1267,7 +1270,6 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       { label: 'Date of Birth', value: membershipSheet?.dateOfBirth || selectedVolunteer.dateOfBirth || '-' },
                       { label: 'Civil Status', value: membershipSheet?.civilStatus || selectedVolunteer.civilStatus || '-' },
                       { label: 'Volunteer Status', value: selectedVolunteerEngagementStatus },
-                      { label: 'Available on', value: availableDaysLabel },
                     ].map(field => (
                       <View key={field.label} style={styles.applicationFieldRow}>
                         <Text style={styles.applicationFieldLabel}>{field.label}</Text>
@@ -1288,6 +1290,7 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                       { label: 'Region', value: membershipSheet?.homeAddressRegion || selectedVolunteer.homeAddressRegion || '-' },
                       { label: 'City / Municipality', value: membershipSheet?.homeAddressCityMunicipality || selectedVolunteer.homeAddressCityMunicipality || '-' },
                       { label: 'Barangay', value: membershipSheet?.homeAddressBarangay || selectedVolunteer.homeAddressBarangay || '-' },
+                      { label: 'Social Media', value: profileSocialMediaLabel },
                     ].map(field => (
                       <View key={field.label} style={styles.applicationFieldRow}>
                         <Text style={styles.applicationFieldLabel}>{field.label}</Text>
@@ -2363,13 +2366,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#333',
-    fontFamily: 'Nunito',
-  },
-  availableDaysLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#333',
-    marginTop: 6,
     fontFamily: 'Nunito',
   },
   daysContainer: {

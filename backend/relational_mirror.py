@@ -81,7 +81,8 @@ RELATIONAL_TABLE_DDL = [
       approved_at text,
       rejection_reason text,
       created_at text,
-      profile_photo text
+      profile_photo text,
+      social_media text not null default '{}'
     )
     """,
     "create index if not exists users_email_idx on users (lower(coalesce(email, '')))",
@@ -95,6 +96,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table users add column if not exists approved_at text",
     "alter table users add column if not exists rejection_reason text",
     "alter table users add column if not exists profile_photo text",
+    "alter table users add column if not exists social_media text not null default '{}'",
     f"""
     create table if not exists partners (
       id text primary key,
@@ -120,7 +122,8 @@ RELATIONAL_TABLE_DDL = [
       registration_documents text not null default {JSON_ARRAY},
       region text,
       province text,
-      city_municipality text
+      city_municipality text,
+      social_media text not null default '{}'
     )
     """,
     "create index if not exists partners_owner_user_id_idx on partners (owner_user_id)",
@@ -132,6 +135,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table partners add column if not exists region text",
     "alter table partners add column if not exists province text",
     "alter table partners add column if not exists city_municipality text",
+    "alter table partners add column if not exists social_media text not null default '{}'",
     f"""
         create table if not exists volunteers (
             id text primary key,
@@ -168,7 +172,8 @@ RELATIONAL_TABLE_DDL = [
             created_at text,
             hobbies_and_interests text,
             special_skills text,
-            rejection_reason text
+            rejection_reason text,
+            social_media text not null default '{}'
         )
     """,
     "create index if not exists volunteers_user_id_idx on volunteers (user_id)",
@@ -190,6 +195,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table volunteers add column if not exists hobbies_and_interests text",
     "alter table volunteers add column if not exists special_skills text",
     "alter table volunteers add column if not exists rejection_reason text",
+    "alter table volunteers add column if not exists social_media text not null default '{}'",
     f"""
     create table if not exists skills (
       skills_id text primary key,
@@ -699,6 +705,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("rejection_reason", False),
             ("created_at", False),
             ("profile_photo", False),
+            ("social_media", False),
         ],
     },
     "partners": {
@@ -728,6 +735,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("region", False),
             ("province", False),
             ("city_municipality", False),
+            ("social_media", False),
         ],
     },
     "volunteers": {
@@ -769,6 +777,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("hobbies_and_interests", False),
             ("special_skills", False),
             ("rejection_reason", False),
+            ("social_media", False),
         ],
     },
     "skills": {
@@ -1076,6 +1085,7 @@ LIGHTWEIGHT_MEDIA_COLUMNS: dict[str, set[str]] = {
 FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
     "users": {
         "profilePhoto": "profile_photo",
+        "socialMedia": "social_media",
     },
     "projects": {
         "partnerId": "partner_id",
@@ -1166,10 +1176,11 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
         "createdAt": "created_at",
         "updatedAt": "updated_at",
     },
-    "volunteers": {"userId": "user_id"},
+    "volunteers": {"userId": "user_id", "socialMedia": "social_media"},
     "partners": {
         "ownerUserId": "owner_user_id",
         "cityMunicipality": "city_municipality",
+        "socialMedia": "social_media",
     },
     "statusUpdates": {
         "projectId": "project_id",
@@ -1470,6 +1481,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("rejectionReason"),
             item.get("createdAt"),
             item.get("profilePhoto"),
+            _json_dump(item.get("socialMedia"), {}),
         )
 
     if key == "partners":
@@ -1498,6 +1510,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("region"),
             item.get("province"),
             item.get("cityMunicipality"),
+            _json_dump(item.get("socialMedia"), {}),
         )
 
     if key == "volunteers":
@@ -1538,6 +1551,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("hobbiesAndInterests"),
             item.get("specialSkills"),
             item.get("rejectionReason"),
+            _json_dump(item.get("socialMedia"), {}),
         )
 
     if key == "skills":
@@ -1865,6 +1879,7 @@ def _row_to_item(
             "rejectionReason": row.get("rejection_reason"),
             "createdAt": row["created_at"],
             "profilePhoto": row.get("profile_photo"),
+            "socialMedia": _json_load(row.get("social_media"), {}),
         }
         if include_password:
             user["password"] = row["password"]
@@ -1896,6 +1911,7 @@ def _row_to_item(
             "region": row.get("region"),
             "province": row.get("province"),
             "cityMunicipality": row.get("city_municipality"),
+            "socialMedia": _json_load(row.get("social_media"), {}),
         }
 
     if key == "volunteers":
@@ -1935,6 +1951,7 @@ def _row_to_item(
             "hobbiesAndInterests": row.get("hobbies_and_interests"),
             "specialSkills": row.get("special_skills"),
             "rejectionReason": row.get("rejection_reason"),
+            "socialMedia": _json_load(row.get("social_media"), {}),
         }
 
     if key == "skills":

@@ -42,6 +42,7 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 import { navigateToAvailableRoute } from '../utils/navigation';
 import { formatProjectLocation } from '../utils/locationFormat';
 import { getAttachmentLabel } from '../utils/media';
+import { formatSocialMediaInfo, mergeSocialMediaInfo } from '../utils/socialMedia';
 
 const sectorOptions: PartnerSectorType[] = ['NGO', 'Hospital', 'Institution', 'Private'];
 const advocacyOptions: AdvocacyFocus[] = ['Nutrition', 'Education', 'Livelihood', 'Disaster'];
@@ -126,7 +127,11 @@ function hydratePartnerRegistration(partner: Partner, partnerUsers: User[]): Par
     stakeholderName: partner.stakeholderName?.trim() || account?.name?.trim() || undefined,
     contactEmail: partner.contactEmail?.trim() || account?.email?.trim() || undefined,
     contactPhone: partner.contactPhone?.trim() || account?.phone?.trim() || undefined,
-    socialMedia: partner.socialMedia || account?.socialMedia || account?.partnerRegistration?.socialMedia,
+    socialMedia: mergeSocialMediaInfo(
+      partner.socialMedia,
+      account?.partnerRegistration?.socialMedia,
+      account?.socialMedia,
+    ),
     registrationDocuments: getPartnerRegistrationDocuments(partner, account),
   };
 }
@@ -149,10 +154,7 @@ function getMeaningfulPartnerDescription(partner: Partner): string {
 }
 
 function formatPartnerSocialMedia(partner: Partner): string {
-  return Object.entries(partner.socialMedia || {})
-    .filter(([, value]) => Boolean(value?.trim()))
-    .map(([platform, value]) => `${platform}: ${value}`)
-    .join(' • ');
+  return formatSocialMediaInfo(partner.socialMedia);
 }
 
 function getProjectVolunteerCount(project: Project): number {
