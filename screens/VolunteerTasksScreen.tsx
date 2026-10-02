@@ -575,6 +575,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   const [activeTab, setActiveTab] = useState<TaskScreenTab>('My Tasks');
   const [selectedTaskSection, setSelectedTaskSection] = useState<TaskSectionPreview | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
+  const [taskAssignmentLoadingVolunteerId, setTaskAssignmentLoadingVolunteerId] = useState<string | null>(null);
+  const [taskAssignmentLoadingAction, setTaskAssignmentLoadingAction] = useState<'assign' | 'remove' | null>(null);
   const [attendanceNotice, setAttendanceNotice] = useState<string | null>(null);
 
   const tasksLoadInFlightRef = useRef<Promise<void> | null>(null);
@@ -1110,6 +1112,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
     try {
       setActionLoadingKey(loadingKey);
+      setTaskAssignmentLoadingVolunteerId(volunteerId || null);
+      setTaskAssignmentLoadingAction(volunteerId ? mode : null);
       const isFieldOfficerForEvent = (eventProject.internalTasks || []).some(
         task => task.isFieldOfficer && isVolunteerAssignedToTask(task, volunteerProfile.id, volunteerProfile.userId)
       );
@@ -1313,6 +1317,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       Alert.alert('Error', 'Failed to update the event task assignment.');
     } finally {
       setActionLoadingKey(current => current === loadingKey ? null : current);
+      setTaskAssignmentLoadingVolunteerId(current => current === (volunteerId || null) ? null : current);
+      setTaskAssignmentLoadingAction(null);
     }
   };
 
@@ -2759,15 +2765,18 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
                   {showManagedTaskAssignments ? (
                     (selectedManagedEvent.internalTasks || []).map(eventTask => (
-                      <TouchableOpacity
+                      <View
                         key={eventTask.id}
                         style={styles.assignmentCard}
-                        activeOpacity={0.88}
-                        onPress={() =>
-                          setExpandedManagedTaskId(current => (current === eventTask.id ? null : eventTask.id))
-                        }
                       >
-                        <View style={styles.assignmentHeader}>
+                        <TouchableOpacity
+                          style={styles.assignmentHeader}
+                          activeOpacity={0.88}
+                          disabled={actionLoadingKey === `task-assignment-${selectedManagedEvent.id}-${eventTask.id}`}
+                          onPress={() =>
+                            setExpandedManagedTaskId(current => (current === eventTask.id ? null : eventTask.id))
+                          }
+                        >
                           <View style={styles.assignmentCopy}>
                             <Text style={styles.assignmentTitle}>{eventTask.title}</Text>
                             <Text style={styles.assignmentMeta}>
@@ -2796,7 +2805,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                               color="#166534"
                             />
                           </View>
-                        </View>
+                        </TouchableOpacity>
 
                         {expandedManagedTaskId === eventTask.id ? (
                           eventTask.isFieldOfficer ? (
@@ -2818,6 +2827,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                               <View style={styles.assignmentButtonGroup}>
                                 {managedEventVolunteerOptions.map(volunteer => {
                                   const isAssigned = isVolunteerAssignedToTask(eventTask, volunteer.id);
+                                  const isSavingVolunteer =
+                                    actionLoadingKey === `task-assignment-${selectedManagedEvent.id}-${eventTask.id}` &&
+                                    taskAssignmentLoadingVolunteerId === volunteer.id;
                                   return (
                                     <TouchableOpacity
                                       key={`${eventTask.id}-${volunteer.id}`}
@@ -2828,8 +2840,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                       disabled={Boolean(actionLoadingKey)}
                                       onPress={() => handleTaskVolunteerChipPress(eventTask, volunteer)}
                                     >
-                                      {actionLoadingKey === `task-assignment-${selectedManagedEvent.id}-${eventTask.id}` ? (
-                                        <ActivityIndicator size="small" color={isAssigned ? '#166534' : '#ffffff'} />
+                                      {isSavingVolunteer ? (
+                                        <ActivityIndicator size="small" color={isAssigned ? '#ffffff' : '#166534'} />
                                       ) : (
                                         <Text
                                           style={[
@@ -2844,6 +2856,14 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                   );
                                 })}
                               </View>
+                              {actionLoadingKey === `task-assignment-${selectedManagedEvent.id}-${eventTask.id}` ? (
+                                <View style={styles.assignmentSavingNotice}>
+                                  <ActivityIndicator size="small" color="#166534" />
+                                  <Text style={styles.assignmentSavingText}>
+                                    {taskAssignmentLoadingAction === 'remove' ? 'Removing volunteer...' : 'Saving assignment...'}
+                                  </Text>
+                                </View>
+                              ) : null}
                               <Text style={styles.fieldOfficerHintText}>
                                 Single tap adds the volunteer. Tap an assigned volunteer chip again to remove that volunteer from this task.
                               </Text>
@@ -2854,7 +2874,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                             <Text style={styles.fieldOfficerHintText}>Tap to open assignment details</Text>
                           </View>
                         )}
-                      </TouchableOpacity>
+                      </View>
                     ))
                   ) : null}
                 </View>
@@ -4250,6 +4270,18 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 12,
+  },
+  assignmentSavingNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 4,
+  },
+  assignmentSavingText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
   },
   assignmentButton: {
     borderWidth: 1,

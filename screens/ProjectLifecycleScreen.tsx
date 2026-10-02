@@ -147,6 +147,8 @@ import {
 
   saveEvent,
 
+  savePartnerEvent,
+
   saveProgram,
 
   saveProject,
@@ -3646,6 +3648,24 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const canCreateEventForProject = (parentProject: Project) =>
     isApprovedPartnerProposalProject(parentProject);
 
+  const canManageApprovedPartnerEvent = (eventProject: Project | null | undefined) => {
+    if (!eventProject?.isEvent) {
+      return false;
+    }
+    if (isAdmin) {
+      return true;
+    }
+    if (user?.role !== 'partner') {
+      return false;
+    }
+    const parentProjectId = String(eventProject.parentProjectId || '').trim();
+    const parentProject = projects.find(project => !project.isEvent && project.id === parentProjectId);
+    return Boolean(parentProject && isApprovedPartnerProposalProject(parentProject));
+  };
+
+  const canManageProjectTasks = (project: Project | null | undefined) =>
+    Boolean(isAdmin || (project?.isEvent && canManageApprovedPartnerEvent(project)));
+
   const startInlineEventCreation = (parentProject: Project) => {
 
     if (!canCreateEventForProject(parentProject)) {
@@ -3710,11 +3730,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    // Set default dates to parent's dates
-
-    nextDraft.startDate = parentProject.startDate || new Date().toISOString().split('T')[0];
-
-    nextDraft.endDate = parentProject.endDate || nextDraft.startDate;
+    // Date inputs use YYYY-MM-DD. Keep the defaults within the approved
+    // project's date range, and recover gracefully if legacy project dates
+    // are missing or reversed.
+    const parentStartDate = String(parentProject.startDate || '').slice(0, 10)
+      || new Date().toISOString().split('T')[0];
+    const parentEndDate = String(parentProject.endDate || '').slice(0, 10);
+    nextDraft.startDate = parentStartDate;
+    nextDraft.endDate = parentEndDate && parentEndDate >= parentStartDate
+      ? parentEndDate
+      : parentStartDate;
 
 
 
@@ -5891,7 +5916,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     if (project.isEvent) {
 
-      await saveEvent(project);
+      if (!isAdmin && user?.role === 'partner') {
+        await savePartnerEvent(project);
+      } else {
+        await saveEvent(project);
+      }
 
       return;
 
@@ -7742,7 +7771,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     try {
 
-      await saveProjectLikeRecord(projectToSave);
+      if (isPartnerEventCreation) {
+        await savePartnerEvent(projectToSave);
+      } else {
+        await saveProjectLikeRecord(projectToSave);
+      }
 
       // The saved record is already in the local cache/UI. Reconcile in the
       // background so closing the modal is not held by a second collection read.
@@ -9044,22 +9077,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const _executeSaveInternalTask = async () => {
 
-    if (!isAdmin) {
-
-      Alert.alert('Access Restricted', 'Only admin accounts can manage internal project tasks.');
-
-      return;
-
-    }
-
-
-
     const currentSelectedProject = getCurrentSelectedProject();
 
     if (!currentSelectedProject) {
 
       return;
 
+    }
+
+    if (!canManageProjectTasks(currentSelectedProject)) {
+      Alert.alert('Access Restricted', 'Only admins or the partner who owns this approved event can manage its tasks.');
+      return;
     }
 
 
@@ -9351,13 +9379,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   const handleSaveInternalTask = async () => {
-    if (!isAdmin) {
-      Alert.alert('Access Restricted', 'Only admin accounts can manage internal project tasks.');
-      return;
-    }
-
     const currentSelectedProject = getCurrentSelectedProject();
     if (!currentSelectedProject) {
+      return;
+    }
+    if (!canManageProjectTasks(currentSelectedProject)) {
+      Alert.alert('Access Restricted', 'Only admins or the partner who owns this approved event can manage its tasks.');
       return;
     }
 
@@ -9553,7 +9580,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const currentSelectedProject = getCurrentSelectedProject() || selectedProject;
 
-    if (!isAdmin || !currentSelectedProject) {
+    if (!currentSelectedProject || !canManageProjectTasks(currentSelectedProject)) {
 
       return;
 
@@ -19149,7 +19176,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       if (checked && !log.attendanceConfirmedAt) {
         Alert.alert(
           'Volunteer confirmation required',
-          'The volunteer must confirm attendance from the volunteer app before an admin can verify it.'
+          'The volunteer must confirm attendance in the volunteer app before the event team can verify it.'
         );
         return;
       }
@@ -19332,6 +19359,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const renderAttendanceTasksView = (project: Project) => {
 
+      const compactLayout = width < 768;
+
       const selectedAttendanceDate = /^\d{4}-\d{2}-\d{2}$/.test(resolvedAttendanceDateKey)
         ? new Date(`${resolvedAttendanceDateKey}T00:00:00`)
         : normalizeDateOnlyValue(currentDate);
@@ -19388,6 +19417,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           return rightAssigned - leftAssigned || left.title.localeCompare(right.title);
 
         });
+
+      const manageableTaskCards = isAdmin
+        ? taskCards
+        : taskCards.filter(task => !task.isFieldOfficer);
 
       const activeTaskAction = taskCards.find(task => task.id === activeActionTaskId) || null;
       const activeTaskActionAssignedIds = activeTaskAction ? getTaskAssignedVolunteerIds(activeTaskAction) : [];
@@ -19546,7 +19579,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             style={{ flex: 1, backgroundColor: '#f6f7f3' }}
 
-            contentContainerStyle={{ padding: 24, paddingBottom: 72 }}
+            contentContainerStyle={{ padding: compactLayout ? 16 : 24, paddingBottom: 72 }}
 
             showsVerticalScrollIndicator={true}
 
@@ -19576,7 +19609,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               <View>
 
-                <Text style={{ fontSize: 30, fontWeight: '800', color: '#0f172a', marginBottom: 4 }}>
+                <Text style={{ fontSize: compactLayout ? 26 : 30, fontWeight: '800', color: '#0f172a', marginBottom: 4 }}>
 
                   Event Attendance & Tasks
 
@@ -19597,7 +19630,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             {eventWorkspaceTab === 'Attendance' && (
               <>
                 <View style={styles.attendanceDatePickerContainer}>
-                  <View style={styles.attendanceDatePickerHeader}>
+                  <View style={[styles.attendanceDatePickerHeader, compactLayout && { flexDirection: 'column', alignItems: 'stretch', gap: 10 }]}>
                     <View style={styles.attendanceDatePickerHeaderCopy}>
                       <View style={styles.attendanceDatePickerEyebrowRow}>
                         <MaterialIcons name="event-available" size={16} color="#166534" />
@@ -19613,7 +19646,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       accessibilityLabel={`Choose attendance date, currently ${dateLabel}`}
                       onPress={() => setAttendancePickerVisible(true)}
                       activeOpacity={0.85}
-                      style={styles.attendanceDatePickerTrigger}
+                      style={[styles.attendanceDatePickerTrigger, compactLayout && { width: '100%', maxWidth: undefined, justifyContent: 'space-between' }]}
                     >
                       <MaterialIcons name="calendar-month" size={18} color="#166534" />
                       <Text style={styles.attendanceDatePickerTriggerText}>{dateLabel}</Text>
@@ -19621,9 +19654,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     </TouchableOpacity>
                   </View>
 
-                  <View style={styles.attendanceDatePickerRange}>
+                  <View style={[styles.attendanceDatePickerRange, compactLayout && { flexDirection: 'column', alignItems: 'flex-start' }]}>
                     <MaterialIcons name="date-range" size={15} color="#64748b" />
-                    <Text style={styles.attendanceDatePickerRangeText}>
+                    <Text style={[styles.attendanceDatePickerRangeText, compactLayout && { minWidth: 0, flex: undefined }]}>
                       Event window: {formatProjectDateRangeLabel(project.startDate, project.endDate)}
                     </Text>
                     <Text style={styles.attendanceDatePickerCountText}>
@@ -19695,11 +19728,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
             {eventWorkspaceTab === 'Attendance' && (
-            <View style={{ flexDirection: 'row', gap: 16, marginBottom: 24 }}>
+            <View style={{ flexDirection: compactLayout ? 'column' : 'row', gap: 12, marginBottom: 24 }}>
 
               <View style={{
 
-                flex: 1,
+                flex: compactLayout ? undefined : 1,
+
+                width: compactLayout ? '100%' : undefined,
 
                 flexDirection: 'row',
 
@@ -19725,7 +19760,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </View>
 
-                <View>
+                <View style={{ flex: 1, minWidth: 0 }}>
 
                   <Text style={{ fontSize: 12, color: '#64748b', fontWeight: '500' }}>Total Estimated Volunteers</Text>
 
@@ -19741,7 +19776,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               <View style={{
 
-                flex: 1,
+                flex: compactLayout ? undefined : 1,
+
+                width: compactLayout ? '100%' : undefined,
 
                 flexDirection: 'row',
 
@@ -19767,7 +19804,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </View>
 
-                <View>
+                <View style={{ flex: 1, minWidth: 0 }}>
 
                   <Text style={{ fontSize: 12, color: '#64748b', fontWeight: '500' }}>Tasks Created</Text>
 
@@ -19781,7 +19818,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
               <View style={{
 
-                flex: 1,
+                flex: compactLayout ? undefined : 1,
+
+                width: compactLayout ? '100%' : undefined,
 
                 flexDirection: 'row',
 
@@ -19807,7 +19846,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 </View>
 
-                <View>
+                <View style={{ flex: 1, minWidth: 0 }}>
 
                   <Text style={{ fontSize: 12, color: '#64748b', fontWeight: '500' }}>Tasks Assigned</Text>
 
@@ -19823,11 +19862,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             )}
 
             {eventWorkspaceTab === 'Attendance' && (
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 16 }}>
+            <View style={{ flexDirection: compactLayout ? 'column' : 'row', justifyContent: 'space-between', alignItems: compactLayout ? 'stretch' : 'center', marginBottom: 20, gap: 10 }}>
 
               <View style={{
 
-                flex: 1,
+                flex: compactLayout ? undefined : 1,
+
+                width: compactLayout ? '100%' : undefined,
 
                 flexDirection: 'row',
 
@@ -19885,7 +19926,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 height: 40,
 
-                width: 150,
+                width: compactLayout ? '100%' : 150,
 
               }}>
 
@@ -19949,7 +19990,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 padding: 4,
 
-                width: 320,
+                width: compactLayout ? '100%' : 320,
 
               }}>
 
@@ -20045,7 +20086,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 }}>
 
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <View style={{ flexDirection: compactLayout ? 'column' : 'row', justifyContent: 'space-between', alignItems: compactLayout ? 'stretch' : 'center', gap: 10, marginBottom: 12 }}>
 
                     <View>
 
@@ -20072,6 +20113,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       style={{
 
                         flexDirection: 'row',
+
+                        alignSelf: compactLayout ? 'flex-start' : undefined,
 
                         alignItems: 'center',
 
@@ -20121,9 +20164,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           flexGrow: 1,
 
-                          minWidth: 170,
+                          minWidth: compactLayout ? 136 : 170,
 
-                          flexBasis: '22%',
+                          flexBasis: compactLayout ? '46%' : '22%',
 
                           backgroundColor: '#f8fafc',
 
@@ -20186,6 +20229,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   <View style={{
 
                     flexDirection: 'row',
+                    display: compactLayout ? 'none' : 'flex',
 
                     backgroundColor: '#f8fafc',
 
@@ -20285,15 +20329,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         const isCurrentlyDeleting = isDeletingTaskId === task.id;
 
+                        const canManageTask = isAdmin || !task.isFieldOfficer;
+
 
 
                         return (
 
                           <View key={task.id} style={{
 
-                            flexDirection: 'row',
+                            flexDirection: compactLayout ? 'column' : 'row',
 
-                            alignItems: 'center',
+                            alignItems: compactLayout ? 'stretch' : 'center',
 
                             borderBottomWidth: 1,
 
@@ -20301,7 +20347,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             paddingVertical: 14,
 
-                            paddingHorizontal: 20,
+                            paddingHorizontal: compactLayout ? 14 : 20,
+
+                            flexWrap: compactLayout ? 'wrap' : 'nowrap',
 
                             gap: 12,
 
@@ -20311,7 +20359,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           }}>
 
-                            <View style={{ flex: 2.2, flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                            <View style={{ flex: compactLayout ? undefined : 2.2, width: compactLayout ? '100%' : undefined, flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
 
                               {isCurrentlyDeleting ? (
 
@@ -20371,7 +20419,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                            <View style={{ flex: 1.4, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                            <View style={{ flex: compactLayout ? undefined : 1.4, width: compactLayout ? '100%' : undefined, flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+
+                              {compactLayout ? <Text style={{ width: '100%', fontSize: 10, fontWeight: '700', color: '#64748b' }}>Required skills</Text> : null}
 
                               {task.skillsNeeded.length > 0 ? task.skillsNeeded.map(skill => (
 
@@ -20391,7 +20441,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                            <View style={{ flex: 0.8, alignItems: 'center', justifyContent: 'center' }}>
+                            <View style={{ flex: compactLayout ? undefined : 0.8, width: compactLayout ? '100%' : undefined, flexDirection: compactLayout ? 'row' : 'column', justifyContent: compactLayout ? 'space-between' : 'center', alignItems: 'center' }}>
+
+                              {compactLayout ? <Text style={{ fontSize: 11, color: '#64748b', fontWeight: '700' }}>Estimated volunteers</Text> : null}
 
                               <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>
 
@@ -20403,7 +20455,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                            <View style={{ flex: 1.2, alignItems: 'center' }}>
+                            <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '100%' : undefined, flexDirection: compactLayout ? 'row' : 'column', justifyContent: compactLayout ? 'space-between' : 'center', alignItems: 'center' }}>
+
+                              {compactLayout ? <Text style={{ fontSize: 11, color: '#64748b', fontWeight: '700' }}>Assigned</Text> : null}
 
                               <Text style={{ fontSize: 14, fontWeight: '800', color: statusColor, marginBottom: 4 }}>
 
@@ -20439,17 +20493,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                            <View style={{ width: 60, alignItems: 'center', justifyContent: 'center' }} {...({} as any)}>
+                            <View style={{ width: 60, alignItems: 'center', justifyContent: 'center', alignSelf: compactLayout ? 'flex-end' : undefined }} {...({} as any)}>
 
-                              <TouchableOpacity
-                                disabled={eventIsClosed}
-                                onPress={() => setActiveActionTaskId(activeActionTaskId === task.id ? null : task.id)}
-                                style={{ padding: 4, opacity: eventIsClosed ? 0.45 : 1 }}
-                              >
-
-                                <MaterialIcons name="more-vert" size={20} color="#64748b" />
-
-                              </TouchableOpacity>
+                              {canManageTask ? (
+                                <TouchableOpacity
+                                  disabled={eventIsClosed}
+                                  onPress={() => setActiveActionTaskId(activeActionTaskId === task.id ? null : task.id)}
+                                  style={{ padding: 4, opacity: eventIsClosed ? 0.45 : 1 }}
+                                >
+                                  <MaterialIcons name="more-vert" size={20} color="#64748b" />
+                                </TouchableOpacity>
+                              ) : (
+                                <MaterialIcons name="lock-outline" size={16} color="#94a3b8" />
+                              )}
 
                             </View>
 
@@ -20482,7 +20538,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         .filter(Boolean)
                     );
 
-                    return taskCards.some(task => {
+                    return manageableTaskCards.some(task => {
                       const assignedIds = getTaskAssignedVolunteerIds(task, volunteers);
                       const taskHasRoom = assignedIds.length < getTaskVolunteerLimit(task, activeSelectedProject.volunteersNeeded);
                       const alreadyAssignedToTask = assignedIds.some(id => volunteerIdentifiers.has(id));
@@ -20515,7 +20571,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                               const assignedToTaskCount = taskCards.filter(t =>
                                 getTaskAssignedVolunteerIds(t, volunteers).some(vid => vid === uv.id || vid === uv.userId)
                               ).length;
-                              const availableTasks = taskCards.filter(t => {
+                              const availableTasks = manageableTaskCards.filter(t => {
                                 const needed = getTaskVolunteerLimit(t, activeSelectedProject.volunteersNeeded);
                                 const assigned = getTaskAssignedVolunteerIds(t, volunteers);
                                 const alreadyIn = assigned.some(vid => vid === uv.id || vid === uv.userId);
@@ -20529,8 +20585,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 <View
                                   key={uv.id}
                                   style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
+                                    flexDirection: compactLayout ? 'column' : 'row',
+                                    alignItems: compactLayout ? 'stretch' : 'center',
                                     paddingVertical: 14,
                                     borderTopWidth: uvIndex === 0 ? 0 : 1,
                                     borderTopColor: '#e2e8f0',
@@ -20553,14 +20609,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                     </Text>
                                   </View>
 
-                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                                    <Text style={{ fontSize: 13, color: '#475569', fontWeight: '600' }}>Assign to</Text>
+                                  <View style={{ flexDirection: compactLayout ? 'column' : 'row', alignItems: compactLayout ? 'stretch' : 'center', gap: 8, width: compactLayout ? '100%' : undefined, flexShrink: 0 }}>
+                                    {!compactLayout ? <Text style={{ fontSize: 13, color: '#475569', fontWeight: '600' }}>Assign to</Text> : null}
                                     <View style={{
                                       borderWidth: 1,
                                       borderColor: '#cbd5e1',
                                       borderRadius: 8,
                                       backgroundColor: '#ffffff',
-                                      minWidth: 160,
+                                      minWidth: compactLayout ? undefined : 160,
+                                      width: compactLayout ? '100%' : undefined,
                                       justifyContent: 'center',
                                     }}>
                                       <Picker
@@ -20592,6 +20649,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                         paddingVertical: 9,
                                         borderRadius: 8,
                                         minWidth: 72,
+                                        alignSelf: compactLayout ? 'flex-start' : undefined,
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         opacity: quickAssignLoadingId !== null ? 0.65 : 1,
@@ -20621,9 +20679,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <Modal transparent visible={showTaskModal} animationType="fade" onRequestClose={closeTaskModal}>
 
-                  <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', padding: 20 }}>
+                  <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.45)', justifyContent: 'center', padding: compactLayout ? 10 : 20 }}>
 
-                    <View style={{ backgroundColor: '#ffffff', borderRadius: 18, padding: 18, maxWidth: 760, width: '100%', alignSelf: 'center' }}>
+                    <View style={{ backgroundColor: '#ffffff', borderRadius: 18, padding: compactLayout ? 14 : 18, maxWidth: 760, width: '100%', maxHeight: compactLayout ? '90%' : undefined, alignSelf: 'center' }}>
 
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
 
@@ -20642,6 +20700,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       </View>
 
 
+
+                      <ScrollView style={{ flexShrink: 1, maxHeight: compactLayout ? 480 : undefined }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={compactLayout}>
 
                       <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 }}>Task name</Text>
 
@@ -20991,6 +21051,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+                      </ScrollView>
+
                       <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
 
                         <TouchableOpacity
@@ -21071,13 +21133,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 overflow: 'hidden',
 
-                maxHeight: 560,
+                maxHeight: compactLayout ? 680 : 560,
 
               }}>
 
                 <View style={{
 
                   flexDirection: 'row',
+                  display: compactLayout ? 'none' : 'flex',
 
                   backgroundColor: '#f8fafc',
 
@@ -21239,6 +21302,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         <View key={volunteer.id} style={{
 
                           flexDirection: 'row',
+                          flexWrap: compactLayout ? 'wrap' : 'nowrap',
 
                           alignItems: 'center',
 
@@ -21255,7 +21319,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         }}>
 
                           <TouchableOpacity
-                            style={{ width: 40 }}
+                            accessibilityRole="checkbox"
+                            accessibilityLabel={`${isChecked ? 'Unmark' : 'Mark'} attendance for ${volunteer.name}`}
+                            accessibilityState={{ checked: isChecked, disabled: !activeLog || Boolean(isCheckingAttendance) }}
+                            style={{ width: 40, minHeight: 42, justifyContent: 'center', alignItems: 'center' }}
                             onPress={() => activeLog && handleToggleAttendanceCheck(activeLog, !isChecked)}
                             disabled={!activeLog || Boolean(isCheckingAttendance)}
                           >
@@ -21272,7 +21339,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </TouchableOpacity>
 
-                          <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                          <View style={{ flex: compactLayout ? 1 : 2, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
 
                             {renderInitialsAvatar(volunteer.name, 36)}
 
@@ -21286,7 +21353,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </View>
 
-                          <View style={{ flex: 1.2, alignItems: 'flex-start' }}>
+                          <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '46%' : undefined, alignItems: 'flex-start', paddingTop: compactLayout ? 8 : 0 }}>
+
+                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Attendance</Text> : null}
 
                             <View style={{ backgroundColor: badgeColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
 
@@ -21296,7 +21365,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </View>
 
-                          <View style={{ flex: 1.2, alignItems: 'flex-start' }}>
+                          <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '46%' : undefined, alignItems: 'flex-start', paddingTop: compactLayout ? 8 : 0 }}>
+
+                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Verification</Text> : null}
 
                             <View style={{ backgroundColor: attendanceMarkBadgeColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
 
@@ -21306,7 +21377,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             </View>
 
-                            {isAdmin && activeLog && !isChecked ? (
+                            {canManageApprovedPartnerEvent(activeSelectedProject) && activeLog && !isChecked ? (
                               <TouchableOpacity
                                 accessibilityRole="button"
                                 accessibilityLabel={`Mark attendance for ${volunteer.name}`}
@@ -21326,12 +21397,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 ) : (
                                   <MaterialIcons name="event-available" size={16} color="#ffffff" />
                                 )}
+                                {compactLayout ? <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '700', marginLeft: 5 }}>{isCheckingAttendance ? 'Saving' : 'Mark'}</Text> : null}
                               </TouchableOpacity>
                             ) : null}
 
                           </View>
 
-                          <View style={{ flex: 1.2 }}>
+                          <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '46%' : undefined, paddingTop: compactLayout ? 8 : 0 }}>
+
+                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Time in</Text> : null}
 
                             {activeLog ? (
 
@@ -21361,7 +21435,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </View>
 
-                          <View style={{ flex: 2, justifyContent: 'center' }}>
+                          <View style={{ flex: compactLayout ? undefined : 2, width: compactLayout ? '100%' : undefined, justifyContent: 'center', paddingTop: compactLayout ? 8 : 0 }}>
+
+                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Assigned tasks</Text> : null}
 
                             {assignedTasks.length > 0 ? (
 
@@ -21385,7 +21461,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </View>
 
-                          <View style={{ width: 40, alignItems: 'flex-end' }} {...({} as any)}>
+                          <View style={{ width: 40, alignItems: 'flex-end', marginLeft: 'auto' }} {...({} as any)}>
 
                             <TouchableOpacity
 
@@ -21757,7 +21833,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         <MaterialIcons name={previewAttendanceLog.attendanceCheckedAt ? 'verified' : 'fact-check'} size={18} color={previewAttendanceLog.attendanceCheckedAt ? '#166534' : '#64748b'} />
 
                         <Text style={{ flex: 1, fontSize: 13, fontWeight: '800', color: previewAttendanceLog.attendanceCheckedAt ? '#166534' : '#334155' }}>
-                          {previewAttendanceLog.attendanceCheckedAt ? 'Admin attendance confirmed after photo review' : 'Admin confirmation pending after photo review'}
+                          {previewAttendanceLog.attendanceCheckedAt ? 'Attendance verification recorded' : 'Attendance verification pending'}
                         </Text>
 
                       </View>
@@ -21786,7 +21862,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           {attendanceCheckInFlightLogId === previewAttendanceLog.id
                             ? 'Saving Confirmation...'
                             : previewAttendanceLog.attendanceCheckedAt
-                              ? 'Remove Admin Confirmation'
+                              ? 'Remove Attendance Verification'
                               : 'Confirm Attendance After Checking Photo'}
                         </Text>
 
@@ -21841,7 +21917,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    if (showAttendanceTasks && activeSelectedProject.isEvent) {
+    if (showAttendanceTasks && canManageApprovedPartnerEvent(activeSelectedProject)) {
 
       return renderAttendanceTasksView(activeSelectedProject);
 
@@ -22042,6 +22118,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 {/* More dropdown */}
 
+                {String(user?.role || '').toLowerCase() !== 'partner' && (
                 <View style={premiumDetailsStyles.heroMoreMenuWrap} {...({} as any)}>
 
                   <TouchableOpacity
@@ -22140,6 +22217,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   )}
 
                 </View>
+                )}
 
               </View>
 
@@ -22529,7 +22607,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 onCreateEvent={!activeSelectedProject.isEvent && canCreateEventForProject(activeSelectedProject) && !isProjectReadOnly
                   ? () => openCreateEventModal(activeSelectedProject)
                   : undefined}
-                onAttendance={() => setShowAttendanceTasks(true)}
+                onAttendance={canManageApprovedPartnerEvent(activeSelectedProject)
+                  ? () => setShowAttendanceTasks(true)
+                  : undefined}
                 onReports={() => {
                   if (navigation) {
                     navigation.navigate('Reports' as any, { projectId: activeSelectedProject.id });

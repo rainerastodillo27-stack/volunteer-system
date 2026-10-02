@@ -4735,7 +4735,7 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
 
             proposal_details = application.get("proposalDetails")
             if isinstance(proposal_details, dict):
-                for target_key in ("targetProjectId", "targetProgramId", "programId"):
+                for target_key in ("approvedProjectId", "targetProjectId", "targetProgramId", "programId"):
                     target_id = str(proposal_details.get(target_key) or "").strip()
                     if target_id and not target_id.startswith("program:"):
                         project_ids.add(target_id)
@@ -4858,6 +4858,19 @@ def _scope_storage_collection(
                     if str(project.get("id") or "").strip() not in project_ids:
                         continue
                     participant_ids.update(str(value or "").strip() for value in (project.get("volunteers") or []))
+            participant_ids.update(
+                str(value or "").strip()
+                for record in get_postgres_hot_storage_collection(
+                    connection,
+                    "volunteerProjectJoins",
+                    include_images=False,
+                )
+                if isinstance(record, dict)
+                and str(record.get("projectId") or "").strip() in project_ids
+                and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed"}
+                for value in (record.get("volunteerId"), record.get("volunteerUserId"))
+                if str(value or "").strip()
+            )
             return [
                 item
                 for item in items
@@ -9983,8 +9996,23 @@ async def set_volunteer_attendance_check(
                 detail="The volunteer must confirm attendance before it can be verified.",
             )
 
+        session_role = _normalize_role(session)
         checked_by_user_id = str(payload.checkedByUserId or "").strip()
-        if session.get("role") != "admin":
+        if session_role == "partner":
+            partner_user_id = str(session.get("sub") or "").strip()
+            if checked_by_user_id and checked_by_user_id != partner_user_id:
+                raise HTTPException(status_code=403, detail="You cannot mark attendance for another account.")
+            if not _partner_can_manage_approved_event(
+                connection,
+                partner_user_id,
+                str(log.get("projectId") or "").strip(),
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the partner who owns this approved proposal can mark its attendance.",
+                )
+            checked_by_user_id = partner_user_id
+        elif session_role != "admin":
             if checked_by_user_id and checked_by_user_id != str(session.get("sub") or ""):
                 raise HTTPException(status_code=403, detail="You cannot mark attendance for another account.")
             checked_by_user_id = str(session.get("sub") or "")
@@ -9995,7 +10023,7 @@ async def set_volunteer_attendance_check(
                 raise HTTPException(status_code=404, detail="Field officer account not found.")
             checked_by_volunteer = _postgres_get_volunteer_by_user_id(connection, checked_by_user_id)
             is_admin_user = str(checked_by_user.get("role") or "").strip().lower() == "admin"
-            if not is_admin_user and not _user_is_field_officer_for_event(
+            if session_role != "partner" and not is_admin_user and not _user_is_field_officer_for_event(
                 connection,
                 checked_by_user_id,
                 str(log.get("projectId") or "").strip(),
@@ -10981,6 +11009,324 @@ async def review_volunteer_match(
     return {"match": updated_match}
 
 
+def _partner_has_approved_proposal_for_project(
+    connection: Any,
+    partner_user_id: str,
+    project_id: str,
+) -> bool:
+    """Check that a project was approved from this partner's proposal."""
+    normalized_user_id = str(partner_user_id or "").strip()
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_user_id or not normalized_project_id:
+        return False
+
+    proposal_fields = (
+        "proposedTitle",
+        "proposedDescription",
+        "proposedStartDate",
+        "proposedEndDate",
+        "proposedLocation",
+        "communityNeed",
+        "expectedDeliverables",
+    )
+    applications = _postgres_get_hot_items_by_field(
+        connection,
+        "partnerProjectApplications",
+        "partnerUserId",
+        normalized_user_id,
+        include_media=False,
+    )
+    for application in applications:
+        if str(application.get("status") or "").strip() != "Approved":
+            continue
+        details = application.get("proposalDetails")
+        details = details if isinstance(details, dict) else {}
+        application_project_id = str(application.get("projectId") or "").strip()
+        is_proposal = application_project_id.startswith("project-proposal-") or any(
+            str(details.get(field) or "").strip() for field in proposal_fields
+        )
+        if not is_proposal:
+            continue
+        approved_project_id = str(details.get("approvedProjectId") or "").strip()
+        if normalized_project_id in {application_project_id, approved_project_id}:
+            return True
+    return False
+
+
+def _partner_can_manage_approved_event(
+    connection: Any,
+    partner_user_id: str,
+    event_id: str,
+) -> bool:
+    event = _postgres_get_hot_item_by_id(
+        connection,
+        "events",
+        str(event_id or "").strip(),
+        include_media=False,
+    )
+    if event is None or not bool(event.get("isEvent")):
+        return False
+    parent_project_id = str(event.get("parentProjectId") or "").strip()
+    if not parent_project_id:
+        return False
+    parent_project = _postgres_get_hot_item_by_id(
+        connection,
+        "projects",
+        parent_project_id,
+        include_media=False,
+    )
+    return bool(
+        parent_project
+        and not bool(parent_project.get("isEvent"))
+        and _partner_has_approved_proposal_for_project(connection, partner_user_id, parent_project_id)
+    )
+
+
+@app.put("/partner/events/{event_id}")
+async def save_partner_event(
+    request: FastAPIRequest,
+    event_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Create an event or update its tasks under the partner's approved proposal."""
+    session = _get_session_user(request)
+    if _normalize_role(session) != "partner":
+        raise HTTPException(status_code=403, detail="Only partner accounts can use this event workflow.")
+    _require_postgres()
+
+    partner_user_id = str(session.get("sub") or "").strip()
+    normalized_event_id = str(event_id or "").strip()
+    event = dict(payload or {})
+    payload_event_id = str(event.get("id") or "").strip()
+    if not normalized_event_id:
+        raise HTTPException(status_code=400, detail="Event id is required.")
+    if payload_event_id and payload_event_id != normalized_event_id:
+        raise HTTPException(status_code=400, detail="Event id does not match the route.")
+
+    parent_project_id = str(event.get("parentProjectId") or "").strip()
+    if not parent_project_id:
+        raise HTTPException(status_code=400, detail="Choose an approved proposal project for this event.")
+
+    event["id"] = normalized_event_id
+    event["isEvent"] = True
+    event["parentProjectId"] = parent_project_id
+
+    now = datetime.now(timezone.utc).isoformat()
+    changed_keys = ["events"]
+    schedule_changed = False
+    try:
+        with get_connection() as connection:
+            existing_event = _postgres_get_hot_item_by_id(
+                connection,
+                "events",
+                normalized_event_id,
+                include_media=False,
+                for_update=True,
+            )
+            if _postgres_get_hot_item_by_id(connection, "projects", normalized_event_id, include_media=False):
+                raise HTTPException(status_code=409, detail="An event with this id conflicts with an existing project.")
+            if _postgres_get_hot_item_by_id(connection, "programs", normalized_event_id, include_media=False):
+                raise HTTPException(status_code=409, detail="An event with this id conflicts with an existing program.")
+
+            parent_project = _postgres_get_hot_item_by_id(
+                connection,
+                "projects",
+                parent_project_id,
+                include_media=False,
+            )
+            if parent_project is None or bool(parent_project.get("isEvent")):
+                raise HTTPException(status_code=404, detail="Approved parent project was not found.")
+            if not _partner_has_approved_proposal_for_project(connection, partner_user_id, parent_project_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Events can only be created under a project approved from your partner proposal.",
+                )
+
+            if existing_event is not None:
+                existing_parent_id = str(existing_event.get("parentProjectId") or "").strip()
+                if (
+                    not bool(existing_event.get("isEvent"))
+                    or existing_parent_id != parent_project_id
+                    or not _partner_can_manage_approved_event(
+                        connection,
+                        partner_user_id,
+                        normalized_event_id,
+                    )
+                ):
+                    raise HTTPException(status_code=403, detail="You can only manage events under your approved proposals.")
+                # Partner updates through this route are task-board changes only.
+                # Preserve event details, attendance, membership and other
+                # operational fields from the canonical server record.
+                incoming_tasks = event.get("internalTasks")
+                event = {
+                    **existing_event,
+                    "internalTasks": incoming_tasks if isinstance(incoming_tasks, list) else [],
+                }
+                event["id"] = normalized_event_id
+                event["parentProjectId"] = existing_parent_id
+                event["isEvent"] = True
+
+            existing_field_officer_tasks = [
+                task
+                for task in ((existing_event or {}).get("internalTasks") or [])
+                if isinstance(task, dict) and bool(task.get("isFieldOfficer"))
+            ]
+            field_officer_task_ids = {
+                str(task.get("id") or "").strip()
+                for task in existing_field_officer_tasks
+                if str(task.get("id") or "").strip()
+            }
+            submitted_tasks = [
+                dict(task)
+                for task in (event.get("internalTasks") or [])
+                if isinstance(task, dict)
+                and str(task.get("id") or "").strip() not in field_officer_task_ids
+            ]
+            has_field_officer_task = False
+            for task in submitted_tasks:
+                # Partners manage operational tasks; only an administrator can
+                # designate or reassign the event's field officer task.
+                if existing_event is not None or not bool(task.get("isFieldOfficer")) or has_field_officer_task:
+                    task["isFieldOfficer"] = False
+                else:
+                    has_field_officer_task = True
+            event["internalTasks"] = [*submitted_tasks, *existing_field_officer_tasks]
+
+            start_date_text = str(event.get("startDate") or "").strip()
+            end_date_text = str(event.get("endDate") or "").strip()
+            if not start_date_text or not end_date_text:
+                raise HTTPException(status_code=400, detail="Event start and end dates are required.")
+            try:
+                event_start_datetime = datetime.fromisoformat(start_date_text.replace("Z", "+00:00"))
+                event_end_datetime = datetime.fromisoformat(end_date_text.replace("Z", "+00:00"))
+                if event_start_datetime.tzinfo is None:
+                    event_start_datetime = event_start_datetime.replace(tzinfo=APP_TIMEZONE)
+                if event_end_datetime.tzinfo is None:
+                    event_end_datetime = event_end_datetime.replace(tzinfo=APP_TIMEZONE)
+                event_start_date = event_start_datetime.astimezone(APP_TIMEZONE).date()
+                event_end_date = event_end_datetime.astimezone(APP_TIMEZONE).date()
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="Enter valid event start and end dates.") from error
+            if event_end_date < event_start_date:
+                raise HTTPException(status_code=400, detail="End date must be on or after the start date.")
+
+            parent_start_text = str(parent_project.get("startDate") or "").strip()
+            parent_end_text = str(parent_project.get("endDate") or "").strip()
+            if parent_start_text and parent_end_text:
+                try:
+                    parent_start_datetime = datetime.fromisoformat(parent_start_text.replace("Z", "+00:00"))
+                    parent_end_datetime = datetime.fromisoformat(parent_end_text.replace("Z", "+00:00"))
+                    if parent_start_datetime.tzinfo is None:
+                        parent_start_datetime = parent_start_datetime.replace(tzinfo=APP_TIMEZONE)
+                    if parent_end_datetime.tzinfo is None:
+                        parent_end_datetime = parent_end_datetime.replace(tzinfo=APP_TIMEZONE)
+                    parent_start_date = parent_start_datetime.astimezone(APP_TIMEZONE).date()
+                    parent_end_date = parent_end_datetime.astimezone(APP_TIMEZONE).date()
+                except ValueError as error:
+                    raise HTTPException(status_code=400, detail="The approved project has invalid dates.") from error
+                if event_start_date < parent_start_date or event_end_date > parent_end_date:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Event dates must be within the approved project dates.",
+                    )
+
+            # The API derives the partner organization from the approved parent;
+            # clients cannot attach an event to another organization's profile.
+            event["partnerId"] = str(parent_project.get("partnerId") or partner_user_id)
+            event["createdAt"] = str((existing_event or {}).get("createdAt") or now)
+            event["updatedAt"] = now
+            if existing_event is None:
+                event["volunteers"] = []
+                event["joinedUserIds"] = []
+                event["statusUpdates"] = []
+                event["internalTasks"] = [
+                    {
+                        **task,
+                        "assignedVolunteerId": None,
+                        "assignedVolunteerIds": [],
+                    }
+                    for task in event["internalTasks"]
+                ]
+            try:
+                _normalize_internal_task_assignment_ids(connection, [event])
+                _validate_internal_task_assignment_limits([event])
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+
+            event_member_identifiers = {
+                str(value or "").strip()
+                for value in [*(event.get("volunteers") or []), *(event.get("joinedUserIds") or [])]
+                if str(value or "").strip()
+            }
+            event_member_identifiers.update(
+                str(value or "").strip()
+                for record in get_postgres_hot_storage_collection(
+                    connection,
+                    "volunteerProjectJoins",
+                    include_images=False,
+                )
+                if isinstance(record, dict)
+                and str(record.get("projectId") or "").strip() == normalized_event_id
+                and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed"}
+                for value in (record.get("volunteerId"), record.get("volunteerUserId"))
+                if str(value or "").strip()
+            )
+            for task in event.get("internalTasks") or []:
+                if not isinstance(task, dict):
+                    continue
+                for assigned_id in [
+                    task.get("assignedVolunteerId"),
+                    *(task.get("assignedVolunteerIds") or []),
+                ]:
+                    assigned_id = str(assigned_id or "").strip()
+                    if not assigned_id:
+                        continue
+                    assigned_volunteer = _postgres_get_hot_item_by_id(
+                        connection,
+                        "volunteers",
+                        assigned_id,
+                        include_media=False,
+                    )
+                    if assigned_volunteer is None or not (
+                        {
+                            str(assigned_volunteer.get("id") or "").strip(),
+                            str(assigned_volunteer.get("userId") or "").strip(),
+                        }
+                        & event_member_identifiers
+                    ):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Only volunteers who joined this event can be assigned to its tasks.",
+                        )
+
+            _reject_duplicate_event_writes(connection, [event])
+            saved_event = _postgres_upsert_hot_item(connection, "events", event)
+            schedule_changed = (
+                existing_event is None
+                or normalize_schedule_value(str(existing_event.get("startDate") or ""))
+                != normalize_schedule_value(str(saved_event.get("startDate") or ""))
+                or normalize_schedule_value(str(existing_event.get("endDate") or existing_event.get("startDate") or ""))
+                != normalize_schedule_value(str(saved_event.get("endDate") or saved_event.get("startDate") or ""))
+                or str(existing_event.get("repeat") or existing_event.get("repeatRule") or "Does not repeat")
+                != str(saved_event.get("repeat") or saved_event.get("repeatRule") or "Does not repeat")
+            )
+            connection.commit()
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        print(f"[ERROR] Partner event save failed: {type(error).__name__}", flush=True)
+        raise HTTPException(status_code=500, detail="The event could not be saved. Please try again.") from error
+
+    _invalidate_collection_cache(changed_keys)
+    _projects_snapshot_cache.clear()
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    if schedule_changed:
+        asyncio.create_task(_push_partner_google_calendar_item("events", saved_event))
+    return {"status": "ok", "event": saved_event, "changedKeys": changed_keys}
+
+
 @app.post("/events/{event_id}/task-assignments")
 # API endpoint for admins and assigned field officers to manage event task assignments.
 async def update_event_task_assignments(
@@ -11022,7 +11368,17 @@ async def update_event_task_assignments(
             raise HTTPException(status_code=404, detail="Event not found.")
 
         role = _normalize_role(session)
-        if role != "admin":
+        if role == "partner":
+            if not _partner_can_manage_approved_event(
+                connection,
+                str(session.get("sub") or "").strip(),
+                normalized_event_id,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the partner who owns this approved proposal can manage its event tasks.",
+                )
+        elif role != "admin":
             if role != "volunteer" or not _user_is_field_officer_for_event(
                 connection,
                 str(session.get("sub") or "").strip(),

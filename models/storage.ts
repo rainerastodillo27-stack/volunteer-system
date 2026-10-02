@@ -4675,6 +4675,31 @@ export async function saveEvent(event: Project): Promise<void> {
   notifyStorageChanged([STORAGE_KEYS.EVENTS]);
 }
 
+// Persists a partner event through the authorized proposal-scoped workflow.
+// The server verifies that the event's parent is an approved proposal owned by
+// the signed-in partner before writing to the canonical events collection.
+export async function savePartnerEvent(event: Project): Promise<void> {
+  const { parentProjectImageUrl: _parentProjectImageUrl, ...persistableEvent } = event;
+  const normalizedEvent = normalizeEventRecord({
+    ...persistableEvent,
+    skillsNeeded: normalizeProjectSkillsNeeded(persistableEvent, persistableEvent.internalTasks || []),
+  });
+  const response = await requestApiJson<{ event?: Project }>(
+    `/partner/events/${encodeURIComponent(normalizedEvent.id)}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(normalizedEvent),
+    },
+  );
+  const savedEvent = normalizeEventRecord(response.event || normalizedEvent);
+  upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, savedEvent);
+  projectsSnapshotCache.clear();
+  notifyStorageChanged([STORAGE_KEYS.EVENTS]);
+}
+
 // Updates only one event task assignment through the authorized workflow.
 // Field officers must not write the complete event through generic storage.
 export async function updateEventTaskAssignments(
