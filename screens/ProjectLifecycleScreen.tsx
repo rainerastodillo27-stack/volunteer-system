@@ -1381,7 +1381,7 @@ const createEmptyProjectDraft = (
 
   longitude: '',
 
-  volunteersNeeded: '1',
+  volunteersNeeded: isEvent ? '1' : '0',
 
   skillsNeeded: [],
 
@@ -2368,6 +2368,8 @@ interface InlineProjectFormProps {
 
   handlePickProjectDocument: () => void;
 
+  handleRemoveProjectDocument: () => void;
+
   applyProjectLocationSelectionFromAddress: (addr: string) => void;
 
   setDatePickerMode: (mode: 'startDate' | 'endDate' | 'applicationDeadline') => void;
@@ -2436,6 +2438,8 @@ const InlineProjectForm = React.memo(({
   handleRemoveProjectImage,
 
   handlePickProjectDocument,
+
+  handleRemoveProjectDocument,
 
   applyProjectLocationSelectionFromAddress,
 
@@ -2863,7 +2867,11 @@ const InlineProjectForm = React.memo(({
 
 
 
-          {renderCoverImageUpload()}
+          {renderCoverImageUpload(
+            projectDraft.isEvent
+              ? 'Project Cover Image (Optional)'
+              : 'Project Cover Image / Proposal Photo (Optional)'
+          )}
 
 
 
@@ -3112,6 +3120,72 @@ const InlineProjectForm = React.memo(({
             />
           </View>
 
+          {!projectDraft.isEvent ? (
+            <>
+              {renderSectionHeader(3, '3. PROJECT NEED & DELIVERY', 'Add the proposal targets and expected outcomes.')}
+              <FieldRow isDesktop={isDesktop}>
+                <FieldContainer label="Volunteer Slots">
+                  <TextInput
+                    style={inputStyle}
+                    placeholder="e.g., 10"
+                    placeholderTextColor="#94a3b8"
+                    keyboardType="number-pad"
+                    value={projectDraft.volunteersNeeded}
+                    onChangeText={value => handleProjectDraftChange('volunteersNeeded', value)}
+                  />
+                </FieldContainer>
+                <FieldContainer label="Community Need">
+                  <TextInput
+                    style={[inputStyle, { minHeight: 84, height: 'auto', textAlignVertical: 'top', paddingVertical: 10 }]}
+                    placeholder="Describe the community need this project addresses."
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    numberOfLines={3}
+                    value={projectDraft.communityNeed}
+                    onChangeText={value => handleProjectDraftChange('communityNeed', value)}
+                  />
+                </FieldContainer>
+              </FieldRow>
+              <FieldRow isDesktop={isDesktop}>
+                <FieldContainer label="Expected Deliverables">
+                  <TextInput
+                    style={[inputStyle, { minHeight: 84, height: 'auto', textAlignVertical: 'top', paddingVertical: 10 }]}
+                    placeholder="Describe the expected project results or deliverables."
+                    placeholderTextColor="#94a3b8"
+                    multiline
+                    numberOfLines={3}
+                    value={projectDraft.expectedDeliverables}
+                    onChangeText={value => handleProjectDraftChange('expectedDeliverables', value)}
+                  />
+                </FieldContainer>
+                <FieldContainer label="Proposal Document (Optional)">
+                  <View style={{ gap: 8 }}>
+                    <Text style={{ fontSize: 12, color: projectDraft.attachmentUrl ? '#166534' : '#64748b' }}>
+                      {projectDraft.attachmentUrl
+                        ? getAttachmentLabel(projectDraft.attachmentUrl)
+                        : 'No proposal document attached.'}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <TouchableOpacity
+                        onPress={handlePickProjectDocument}
+                        style={{ borderWidth: 1, borderColor: '#166534', borderRadius: 8, paddingVertical: 9, paddingHorizontal: 12 }}
+                      >
+                        <Text style={{ color: '#166534', fontSize: 12, fontWeight: '700' }}>
+                          {projectDraft.attachmentUrl ? 'Replace Document' : 'Upload Document'}
+                        </Text>
+                      </TouchableOpacity>
+                      {projectDraft.attachmentUrl ? (
+                        <TouchableOpacity onPress={handleRemoveProjectDocument}>
+                          <Text style={{ color: '#b91c1c', fontSize: 12, fontWeight: '700' }}>Remove</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  </View>
+                </FieldContainer>
+              </FieldRow>
+            </>
+          ) : null}
+
 
 
         </View>
@@ -3214,21 +3288,39 @@ const InlineProjectForm = React.memo(({
 
 
 
-                {projectDraft.isEvent && (
+                <View style={{ borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingBottom: 8 }}>
 
+                  <Text style={{ fontSize: 12, color: '#64748b' }}>
+                    {projectDraft.isEvent ? 'Volunteer Slots' : 'Estimated Volunteer Slots'}
+                  </Text>
+
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }}>
+
+                    {projectDraft.volunteersNeeded || '0'} slots
+
+                  </Text>
+
+                </View>
+
+
+
+                {projectDraft.communityNeed.trim() ? (
                   <View style={{ borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingBottom: 8 }}>
-
-                    <Text style={{ fontSize: 12, color: '#64748b' }}>Volunteer Slots</Text>
-
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }}>
-
-                      {projectDraft.volunteersNeeded} slots
-
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>Community Need</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }} numberOfLines={3}>
+                      {projectDraft.communityNeed}
                     </Text>
-
                   </View>
+                ) : null}
 
-                )}
+                {projectDraft.expectedDeliverables.trim() ? (
+                  <View style={{ borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingBottom: 8 }}>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>Expected Deliverables</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#1e293b' }} numberOfLines={3}>
+                      {projectDraft.expectedDeliverables}
+                    </Text>
+                  </View>
+                ) : null}
 
 
 
@@ -3248,33 +3340,27 @@ const InlineProjectForm = React.memo(({
 
 
 
-                <TouchableOpacity
-
-                  onPress={handlePickProjectDocument}
-
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 2 }}
-
-                >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 2 }}>
 
                   <MaterialIcons name="upload-file" size={18} color="#2563eb" />
 
                   <View style={{ flex: 1 }}>
 
-                    <Text style={{ fontSize: 12, color: '#64748b' }}>Document Attachment</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b' }}>Proposal Document</Text>
 
-                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#2563eb' }} numberOfLines={1}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: projectDraft.attachmentUrl ? '#166534' : '#64748b' }} numberOfLines={1}>
 
                       {projectDraft.attachmentUrl
 
                         ? getAttachmentLabel(projectDraft.attachmentUrl)
 
-                        : 'Upload document'}
+                        : 'No document attached'}
 
                     </Text>
 
                   </View>
 
-                </TouchableOpacity>
+                </View>
 
               </View>
 
@@ -3559,6 +3645,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const expectedDeliverables = proposalDetails.expectedDeliverables || proposal?.expectedDeliverables || '';
 
+    const proposalAttachments = Array.isArray(proposalDetails.attachments) ? proposalDetails.attachments : [];
+    const proposalPhoto = proposalAttachments.find((attachment: any) =>
+      attachment?.type === 'image' || (!attachment?.type && isImageMediaUri(String(attachment?.url || '')))
+    );
+    const proposalDocument = proposalAttachments.find((attachment: any) =>
+      attachment?.type === 'document' || (!attachment?.type && !isImageMediaUri(String(attachment?.url || '')))
+    );
+
 
 
     const draft = createEmptyProjectDraft(partnerId, advocacyFocus, false, title, description, trackId);
@@ -3582,6 +3676,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     if (endDate) draft.endDate = endDate.split('T')[0];
 
     if (address) draft.address = address;
+
+    draft.volunteersNeeded = String(proposalDetails.proposedVolunteersNeeded ?? proposal?.volunteersNeeded ?? 0);
+
+    if (proposalPhoto?.url) draft.imageUrl = String(proposalPhoto.url);
+
+    if (proposalDocument?.url) draft.attachmentUrl = String(proposalDocument.url);
 
     if (proposalDetails.proposedLatitude != null) draft.latitude = String(proposalDetails.proposedLatitude);
 
@@ -5541,6 +5641,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const expectedDeliverables = proposalDetails.expectedDeliverables || proposal?.expectedDeliverables || '';
 
+    const proposalAttachments = Array.isArray(proposalDetails.attachments) ? proposalDetails.attachments : [];
+    const proposalPhoto = proposalAttachments.find((attachment: any) =>
+      attachment?.type === 'image' || (!attachment?.type && isImageMediaUri(String(attachment?.url || '')))
+    );
+    const proposalDocument = proposalAttachments.find((attachment: any) =>
+      attachment?.type === 'document' || (!attachment?.type && !isImageMediaUri(String(attachment?.url || '')))
+    );
+
 
 
     // Create draft with parentProjectId set to the program ID for correct grouping on mobile
@@ -5560,6 +5668,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     if (endDate) draft.endDate = endDate.split('T')[0];
 
     if (address) draft.address = address;
+
+    draft.volunteersNeeded = String(proposalDetails.proposedVolunteersNeeded ?? proposal?.volunteersNeeded ?? 0);
+
+    if (proposalPhoto?.url) draft.imageUrl = String(proposalPhoto.url);
+
+    if (proposalDocument?.url) draft.attachmentUrl = String(proposalDocument.url);
 
     if (proposalDetails.proposedLatitude != null) draft.latitude = String(proposalDetails.proposedLatitude);
 
@@ -7325,9 +7439,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const parsedLongitude = Number(projectDraft.longitude);
 
-    // For events, use the user-provided value; for projects, set to 0
+    const volunteersNeeded = Number(projectDraft.volunteersNeeded.trim() || 0);
 
-    const volunteersNeeded = projectDraft.isEvent ? Number(projectDraft.volunteersNeeded) : 0;
+    const minimumVolunteerSlots = projectDraft.isEvent ? 1 : 0;
+
+    if (!Number.isInteger(volunteersNeeded) || volunteersNeeded < minimumVolunteerSlots) {
+
+      failProjectSaveValidation(
+        projectDraft.isEvent
+          ? 'Enter a whole number of volunteer slots (at least 1).'
+          : 'Volunteer slots must be a whole number of 0 or more.'
+      );
+
+      return;
+
+    }
 
     let startDateValue = new Date(projectDraft.startDate);
 
@@ -10118,6 +10244,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         handleRemoveProjectImage={handleRemoveProjectImage}
 
         handlePickProjectDocument={handlePickProjectDocument}
+
+        handleRemoveProjectDocument={handleRemoveProjectDocument}
 
         applyProjectLocationSelectionFromAddress={applyProjectLocationSelectionFromAddress}
 
