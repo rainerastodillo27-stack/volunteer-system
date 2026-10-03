@@ -1,5 +1,5 @@
 import { ImageSourcePropType } from 'react-native';
-import { Project } from '../models/types';
+import { ProgramTrack, Project } from '../models/types';
 import { getProjectDisplayStatus, PROJECT_MAP_STATUS_COLORS } from './projectStatus';
 import { getAttachmentUris, isImageMediaUri } from './media';
 
@@ -1701,6 +1701,27 @@ export const IMPACT_MAP_MIN_REGION = {
   latitudeDelta: 4.8,
   longitudeDelta: 4.8,
 };
+
+// Program headers are stored alongside projects for legacy compatibility, but
+// they are not project records and should not get their own map pin/count.
+export function isTopLevelProgramRecord(project: Project, programTracks: ProgramTrack[]): boolean {
+  if (
+    project.isEvent ||
+    String(project.parentProjectId || '').trim() ||
+    String(project.program_id || '').trim()
+  ) {
+    return false;
+  }
+
+  const projectId = String(project.id || '').trim().toLowerCase();
+  const projectTitle = String(project.title || '').trim().toLowerCase();
+
+  return programTracks.some(track => {
+    const trackId = String(track.id || '').trim().toLowerCase();
+    const trackTitle = String(track.title || '').trim().toLowerCase();
+    return Boolean((trackId && projectId === trackId) || (trackTitle && projectTitle === trackTitle));
+  });
+}
 
 // Returns the marker color for a project or event based only on lifecycle status.
 export function getProjectMarkerColor(

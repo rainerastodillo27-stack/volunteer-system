@@ -20,7 +20,7 @@ import MapView, { Callout, Marker, PROVIDER_GOOGLE, Region } from 'react-native-
 import InlineLoadError from '../components/InlineLoadError';
 import PhotoMapMarker from '../components/PhotoMapMarker';
 import { useAuth } from '../contexts/AuthContext';
-import { Partner, PartnerReport, Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
+import { Partner, PartnerReport, ProgramTrack, Project, Volunteer, VolunteerProjectJoinRecord } from '../models/types';
 import {
   getAllPartners,
   getAllPartnerReports,
@@ -37,6 +37,7 @@ import {
   getUnmappedProjects,
   getPrimaryProjectImageSource,
   getProjectMarkerColor,
+  isTopLevelProgramRecord,
 } from '../utils/projectMap';
 import { getPartnerForMappedProject, getProjectIdsForPartnerUser } from '../utils/mapProjectLinks';
 import { getProjectDisplayStatus } from '../utils/projectStatus';
@@ -50,6 +51,7 @@ export default function MappingScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [programTracks, setProgramTracks] = useState<ProgramTrack[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -61,8 +63,12 @@ export default function MappingScreen({ navigation }: any) {
   const [mapViewKey, setMapViewKey] = useState(0);
   const loadGenerationRef = React.useRef(0);
   const mapRef = React.useRef<MapView | null>(null);
-  const mappedProjects = React.useMemo(() => getMappedProjects(projects), [projects]);
-  const unmappedProjects = React.useMemo(() => getUnmappedProjects(projects), [projects]);
+  const projectMapRecords = React.useMemo(
+    () => projects.filter(project => !isTopLevelProgramRecord(project, programTracks)),
+    [projects, programTracks]
+  );
+  const mappedProjects = React.useMemo(() => getMappedProjects(projectMapRecords), [projectMapRecords]);
+  const unmappedProjects = React.useMemo(() => getUnmappedProjects(projectMapRecords), [projectMapRecords]);
   const isVolunteerView = user?.role === 'volunteer';
   const initialRegion = React.useMemo(
     () => getInitialProjectRegion(mappedProjects) as Region,
@@ -83,6 +89,7 @@ export default function MappingScreen({ navigation }: any) {
           'volunteerJoinRecords',
           'volunteerProfile',
           'volunteerMatches',
+          'programTracks',
         ],
         forceRefresh,
         true,
@@ -128,6 +135,7 @@ export default function MappingScreen({ navigation }: any) {
       const visibleProjectIds = new Set(visibleProjects.map(project => project.id));
 
       setProjects(visibleProjects);
+      setProgramTracks((snapshot.programTracks || []).filter(track => track.isActive !== false));
       setVolunteerJoinRecords(snapshot.volunteerJoinRecords || []);
       setPartners(allPartners);
       
@@ -168,7 +176,7 @@ export default function MappingScreen({ navigation }: any) {
       void loadProjects(true);
 
       return subscribeToStorageChanges(
-        ['projects', 'events', 'volunteers', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
+        ['projects', 'events', 'programs', 'programTracks', 'volunteers', 'partnerReports', 'partnerProjectApplications', 'volunteerProjectJoins'],
         () => {
           void loadProjects(true);
         }
@@ -464,7 +472,7 @@ export default function MappingScreen({ navigation }: any) {
       {!isVolunteerView ? (
         <View style={styles.projectListContainer}>
           <Text style={styles.projectListTitle}>
-            {`Projects ${mappedProjects.length} mapped | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
+            {`Map pins ${mappedProjects.length} | Uploaded Impact ${partnerReports.reduce((sum, report) => sum + report.impactCount, 0)}`}
           </Text>
           {unmappedProjects.length > 0 ? (
             <Text style={styles.projectListWarning}>

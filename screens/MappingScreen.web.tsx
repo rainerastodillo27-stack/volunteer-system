@@ -32,6 +32,7 @@ import {
   getMappedProjects,
   getProjectMarkerColor,
   getPrimaryProjectImageSource,
+  isTopLevelProgramRecord,
 } from '../utils/projectMap';
 import { getPartnerForMappedProject, getProjectIdsForPartner, getProjectIdsForPartnerUser } from '../utils/mapProjectLinks';
 import {
@@ -482,33 +483,42 @@ export default function MappingScreen({ navigation }: any) {
       ? availablePartnerMapAccounts.find(account => account.id === selectedPartnerId) || null
       : availablePartnerMapAccounts[0] || null;
 
+  const projectMapRecords = React.useMemo(
+    () => projects.filter(project => !isTopLevelProgramRecord(project, programTracks)),
+    [projects, programTracks]
+  );
+
   const displayProjects = React.useMemo(() => {
     if (user?.role === 'volunteer') {
-      return filterStatus ? projects.filter(project => matchesMapStatus(project, filterStatus)) : projects;
+      return filterStatus
+        ? projectMapRecords.filter(project => matchesMapStatus(project, filterStatus))
+        : projectMapRecords;
     }
 
     if (user?.role === 'partner') {
-      return filterStatus ? projects.filter(project => matchesMapStatus(project, filterStatus)) : projects;
+      return filterStatus
+        ? projectMapRecords.filter(project => matchesMapStatus(project, filterStatus))
+        : projectMapRecords;
     }
 
-    let baseProjects = projects;
+    let baseProjects = projectMapRecords;
 
     if (selectedMapStyleKey === 'volunteer-view') {
       if (!selectedVolunteerAccount) {
         return [];
       }
       const allowedProjectIds = new Set(selectedVolunteerAccount.projectIds);
-      baseProjects = projects.filter(project => allowedProjectIds.has(project.id));
+      baseProjects = projectMapRecords.filter(project => allowedProjectIds.has(project.id));
     } else if (selectedMapStyleKey === 'partner-view') {
       if (!selectedPartnerAccount) {
         return [];
       }
       const allowedProjectIds = new Set(selectedPartnerAccount.projectIds);
-      baseProjects = projects.filter(project => allowedProjectIds.has(project.id));
+      baseProjects = projectMapRecords.filter(project => allowedProjectIds.has(project.id));
     } else if (selectedMapStyleKey === 'projects-view') {
-      baseProjects = projects.filter(project => !project.isEvent);
+      baseProjects = projectMapRecords.filter(project => !project.isEvent);
     } else if (selectedMapStyleKey === 'events-view') {
-      baseProjects = projects.filter(project => Boolean(project.isEvent));
+      baseProjects = projectMapRecords.filter(project => Boolean(project.isEvent));
     }
 
     if (filterStatus) {
@@ -606,7 +616,7 @@ export default function MappingScreen({ navigation }: any) {
     }
 
     return baseProjects;
-  }, [projects, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram, filterStatus, filterRegion, filterCity, filterBarangay]);
+  }, [projects, projectMapRecords, selectedMapStyleKey, selectedVolunteerAccount, selectedPartnerAccount, user?.role, filterDate, filterProgram, filterStatus, filterRegion, filterCity, filterBarangay]);
 
   const mappedProjects = React.useMemo(() => {
     const result = getMappedProjects(displayProjects);
@@ -1273,12 +1283,12 @@ export default function MappingScreen({ navigation }: any) {
           >
             <Text style={[styles.statusFilterText, !filterStatus && styles.statusFilterTextActive]}>All</Text>
             <View style={[styles.statusFilterCount, !filterStatus && styles.statusFilterCountActive]}>
-              <Text style={[styles.statusFilterCountText, !filterStatus && styles.statusFilterTextActive]}>{projects.length}</Text>
+              <Text style={[styles.statusFilterCountText, !filterStatus && styles.statusFilterTextActive]}>{projectMapRecords.length}</Text>
             </View>
           </TouchableOpacity>
           {MAP_STATUS_FILTERS.map(status => {
             const isActive = filterStatus === status.key;
-            const count = projects.filter(project => matchesMapStatus(project, status.key)).length;
+            const count = projectMapRecords.filter(project => matchesMapStatus(project, status.key)).length;
             return (
               <TouchableOpacity
                 key={status.key}
