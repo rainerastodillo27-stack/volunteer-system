@@ -1368,6 +1368,8 @@ export default function ProjectsScreen({ navigation, route }: any) {
           eventProject.id,
           taskId,
           volunteerId ? [volunteerId] : [],
+          undefined,
+          updatedEvent,
         );
         setProjects(currentProjects =>
           currentProjects.map(project =>

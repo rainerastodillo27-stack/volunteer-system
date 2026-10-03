@@ -164,6 +164,7 @@ import {
   getAllAdminPlanningItems,
 
   getStorageItem,
+  getStorageItemFast,
 
   getVolunteerTimeLogsForProjects,
 
@@ -3582,6 +3583,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     if (address) draft.address = address;
 
+    if (proposalDetails.proposedLatitude != null) draft.latitude = String(proposalDetails.proposedLatitude);
+
+    if (proposalDetails.proposedLongitude != null) draft.longitude = String(proposalDetails.proposedLongitude);
+
     if (communityNeed) draft.communityNeed = communityNeed;
 
     if (expectedDeliverables) draft.expectedDeliverables = expectedDeliverables;
@@ -4559,27 +4564,34 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         event => {
 
-          // For storage updates, update light data immediately and defer heavy refreshes
+          const logOnlyChange = event.keys.every(key => key === 'volunteerTimeLogs');
 
-          void refreshLight(true);
+          // Attendance updates should refresh their own cached collection only.
+          // Re-fetching projects, partners, reports, matches, and calendars for
+          // every attendance mark made the mobile save state wait on unrelated data.
+          if (!logOnlyChange) {
+
+            void refreshLight(true);
+
+            if (event.keys.includes('partnerReports')) {
+
+              void loadAllPartnerReports();
+
+            }
+
+            setTimeout(() => {
+
+              void refreshDeferred();
+
+            }, 200);
+
+          }
 
           if (event.keys.includes('volunteerTimeLogs')) {
 
-            void loadVolunteerTimeLogs();
+            void loadVolunteerTimeLogs(false);
 
           }
-
-          if (event.keys.includes('partnerReports')) {
-
-            void loadAllPartnerReports();
-
-          }
-
-          setTimeout(() => {
-
-            void refreshDeferred();
-
-          }, 200);
 
         }
 
@@ -5362,16 +5374,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   // Loads all volunteer time-in and time-out records for project monitoring.
 
-  const loadVolunteerTimeLogs = async () => {
+  const loadVolunteerTimeLogs = async (forceRefresh = true) => {
 
     const requestGeneration = ++volunteerTimeLogsLoadGenerationRef.current;
 
     try {
 
-      // Attendance photos are submitted by another account, so always read
-      // this collection fresh instead of rendering a stale local snapshot.
-      clearStorageCache(['volunteerTimeLogs']);
-      const logs = (await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs')) || [];
+      // Mutation responses and realtime invalidation both update this cache.
+      // Prefer it for local saves; focus refreshes can still force an API read.
+      if (forceRefresh) {
+        clearStorageCache(['volunteerTimeLogs']);
+      }
+      const logs = (forceRefresh
+        ? await getStorageItem<VolunteerTimeLog[]>('volunteerTimeLogs')
+        : await getStorageItemFast<VolunteerTimeLog[]>('volunteerTimeLogs')) || [];
       if (requestGeneration !== volunteerTimeLogsLoadGenerationRef.current) return;
       setVolunteerTimeLogs(
         logs.sort((left, right) => new Date(right.timeIn).getTime() - new Date(left.timeIn).getTime())
@@ -5544,6 +5560,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     if (endDate) draft.endDate = endDate.split('T')[0];
 
     if (address) draft.address = address;
+
+    if (proposalDetails.proposedLatitude != null) draft.latitude = String(proposalDetails.proposedLatitude);
+
+    if (proposalDetails.proposedLongitude != null) draft.longitude = String(proposalDetails.proposedLongitude);
 
     if (communityNeed) draft.communityNeed = communityNeed;
 
@@ -6030,6 +6050,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       eventProject.id,
       taskId,
       volunteerId ? [volunteerId] : [],
+      undefined,
+      eventProject,
     );
     const assignedTask = savedAssignment.task;
 
@@ -6083,6 +6105,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         taskId,
         [],
         { action: 'add', volunteerId: volunteer.id },
+        eventProject,
       );
       const updatedEvent = savedAssignment.event;
       const updatedTask = savedAssignment.task;
@@ -6129,6 +6152,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       taskId,
       [],
       { action: 'remove', volunteerId },
+      eventProject,
     );
 
     if (targetVolunteer && originalTask) {
@@ -9564,6 +9588,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             task.id,
             [],
             { action: 'remove', volunteerId },
+            currentSelectedProject,
           );
           const savedEvent = savedAssignment.event;
           clearStorageCache(['projects', 'events']);
@@ -9624,6 +9649,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             task.id,
             [],
             { action: 'clear' },
+            currentSelectedProject,
           );
           const savedEvent = savedAssignment.event;
           clearStorageCache(['projects', 'events']);
@@ -18633,9 +18659,39 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     ).length;
 
+    const selectedProjectProposal = findApprovedProposalApplicationForProject(
+      activeSelectedProject,
+      allPartnerApplications,
+    );
+    const selectedProjectProposalDetails = selectedProjectProposal?.proposalDetails;
+    const projectProposalAttachments = Array.from(new Map([
+      ...(Array.isArray(selectedProjectProposalDetails?.attachments) ? selectedProjectProposalDetails.attachments : []),
+      ...(Array.isArray((activeSelectedProject as any).attachments) ? (activeSelectedProject as any).attachments : []),
+      ...(activeSelectedProject.imageUrl
+        ? [{ url: activeSelectedProject.imageUrl, type: 'image' as const }]
+        : []),
+    ]
+      .filter(attachment => String(attachment?.url || '').trim())
+      .map(attachment => [String(attachment.url).trim(), attachment] as const)).values());
+    const projectProposalPhotos = projectProposalAttachments.filter(attachment =>
+      attachment.type === 'image' || (!attachment.type && isImageMediaUri(attachment.url))
+    );
+    const projectProposalDocuments = projectProposalAttachments.filter(attachment =>
+      attachment.type === 'document' || (!attachment.type && !isImageMediaUri(attachment.url))
+    );
+    const projectProposalVolunteerSlots = Number(
+      selectedProjectProposalDetails?.proposedVolunteersNeeded ?? activeSelectedProject.volunteersNeeded ?? 0
+    );
+    const projectProposalCommunityNeed =
+      activeSelectedProject.communityNeed?.trim() || selectedProjectProposalDetails?.communityNeed?.trim() || '';
+    const projectProposalExpectedDeliverables =
+      activeSelectedProject.expectedDeliverables?.trim() || selectedProjectProposalDetails?.expectedDeliverables?.trim() || '';
+
     const selectedPartnerName =
 
       partners.find(partner => partner.id === activeSelectedProject.partnerId)?.name ||
+
+      selectedProjectProposal?.partnerName ||
 
       activeSelectedProject.partnerId ||
 
@@ -18665,18 +18721,29 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const detailModuleLabel = activeSelectedProject.programModule || 'Not specified';
 
-    const formattedStartDate = formatProjectDateLabel(activeSelectedProject.startDate);
+    const formattedStartDate = formatProjectDateLabel(
+      activeSelectedProject.startDate || selectedProjectProposalDetails?.proposedStartDate
+    );
 
-    const formattedEndDate = formatProjectDateLabel(activeSelectedProject.endDate);
+    const formattedEndDate = formatProjectDateLabel(
+      activeSelectedProject.endDate || selectedProjectProposalDetails?.proposedEndDate
+    );
 
     const formattedScheduleRange = formatProjectDateRangeLabel(
 
-      activeSelectedProject.startDate,
+      activeSelectedProject.startDate || selectedProjectProposalDetails?.proposedStartDate,
 
-      activeSelectedProject.endDate
+      activeSelectedProject.endDate || selectedProjectProposalDetails?.proposedEndDate
 
     );
-    const formattedProjectLocation = formatProjectLocation(activeSelectedProject);
+    const hasSavedProjectLocation = Boolean(
+      activeSelectedProject.locationCity ||
+      activeSelectedProject.locationRegion ||
+      activeSelectedProject.location?.address
+    );
+    const formattedProjectLocation = hasSavedProjectLocation
+      ? formatProjectLocation(activeSelectedProject)
+      : selectedProjectProposalDetails?.proposedLocation?.trim() || formatProjectLocation(activeSelectedProject);
 
     const activeProjectVolunteerSummary = getProjectVolunteerSummary(activeSelectedProject);
 
@@ -18695,6 +18762,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       : 'No attendance yet';
 
     const detailsDescription = activeSelectedProject.description?.trim()
+
+      || selectedProjectProposalDetails?.proposedDescription?.trim()
 
       || (activeSelectedProject.isEvent
 
@@ -19322,9 +19391,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       try {
         setAttendanceCheckInFlightLogId(log.id);
-        const updatedLog = await setVolunteerAttendanceChecked(log.id, checked, user.id);
-        setPreviewAttendanceLog(current => current?.id === log.id ? updatedLog : current);
-        await loadVolunteerTimeLogs();
+        const updatedLog = await setVolunteerAttendanceChecked(log.id, checked, user.id, log);
+        const mergeUpdatedLog = (current: VolunteerTimeLog) => ({
+          ...current,
+          ...updatedLog,
+          attendancePhoto: current.attendancePhoto || updatedLog.attendancePhoto,
+          completionPhoto: current.completionPhoto || updatedLog.completionPhoto,
+        });
+        setVolunteerTimeLogs(current => current.map(entry =>
+          entry.id === updatedLog.id ? mergeUpdatedLog(entry) : entry
+        ));
+        setPreviewAttendanceLog(current =>
+          current?.id === updatedLog.id ? mergeUpdatedLog(current) : current
+        );
         Alert.alert('Success', checked ? 'Attendance verified' : 'Verification removed');
       } catch (error: any) {
         Alert.alert('Error', error?.message || 'Failed to update attendance verification');
@@ -22936,12 +23015,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     { label: 'Start date', value: formattedStartDate },
                     { label: 'End date', value: formattedEndDate },
                     { label: 'Location', value: formattedProjectLocation },
-                    { label: activeSelectedProject.isEvent ? 'Confirmed volunteers' : 'Volunteers', value: String(volunteerSlotsFilled) },
                     ...(activeSelectedProject.isEvent
-                      ? [{ label: 'Volunteer slots', value: String(volunteerSlotsNeeded) }]
+                      ? [
+                        { label: 'Confirmed volunteers', value: String(volunteerSlotsFilled) },
+                        { label: 'Volunteer slots', value: String(volunteerSlotsNeeded) },
+                      ]
                       : []),
                     ...(hasPartneredOrg ? [{ label: 'Partner', value: selectedPartnerName }] : []),
-                    ...(parentProject ? [{ label: 'Parent project', value: parentProject.title }] : []),
+                    ...(activeSelectedProject.isEvent && parentProject
+                      ? [{ label: 'Parent project', value: parentProject.title }]
+                      : []),
                   ].map(detail => (
                     <View key={detail.label} style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
                       <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>{detail.label}</Text>
@@ -22950,58 +23033,104 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   ))}
                 </View>
 
-                <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Volunteer settings</Text>
-                <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
-                  {[
-                    { label: 'Accept volunteers', value: activeSelectedProject.acceptVolunteers === false ? 'No' : 'Yes' },
-                    { label: 'Application required', value: activeSelectedProject.applicationRequired === false ? 'No' : 'Yes' },
-                    { label: 'Review required', value: activeSelectedProject.reviewRequired === false ? 'No' : 'Yes' },
-                    { label: 'Application deadline', value: activeSelectedProject.applicationDeadline ? formatProjectDateLabel(activeSelectedProject.applicationDeadline) : 'No deadline' },
-                  ].map(detail => (
-                    <View key={detail.label} style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                      <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>{detail.label}</Text>
-                      <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{detail.value}</Text>
+                {activeSelectedProject.isEvent ? (
+                  <>
+                    <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Volunteer settings</Text>
+                    <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
+                      {[
+                        { label: 'Accept volunteers', value: activeSelectedProject.acceptVolunteers === false ? 'No' : 'Yes' },
+                        { label: 'Application required', value: activeSelectedProject.applicationRequired === false ? 'No' : 'Yes' },
+                        { label: 'Review required', value: activeSelectedProject.reviewRequired === false ? 'No' : 'Yes' },
+                        { label: 'Application deadline', value: activeSelectedProject.applicationDeadline ? formatProjectDateLabel(activeSelectedProject.applicationDeadline) : 'No deadline' },
+                      ].map(detail => (
+                        <View key={detail.label} style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                          <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>{detail.label}</Text>
+                          <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{detail.value}</Text>
+                        </View>
+                      ))}
                     </View>
-                  ))}
-                </View>
 
-                <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Planning and delivery</Text>
-                <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
-                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Skills needed</Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
-                      {activeSelectedProject.skillsNeeded?.length ? activeSelectedProject.skillsNeeded.join(', ') : 'No skills tagged'}
-                    </Text>
-                  </View>
-                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Volunteer requirements</Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
-                      {activeSelectedProject.volunteerRequirements?.length ? activeSelectedProject.volunteerRequirements.join(', ') : 'No requirements listed'}
-                    </Text>
-                  </View>
-                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Community need</Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.communityNeed || 'Not provided'}</Text>
-                  </View>
-                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Expected deliverables</Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.expectedDeliverables || 'Not provided'}</Text>
-                  </View>
-                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>
-                      {fullDetailsTaskLabel}
-                    </Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{fullDetailsTaskSummary}</Text>
-                  </View>
-                  <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Document attachment</Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
-                      {projectDocumentAttachment?.url ? getAttachmentLabel(projectDocumentAttachment.url) : 'No document attached'}
-                    </Text>
-                  </View>
-                </View>
+                    <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Planning and delivery</Text>
+                    <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Skills needed</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {activeSelectedProject.skillsNeeded?.length ? activeSelectedProject.skillsNeeded.join(', ') : 'No skills tagged'}
+                        </Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Volunteer requirements</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {activeSelectedProject.volunteerRequirements?.length ? activeSelectedProject.volunteerRequirements.join(', ') : 'No requirements listed'}
+                        </Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Community need</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.communityNeed || 'Not provided'}</Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Expected deliverables</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.expectedDeliverables || 'Not provided'}</Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>
+                          {fullDetailsTaskLabel}
+                        </Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{fullDetailsTaskSummary}</Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Document attachment</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {projectDocumentAttachment?.url ? getAttachmentLabel(projectDocumentAttachment.url) : 'No document attached'}
+                        </Text>
+                      </View>
+                    </View>
+                  </>
+                ) : null}
 
-                {fullDetailsTasks.length > 0 ? (
+                {!activeSelectedProject.isEvent ? (
+                  <>
+                    <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Partner proposal details</Text>
+                    <View style={premiumDetailsStyles.fullDetailsFieldGrid}>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Volunteer slots</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {projectProposalVolunteerSlots > 0 ? String(projectProposalVolunteerSlots) : 'Not provided'}
+                        </Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Community need</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {projectProposalCommunityNeed || 'Not provided'}
+                        </Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Expected deliverables</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {projectProposalExpectedDeliverables || 'Not provided'}
+                        </Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Proposal photo</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {projectProposalPhotos.length
+                            ? projectProposalPhotos.map(attachment => getAttachmentLabel(attachment.url)).join(', ')
+                            : 'No photo attached'}
+                        </Text>
+                      </View>
+                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Proposal document</Text>
+                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
+                          {projectProposalDocuments.length
+                            ? projectProposalDocuments.map(attachment => getAttachmentLabel(attachment.url)).join(', ')
+                            : 'No document attached'}
+                        </Text>
+                      </View>
+                    </View>
+                  </>
+                ) : null}
+
+                {activeSelectedProject.isEvent && fullDetailsTasks.length > 0 ? (
                   <>
                     <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Task details</Text>
                     <View style={premiumDetailsStyles.fullDetailsTaskList}>

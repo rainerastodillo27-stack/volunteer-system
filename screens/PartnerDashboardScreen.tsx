@@ -42,6 +42,8 @@ import InlineLoadError from '../components/InlineLoadError';
 
 import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 
+import LocationMapPicker from '../components/LocationMapPicker';
+
 import { useAuth } from '../contexts/AuthContext';
 
 import {
@@ -88,16 +90,6 @@ import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestEr
 
 import {
 
-  DEFAULT_VOLUNTEER_SKILL_OPTIONS,
-
-  TASK_SKILL_OPTIONS,
-
-  mergeSkillOptions,
-
-} from '../utils/skills';
-
-import {
-
   getCitiesByRegion,
 
   PHRegions,
@@ -140,7 +132,9 @@ type ProposalFormState = {
 
   proposedLocation: string;
 
-  skillsNeeded: string[];
+  proposedLatitude: string;
+
+  proposedLongitude: string;
 
   communityNeed: string;
 
@@ -192,7 +186,9 @@ function createEmptyProposalForm(module: AdvocacyFocus): ProposalFormState {
 
     proposedLocation: '',
 
-    skillsNeeded: [],
+    proposedLatitude: '',
+
+    proposedLongitude: '',
 
     communityNeed: '',
 
@@ -487,16 +483,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
   const [activeProposalModule, setActiveProposalModule] = useState<AdvocacyFocus | null>(null);
 
   const [activeProposalProgramId, setActiveProposalProgramId] = useState<string | null>(null);
-
-  const [availableProposalSkills, setAvailableProposalSkills] = useState<string[]>(
-
-    mergeSkillOptions(TASK_SKILL_OPTIONS, DEFAULT_VOLUNTEER_SKILL_OPTIONS)
-
-  );
-
-  const [selectedProposalSkillOption, setSelectedProposalSkillOption] = useState('');
-
-  const [customProposalSkill, setCustomProposalSkill] = useState('');
 
   const [selectedRegionCode, setSelectedRegionCode] = useState('');
 
@@ -953,7 +939,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
           proposedStartDate: details?.proposedStartDate || '',
           proposedEndDate: details?.proposedEndDate || '',
           proposedLocation: details?.proposedLocation || '',
-          skillsNeeded: details?.skillsNeeded || [],
+          proposedLatitude: details?.proposedLatitude != null ? String(details.proposedLatitude) : '',
+          proposedLongitude: details?.proposedLongitude != null ? String(details.proposedLongitude) : '',
           communityNeed: details?.communityNeed || '',
           expectedDeliverables: details?.expectedDeliverables || '',
           photoAttachment: details?.attachments?.find(attachment => attachment.type === 'image')?.url || '',
@@ -985,8 +972,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       setHasDraft(false);
     }
 
-    setSelectedProposalSkillOption('');
-    setCustomProposalSkill('');
     setSelectedRegionCode('');
     setSelectedCityCode('');
     setFilteredCities([]);
@@ -1144,7 +1129,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     setFilteredCities(regionCode ? getCitiesByRegion(regionCode) : []);
 
-    updateProposalForm({ proposedLocation: '' });
+    updateProposalForm({ proposedLocation: '', proposedLatitude: '', proposedLongitude: '' });
 
   };
 
@@ -1154,75 +1139,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     setSelectedCityCode(cityCode);
 
-    updateProposalForm({ proposedLocation: '' });
-
-  };
-
-
-
-  const handleAddSelectedProposalSkill = () => {
-
-    const normalizedSkill = selectedProposalSkillOption.trim();
-
-    if (!normalizedSkill) {
-
-      return;
-
-    }
-
-
-
-    setProposalForm(current => ({
-
-      ...current,
-
-      skillsNeeded: mergeSkillOptions(current.skillsNeeded, [normalizedSkill]),
-
-    }));
-
-    setSelectedProposalSkillOption('');
-
-  };
-
-
-
-  const handleRemoveProposalSkill = (skill: string) => {
-
-    setProposalForm(current => ({
-
-      ...current,
-
-      skillsNeeded: current.skillsNeeded.filter(existingSkill => existingSkill !== skill),
-
-    }));
-
-  };
-
-
-
-  const handleAddCustomProposalSkill = () => {
-
-    const normalizedSkill = customProposalSkill.trim();
-
-    if (!normalizedSkill) {
-
-      return;
-
-    }
-
-
-
-    setAvailableProposalSkills(current => mergeSkillOptions(current, [normalizedSkill]));
-
-    setProposalForm(current => ({
-
-      ...current,
-
-      skillsNeeded: mergeSkillOptions(current.skillsNeeded, [normalizedSkill]),
-
-    }));
-
-    setCustomProposalSkill('');
+    updateProposalForm({ proposedLocation: '', proposedLatitude: '', proposedLongitude: '' });
 
   };
 
@@ -1375,6 +1292,20 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     const proposalProjectId = targetProgramId;
 
+    const proposedLatitude = Number(proposalForm.proposedLatitude);
+
+    const proposedLongitude = Number(proposalForm.proposedLongitude);
+
+    const hasProposalCoordinates = Boolean(
+      proposalForm.proposedLatitude.trim() &&
+      proposalForm.proposedLongitude.trim() &&
+      Number.isFinite(proposedLatitude) &&
+      Number.isFinite(proposedLongitude) &&
+      Math.abs(proposedLatitude) <= 90 &&
+      Math.abs(proposedLongitude) <= 180 &&
+      !(proposedLatitude === 0 && proposedLongitude === 0)
+    );
+
     const proposalDetails: PartnerProjectProposalDetails = {
 
       requestedProgramModule: selectedModule,
@@ -1391,9 +1322,11 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       proposedLocation: proposalForm.proposedLocation.trim(),
 
-      proposedVolunteersNeeded: 0,
+      proposedLatitude: hasProposalCoordinates ? proposedLatitude : undefined,
 
-      skillsNeeded: proposalForm.skillsNeeded,
+      proposedLongitude: hasProposalCoordinates ? proposedLongitude : undefined,
+
+      proposedVolunteersNeeded: 0,
 
       communityNeed: proposalForm.communityNeed.trim(),
 
@@ -2171,19 +2104,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                     </View>
                   ) : null}
 
-                  {(proposalPreviewApplication.proposalDetails?.skillsNeeded?.length ?? 0) > 0 ? (
-                    <View style={styles.proposalPreviewSection}>
-                      <Text style={styles.proposalPreviewLabel}>Skills Needed</Text>
-                      <View style={styles.proposalSkillTagsRow}>
-                        {proposalPreviewApplication.proposalDetails!.skillsNeeded!.map(skill => (
-                          <View key={skill} style={styles.proposalSkillTag}>
-                            <Text style={styles.proposalSkillTagText}>{skill}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  ) : null}
-
                   <View style={styles.proposalPreviewSection}>
                     <Text style={styles.proposalPreviewLabel}>Submitted</Text>
                     <Text style={styles.proposalPreviewValue}>
@@ -2521,6 +2441,32 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                     </View>
 
+                  </View>
+
+                  <View style={{ marginTop: 8, marginBottom: 4 }}>
+                    <LocationMapPicker
+                      latitude={proposalForm.proposedLatitude}
+                      longitude={proposalForm.proposedLongitude}
+                      address={proposalForm.proposedLocation}
+                      locationSelection={{
+                        city:
+                          filteredCities.find(city => city.code === selectedCityCode)?.displayName ||
+                          filteredCities.find(city => city.code === selectedCityCode)?.name ||
+                          '',
+                        province: PHRegions.find(region => region.code === selectedRegionCode)?.name || '',
+                      }}
+                      label="Project Location on Google Maps"
+                      hint="Search for the area or click the map to set the exact project location."
+                      height={240}
+                      isDesktop={Platform.OS === 'web'}
+                      onLocationChange={({ latitude, longitude, address }) => {
+                        updateProposalForm({
+                          proposedLatitude: String(latitude),
+                          proposedLongitude: String(longitude),
+                          ...(address ? { proposedLocation: address } : {}),
+                        });
+                      }}
+                    />
                   </View>
 
                   {proposalValidationErrors.proposedLocation ? (

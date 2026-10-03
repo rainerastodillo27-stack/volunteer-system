@@ -428,8 +428,9 @@ export interface PartnerProjectProposalDetails {
   proposedStartDate: string;
   proposedEndDate: string;
   proposedLocation: string;
+  proposedLatitude?: number;
+  proposedLongitude?: number;
   proposedVolunteersNeeded: number;
-  skillsNeeded?: string[]; // Skills required for this project/event
   communityNeed: string;
   expectedDeliverables: string;
   attachments?: {

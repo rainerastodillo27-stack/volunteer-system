@@ -4707,12 +4707,13 @@ export async function updateEventTaskAssignments(
   taskId: string,
   volunteerIds: string[],
   operation?: { action: 'add' | 'remove' | 'clear'; volunteerId?: string },
+  currentEvent?: Project,
 ): Promise<{ event: Project; task: ProjectInternalTask }> {
   const payload = await requestApiJson<{
-    event?: Project | null;
+    event?: Partial<Project> | null;
     task?: ProjectInternalTask | null;
   }>(
-    `/events/${encodeURIComponent(eventId)}/task-assignments`,
+    `/events/${encodeURIComponent(eventId)}/task-assignments?compact_response=true`,
     {
       method: 'POST',
       headers: {
@@ -4730,10 +4731,21 @@ export async function updateEventTaskAssignments(
     throw new Error('Event task assignment did not complete.');
   }
 
-  upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, payload.event);
+  // The assignment endpoint broadcasts its storage invalidation before it
+  // responds. Re-reading EVENTS here can therefore trigger a full collection
+  // download on the action's critical path. Callers already hold the event;
+  // use that snapshot and merge the compact canonical task update into it.
+  const cachedEvent = currentEvent ||
+    (await getStorageItemFast<Project[]>(STORAGE_KEYS.EVENTS))?.find(event => event.id === eventId);
+  const savedEvent = {
+    ...(cachedEvent || {}),
+    ...payload.event,
+    internalTasks: payload.event.internalTasks || cachedEvent?.internalTasks || [],
+  } as Project;
+  upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, savedEvent);
   projectsSnapshotCache.clear();
   notifyStorageChanged([STORAGE_KEYS.EVENTS]);
-  return { event: payload.event, task: payload.task };
+  return { event: savedEvent, task: payload.task };
 }
 
 // Deletes a project and cleans up dependent records that reference it.
@@ -5136,7 +5148,8 @@ export async function getVolunteerTimeLogsForProjects(
 export async function setVolunteerAttendanceChecked(
   logId: string,
   checked: boolean,
-  checkedByUserId: string
+  checkedByUserId: string,
+  currentLog?: VolunteerTimeLog,
 ): Promise<VolunteerTimeLog> {
   const payload = await requestApiJson<{ log?: VolunteerTimeLog | null }>(
     `/volunteer-time-logs/${encodeURIComponent(logId)}/attendance-check`,
@@ -5153,9 +5166,17 @@ export async function setVolunteerAttendanceChecked(
     throw new Error('Attendance update did not complete.');
   }
 
-  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, payload.log);
+  const savedLog = currentLog
+    ? {
+        ...currentLog,
+        ...payload.log,
+        attendancePhoto: currentLog.attendancePhoto || payload.log.attendancePhoto,
+        completionPhoto: currentLog.completionPhoto || payload.log.completionPhoto,
+      }
+    : payload.log;
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_TIME_LOGS, savedLog);
   notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_TIME_LOGS]);
-  return payload.log;
+  return savedLog;
 }
 
 // Starts a volunteer time log for the selected project.

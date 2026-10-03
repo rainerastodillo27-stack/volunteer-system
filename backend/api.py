@@ -79,6 +79,7 @@ from .relational_mirror import (
     ensure_volunteer_time_logs_table_shape,
     get_relational_item_by_id,
     get_relational_items_by_field,
+    _sync_task_rows_from_project_event_items,
     upsert_relational_item,
     _primary_key_column,
     _row_to_item,
@@ -1899,6 +1900,21 @@ def _normalize_partner_proposal_details(
     except (TypeError, ValueError):
         proposed_volunteers_needed = max(int(fallback_project.get("volunteersNeeded") or 0), 0)
 
+    def normalize_coordinate(value: Any, minimum: float, maximum: float) -> float | None:
+        try:
+            coordinate = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(coordinate) or coordinate < minimum or coordinate > maximum:
+            return None
+        return coordinate
+
+    proposed_latitude = normalize_coordinate(payload.get("proposedLatitude"), -90, 90)
+    proposed_longitude = normalize_coordinate(payload.get("proposedLongitude"), -180, 180)
+    if proposed_latitude == 0 and proposed_longitude == 0:
+        proposed_latitude = None
+        proposed_longitude = None
+
     return {
         "targetProjectId": str(payload.get("targetProjectId") or fallback_project.get("id") or "").strip() or None,
         "targetProjectTitle": str(payload.get("targetProjectTitle") or fallback_title).strip() or None,
@@ -1910,8 +1926,9 @@ def _normalize_partner_proposal_details(
         "proposedStartDate": _normalize_partner_proposal_date(payload.get("proposedStartDate"), fallback_now),
         "proposedEndDate": _normalize_partner_proposal_date(payload.get("proposedEndDate"), fallback_now),
         "proposedLocation": str(payload.get("proposedLocation") or fallback_address).strip(),
+        "proposedLatitude": proposed_latitude,
+        "proposedLongitude": proposed_longitude,
         "proposedVolunteersNeeded": proposed_volunteers_needed,
-        "skillsNeeded": payload.get("skillsNeeded") or [],
         "communityNeed": str(payload.get("communityNeed") or "").strip(),
         "expectedDeliverables": str(payload.get("expectedDeliverables") or "").strip(),
         "attachments": payload.get("attachments") or [],
@@ -9986,7 +10003,12 @@ async def set_volunteer_attendance_check(
     session = _get_session_user(request)
     _require_postgres()
     with get_connection() as connection:
-        log = _postgres_get_hot_item_by_id(connection, "volunteerTimeLogs", log_id)
+        log = _postgres_get_hot_item_by_id(
+            connection,
+            "volunteerTimeLogs",
+            log_id,
+            include_media=False,
+        )
         if log is None:
             raise HTTPException(status_code=404, detail="Attendance record not found.")
 
@@ -10018,10 +10040,19 @@ async def set_volunteer_attendance_check(
             checked_by_user_id = str(session.get("sub") or "")
         checked_by_name = None
         if checked_by_user_id:
-            checked_by_user = _postgres_get_hot_item_by_id(connection, "users", checked_by_user_id)
+            checked_by_user = _postgres_get_hot_item_by_id(
+                connection,
+                "users",
+                checked_by_user_id,
+                include_media=False,
+            )
             if checked_by_user is None:
                 raise HTTPException(status_code=404, detail="Field officer account not found.")
-            checked_by_volunteer = _postgres_get_volunteer_by_user_id(connection, checked_by_user_id)
+            checked_by_volunteer = _postgres_get_volunteer_by_user_id(
+                connection,
+                checked_by_user_id,
+                include_media=False,
+            )
             is_admin_user = str(checked_by_user.get("role") or "").strip().lower() == "admin"
             if session_role != "partner" and not is_admin_user and not _user_is_field_officer_for_event(
                 connection,
@@ -10038,13 +10069,53 @@ async def set_volunteer_attendance_check(
                 or "Field Officer"
             )
 
+        checked_at = datetime.now(timezone.utc).isoformat() if payload.checked else None
+        from psycopg.rows import dict_row
+
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                update volunteer_time_logs
+                set attendance_checked_at = %s,
+                    attendance_checked_by = %s,
+                    attendance_checked_by_name = %s
+                where {_primary_key_column("volunteerTimeLogs")} = %s
+                returning {_primary_key_column("volunteerTimeLogs")} as id,
+                          volunteer_id, project_id, occurrence_date, time_in, time_out, note,
+                          attendance_confirmed_at,
+                          case when coalesce(btrim(attendance_photo), '') <> '' then true else false end as has_attendance_photo,
+                          attendance_checked_at, attendance_checked_by, attendance_checked_by_name,
+                          case when coalesce(btrim(completion_photo), '') <> '' then true else false end as has_completion_photo,
+                          completion_report
+                """,
+                (
+                    checked_at,
+                    checked_by_user_id if payload.checked else None,
+                    checked_by_name if payload.checked else None,
+                    log_id,
+                ),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Attendance record not found.")
         updated_log = {
-            **log,
-            "attendanceCheckedAt": datetime.now(timezone.utc).isoformat() if payload.checked else None,
-            "attendanceCheckedBy": checked_by_user_id if payload.checked else None,
-            "attendanceCheckedByName": checked_by_name if payload.checked else None,
+            "id": row["id"],
+            "volunteerId": row["volunteer_id"],
+            "projectId": row["project_id"],
+            "occurrenceDate": row["occurrence_date"],
+            "timeIn": row["time_in"],
+            "timeOut": row["time_out"],
+            "note": row["note"],
+            "attendancePhoto": None,
+            "hasAttendancePhoto": bool(row["has_attendance_photo"]),
+            "attendanceConfirmedAt": row["attendance_confirmed_at"],
+            "attendanceCheckedAt": row["attendance_checked_at"],
+            "attendanceCheckedBy": row["attendance_checked_by"],
+            "attendanceCheckedByName": row["attendance_checked_by_name"],
+            "completionPhoto": None,
+            "hasCompletionPhoto": bool(row["has_completion_photo"]),
+            "completionReport": row["completion_report"],
         }
-        _postgres_upsert_hot_item(connection, "volunteerTimeLogs", updated_log)
         connection.commit()
     _invalidate_collection_cache(["volunteerTimeLogs"])
     _projects_snapshot_cache.clear()
@@ -10588,14 +10659,14 @@ async def review_partner_project_application(
                 "startDate": generated_start_date,
                 "endDate": generated_end_date,
                 "location": {
-                    "latitude": None,
-                    "longitude": None,
+                    "latitude": proposal_details.get("proposedLatitude"),
+                    "longitude": proposal_details.get("proposedLongitude"),
                     "address": str(proposal_details.get("proposedLocation") or "").strip()
                     or str(proposal_details.get("targetProjectAddress") or "").strip()
                     or "Location to be finalized",
                 },
                 "volunteersNeeded": max(int(proposal_details.get("proposedVolunteersNeeded") or 0), 0),
-                "skillsNeeded": proposal_details.get("skillsNeeded") or [],
+                "skillsNeeded": [],
                 "communityNeed": str(proposal_details.get("communityNeed") or "").strip(),
                 "expectedDeliverables": str(proposal_details.get("expectedDeliverables") or "").strip(),
                 "attachments": proposal_details.get("attachments") or [],
@@ -11057,8 +11128,9 @@ def _partner_can_manage_approved_event(
     connection: Any,
     partner_user_id: str,
     event_id: str,
+    event_record: dict[str, Any] | None = None,
 ) -> bool:
-    event = _postgres_get_hot_item_by_id(
+    event = event_record or _postgres_get_hot_item_by_id(
         connection,
         "events",
         str(event_id or "").strip(),
@@ -11151,6 +11223,7 @@ async def save_partner_event(
                         connection,
                         partner_user_id,
                         normalized_event_id,
+                        event_record=existing_event,
                     )
                 ):
                     raise HTTPException(status_code=403, detail="You can only manage events under your approved proposals.")
@@ -11260,13 +11333,14 @@ async def save_partner_event(
             }
             event_member_identifiers.update(
                 str(value or "").strip()
-                for record in get_postgres_hot_storage_collection(
+                for record in _postgres_get_hot_items_by_field(
                     connection,
                     "volunteerProjectJoins",
-                    include_images=False,
+                    "projectId",
+                    normalized_event_id,
+                    include_media=False,
                 )
                 if isinstance(record, dict)
-                and str(record.get("projectId") or "").strip() == normalized_event_id
                 and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed"}
                 for value in (record.get("volunteerId"), record.get("volunteerUserId"))
                 if str(value or "").strip()
@@ -11333,6 +11407,7 @@ async def update_event_task_assignments(
     request: FastAPIRequest,
     event_id: str,
     payload: EventTaskAssignmentPayload,
+    compact_response: bool = False,
 ) -> dict[str, Any]:
     session = _get_session_user(request)
     _require_postgres()
@@ -11373,6 +11448,7 @@ async def update_event_task_assignments(
                 connection,
                 str(session.get("sub") or "").strip(),
                 normalized_event_id,
+                event_record=project,
             ):
                 raise HTTPException(
                     status_code=403,
@@ -11407,13 +11483,14 @@ async def update_event_task_assignments(
         # denormalized participant arrays were not updated yet.
         event_member_identifiers.update(
             str(value or "").strip()
-            for record in get_postgres_hot_storage_collection(
+            for record in _postgres_get_hot_items_by_field(
                 connection,
                 "volunteerProjectJoins",
-                include_images=False,
+                "projectId",
+                normalized_event_id,
+                include_media=False,
             )
             if isinstance(record, dict)
-            and str(record.get("projectId") or "").strip() == normalized_event_id
             and str(record.get("participationStatus") or "Active").strip()
             in {"Active", "Completed"}
             for value in (record.get("volunteerId"), record.get("volunteerUserId"))
@@ -11533,13 +11610,43 @@ async def update_event_task_assignments(
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            _normalize_internal_task_assignment_ids(connection, [updated_project])
             _validate_internal_task_assignment_limits([updated_project])
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-        saved_event = _postgres_upsert_hot_item(connection, "events", updated_project)
+        updated_at = updated_project["updatedAt"]
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                update events
+                set internal_tasks = %s,
+                    updated_at = %s
+                where {_primary_key_column("events")} = %s
+                """,
+                (
+                    json.dumps(next_tasks, separators=(",", ":")),
+                    updated_at,
+                    normalized_event_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Event not found.")
+        _sync_task_rows_from_project_event_items(connection, [updated_project])
         connection.commit()
+
+        if compact_response:
+            saved_event = {
+                key: value
+                for key, value in updated_project.items()
+                if key not in {"imageUrl", "attachments"}
+            }
+        else:
+            saved_event = _postgres_get_hot_item_by_id(
+                connection,
+                "events",
+                normalized_event_id,
+                include_media=True,
+            ) or updated_project
 
     _invalidate_collection_cache(["events"])
     _projects_snapshot_cache.clear()
@@ -13394,16 +13501,38 @@ def _validate_internal_task_assignment_limits(items: list[Any]) -> None:
 def _normalize_internal_task_assignment_ids(connection: Any, items: list[Any]) -> None:
     """Persist task assignments using volunteer profile IDs, not user IDs."""
     volunteer_profile_by_identifier: dict[str, str] = {}
-    for volunteer in get_postgres_hot_storage_collection(connection, "volunteers"):
-        if not isinstance(volunteer, dict):
-            continue
-        profile_id = str(volunteer.get("id") or "").strip()
-        if not profile_id:
-            continue
-        volunteer_profile_by_identifier[profile_id] = profile_id
-        user_id = str(volunteer.get("userId") or "").strip()
-        if user_id:
-            volunteer_profile_by_identifier[user_id] = profile_id
+    assignment_identifiers = {
+        str(value or "").strip()
+        for item in items
+        if isinstance(item, dict)
+        for task in (item.get("internalTasks") or [])
+        if isinstance(task, dict)
+        for value in [
+            task.get("assignedVolunteerId"),
+            *(task.get("assignedVolunteerIds") or []),
+        ]
+        if str(value or "").strip()
+    }
+    if assignment_identifiers:
+        volunteer_id_column = _primary_key_column("volunteers")
+        identifiers = sorted(assignment_identifiers)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                select {volunteer_id_column}, user_id
+                from volunteers
+                where {volunteer_id_column} = any(%s)
+                   or user_id = any(%s)
+                """,
+                (identifiers, identifiers),
+            )
+            for profile_id_value, user_id_value in cursor.fetchall():
+                profile_id = str(profile_id_value or "").strip()
+                user_id = str(user_id_value or "").strip()
+                if profile_id:
+                    volunteer_profile_by_identifier[profile_id] = profile_id
+                    if user_id:
+                        volunteer_profile_by_identifier[user_id] = profile_id
 
     for item in items:
         if not isinstance(item, dict):

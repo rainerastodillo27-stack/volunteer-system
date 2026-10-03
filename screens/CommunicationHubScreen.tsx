@@ -39,6 +39,7 @@ import {
 
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import ConfirmDialog from '../components/ConfirmDialog';
+import LocationMapPicker from '../components/LocationMapPicker';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { showSystemAlert } from '../components/SystemAlertModal';
 
@@ -756,6 +757,10 @@ type ProposalFormState = {
 
   proposedLocation: string;
 
+  proposedLatitude: string;
+
+  proposedLongitude: string;
+
   proposedVolunteersNeeded: string;
 
   communityNeed: string;
@@ -773,6 +778,8 @@ const createEmptyProposalForm = (title = ''): ProposalFormState => ({
   proposedStartDate: '',
   proposedEndDate: '',
   proposedLocation: '',
+  proposedLatitude: '',
+  proposedLongitude: '',
   proposedVolunteersNeeded: '',
   communityNeed: '',
   expectedDeliverables: '',
@@ -3231,6 +3238,18 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
     try {
 
+      const proposedLatitude = Number(proposalForm.proposedLatitude);
+      const proposedLongitude = Number(proposalForm.proposedLongitude);
+      const hasProposalCoordinates = Boolean(
+        proposalForm.proposedLatitude.trim() &&
+        proposalForm.proposedLongitude.trim() &&
+        Number.isFinite(proposedLatitude) &&
+        Number.isFinite(proposedLongitude) &&
+        Math.abs(proposedLatitude) <= 90 &&
+        Math.abs(proposedLongitude) <= 180 &&
+        !(proposedLatitude === 0 && proposedLongitude === 0)
+      );
+
       const proposalAttachments = [
         ...(proposalForm.photoAttachment
           ? [{ url: proposalForm.photoAttachment, type: 'image' as const }]
@@ -3244,6 +3263,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
         ...proposalForm,
         previousApplicationId: proposalRevisionApplicationId || undefined,
         proposedVolunteersNeeded: Number(proposalForm.proposedVolunteersNeeded) || 0,
+        proposedLatitude: hasProposalCoordinates ? proposedLatitude : undefined,
+        proposedLongitude: hasProposalCoordinates ? proposedLongitude : undefined,
         requestedProgramModule: (proposalIntent.module as AdvocacyFocus) || 'Nutrition',
         targetProjectId: proposalIntent.projectId,
         attachments: proposalAttachments,
@@ -3649,6 +3670,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       proposedStartDate: String(sourceDetails.proposedStartDate || ''),
       proposedEndDate: String(sourceDetails.proposedEndDate || ''),
       proposedLocation: String(sourceDetails.proposedLocation || ''),
+      proposedLatitude: sourceDetails.proposedLatitude != null ? String(sourceDetails.proposedLatitude) : '',
+      proposedLongitude: sourceDetails.proposedLongitude != null ? String(sourceDetails.proposedLongitude) : '',
       proposedVolunteersNeeded: String(sourceDetails.proposedVolunteersNeeded ?? ''),
       communityNeed: String(sourceDetails.communityNeed || ''),
       expectedDeliverables: String(sourceDetails.expectedDeliverables || ''),
@@ -4507,7 +4530,12 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
 
                           setLocCity('');
 
-                          setProposalForm(current => ({ ...current, proposedLocation: '' }));
+                          setProposalForm(current => ({
+                            ...current,
+                            proposedLocation: '',
+                            proposedLatitude: '',
+                            proposedLongitude: '',
+                          }));
 
                         }}
 
@@ -4555,6 +4583,8 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                               city?.name || '',
                               '',
                             ),
+                            proposedLatitude: '',
+                            proposedLongitude: '',
                           }));
 
                         }}
@@ -4581,6 +4611,27 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     <Text style={styles.fieldErrorText}>{proposalValidationErrors.proposedLocation}</Text>
                   </View>
                 ) : null}
+
+                <View style={{ marginTop: 8 }}>
+                  <LocationMapPicker
+                    latitude={proposalForm.proposedLatitude}
+                    longitude={proposalForm.proposedLongitude}
+                    address={proposalForm.proposedLocation}
+                    locationSelection={{ city: locCity, province: locRegion }}
+                    label="Project Location on Google Maps"
+                    hint="Search for the area or click the map to set the exact project location."
+                    height={240}
+                    isDesktop={isWide}
+                    onLocationChange={({ latitude, longitude, address }) => {
+                      setProposalForm(current => ({
+                        ...current,
+                        proposedLatitude: String(latitude),
+                        proposedLongitude: String(longitude),
+                        ...(address ? { proposedLocation: address } : {}),
+                      }));
+                    }}
+                  />
+                </View>
 
               </View>
 
@@ -4707,8 +4758,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       const proposalDetails: Partial<PartnerProjectProposalDetails> = app.proposalDetails || {};
 
       const proposalAttachments = Array.isArray(proposalDetails.attachments) ? proposalDetails.attachments : [];
-
-      const proposalSkills = Array.isArray(proposalDetails.skillsNeeded) ? proposalDetails.skillsNeeded : [];
 
       const proposalTitle =
 
@@ -4895,36 +4944,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                 <Text style={styles.previewSectionLabel}>EXPECTED DELIVERABLES</Text>
 
                 <Text style={styles.previewText}>{proposalDetails.expectedDeliverables || 'Not provided'}</Text>
-
-              </View>
-
-
-
-              <View style={styles.previewNarrativeCard}>
-
-                <Text style={styles.previewSectionLabel}>SKILLS NEEDED</Text>
-
-                {proposalSkills.length > 0 ? (
-
-                  <View style={styles.previewSkillRow}>
-
-                    {proposalSkills.map((skill: string) => (
-
-                      <View key={skill} style={styles.previewSkillChip}>
-
-                        <Text style={styles.previewSkillChipText}>{skill}</Text>
-
-                      </View>
-
-                    ))}
-
-                  </View>
-
-                ) : (
-
-                  <Text style={styles.previewText}>No skills specified.</Text>
-
-                )}
 
               </View>
 
@@ -6312,7 +6331,6 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
           proposedVolunteersNeeded: proposalDetails.proposedVolunteersNeeded ?? pd.proposedVolunteersNeeded,
           communityNeed: proposalDetails.communityNeed || pd.communityNeed,
           expectedDeliverables: proposalDetails.expectedDeliverables || pd.expectedDeliverables,
-          skillsNeeded: proposalDetails.skillsNeeded || pd.skillsNeeded,
           programModule: proposalDetails.requestedProgramModule || pd.programModule || pd.requestedProgramModule,
         };
         

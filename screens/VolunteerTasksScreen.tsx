@@ -1243,6 +1243,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
             action: !volunteerId ? 'clear' : mode === 'remove' ? 'remove' : 'add',
             ...(volunteerId ? { volunteerId } : {}),
           },
+          eventProject,
         );
         const canonicalProject = savedAssignment.event;
         const canonicalProjects = allProjects.map(project =>
@@ -1357,7 +1358,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       setVolunteerTimeLogs(current =>
         current.map(entry => (entry.id === optimisticLog.id ? optimisticLog : entry))
       );
-      const updatedLog = await setVolunteerAttendanceChecked(log.id, checked, user.id);
+      const updatedLog = await setVolunteerAttendanceChecked(log.id, checked, user.id, log);
       setAllVolunteerTimeLogs(current =>
         current.map(entry => (entry.id === updatedLog.id ? updatedLog : entry))
       );
