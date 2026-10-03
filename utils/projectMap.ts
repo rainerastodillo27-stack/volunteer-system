@@ -1710,25 +1710,11 @@ export function getProjectMarkerColor(
   return PROJECT_MAP_STATUS_COLORS[getProjectDisplayStatus(project)];
 }
 
-function isProjectOrEventMapRecord(project: Project, programIds: ReadonlySet<string>) {
-  if (project.isEvent || project.parentProjectId) {
-    return true;
-  }
-
-  const id = String(project.id || '').trim();
-  // Dashboard snapshots combine projects with top-level programs. The mapping
-  // screens use project-only snapshots, so include all other standalone records
-  // there (including proposals created with legacy IDs).
-  return Boolean(id && !programIds.has(id) && !id.toLowerCase().startsWith('program-'));
-}
-
-export function getMappedProjects(projects: Project[], programIds: string[] = []): Project[] {
-  const knownProgramIds = new Set(programIds);
-  const projectsAndEvents = projects.filter(project =>
-    isProjectOrEventMapRecord(project, knownProgramIds)
-  );
-
-  const resolvedProjects = projectsAndEvents
+export function getMappedProjects(projects: Project[]): Project[] {
+  // Use the same project/event records already counted by each map view. Some
+  // valid top-level projects have neither a parent ID nor a proposal-prefixed
+  // ID, so structural filtering here can silently drop counted records.
+  const resolvedProjects = projects
     .map(project => resolveProjectMapPlacement(project, projects))
     .filter(project => hasUsableCoordinates(project.location));
 
@@ -1736,12 +1722,8 @@ export function getMappedProjects(projects: Project[], programIds: string[] = []
 }
 
 // Returns projects that could not be placed on the map (no coordinates and no resolvable address).
-export function getUnmappedProjects(projects: Project[], programIds: string[] = []): Project[] {
-  const knownProgramIds = new Set(programIds);
+export function getUnmappedProjects(projects: Project[]): Project[] {
   return projects.filter(project => {
-    if (!isProjectOrEventMapRecord(project, knownProgramIds)) {
-      return false;
-    }
     const resolved = resolveProjectMapPlacement(project, projects);
     // A project is truly unmapped only if it still has no usable coordinates after all resolution
     // attempts AND its address is a placeholder (meaning the user never entered a real location).
@@ -1755,8 +1737,8 @@ export function getUnmappedProjects(projects: Project[], programIds: string[] = 
 }
 
 // Computes an initial map region that keeps all known projects in view.
-export function getInitialProjectRegion(projects: Project[], programIds: string[] = []) {
-  const mappedProjects = getMappedProjects(projects, programIds);
+export function getInitialProjectRegion(projects: Project[]) {
+  const mappedProjects = getMappedProjects(projects);
 
   if (mappedProjects.length === 0) {
     return NEGROS_REGION;
