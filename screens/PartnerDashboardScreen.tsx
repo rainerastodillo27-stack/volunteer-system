@@ -2445,11 +2445,8 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
                       longitude={proposalForm.proposedLongitude}
                       address={proposalForm.proposedLocation}
                       locationSelection={{
-                        city:
-                          filteredCities.find(city => city.code === selectedCityCode)?.displayName ||
-                          filteredCities.find(city => city.code === selectedCityCode)?.name ||
-                          '',
-                        province: PHRegions.find(region => region.code === selectedRegionCode)?.name || '',
+                        city: filteredCities.find(city => city.code === selectedCityCode)?.name || '',
+                        province: filteredCities.find(city => city.code === selectedCityCode)?.provinceName || '',
                       }}
                       label="Project Location on Google Maps"
                       hint="Search for the area or click the map to set the exact project location."

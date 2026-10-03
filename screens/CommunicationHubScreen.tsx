@@ -4617,7 +4617,10 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
                     latitude={proposalForm.proposedLatitude}
                     longitude={proposalForm.proposedLongitude}
                     address={proposalForm.proposedLocation}
-                    locationSelection={{ city: locCity, province: locRegion }}
+                    locationSelection={{
+                      city: filteredCities.find(city => city.code === selectedCityCode)?.name || locCity,
+                      province: filteredCities.find(city => city.code === selectedCityCode)?.provinceName || '',
+                    }}
                     label="Project Location on Google Maps"
                     hint="Search for the area or click the map to set the exact project location."
                     height={240}
