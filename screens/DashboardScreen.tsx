@@ -725,8 +725,8 @@ export default function DashboardScreen({ navigation }: any) {
   );
 
   const mapProjects = useMemo(
-    () => getMappedProjects(impactMapSourceProjects),
-    [impactMapSourceProjects]
+    () => getMappedProjects(impactMapSourceProjects, programIdsData),
+    [impactMapSourceProjects, programIdsData]
   );
 
   // Memoize mapProjects by content to prevent unnecessary map re-renders from WebSocket updates

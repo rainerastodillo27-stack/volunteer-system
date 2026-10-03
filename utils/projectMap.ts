@@ -1710,20 +1710,23 @@ export function getProjectMarkerColor(
   return PROJECT_MAP_STATUS_COLORS[getProjectDisplayStatus(project)];
 }
 
-function isProjectOrEventMapRecord(project: Project) {
-  return Boolean(
-    project.isEvent ||
-    project.parentProjectId ||
-    // Approved partner proposals are project records even before they have a
-    // parent program. Include them while continuing to exclude program roots.
-    String(project.id || '').startsWith('project-proposal-')
-  );
+function isProjectOrEventMapRecord(project: Project, programIds: ReadonlySet<string>) {
+  if (project.isEvent || project.parentProjectId) {
+    return true;
+  }
+
+  const id = String(project.id || '').trim();
+  // Dashboard snapshots combine projects with top-level programs. The mapping
+  // screens use project-only snapshots, so include all other standalone records
+  // there (including proposals created with legacy IDs).
+  return Boolean(id && !programIds.has(id) && !id.toLowerCase().startsWith('program-'));
 }
 
-export function getMappedProjects(projects: Project[]): Project[] {
-  // Exclude top-level programs while including proposal projects that do not
-  // have a parent program yet.
-  const projectsAndEvents = projects.filter(isProjectOrEventMapRecord);
+export function getMappedProjects(projects: Project[], programIds: string[] = []): Project[] {
+  const knownProgramIds = new Set(programIds);
+  const projectsAndEvents = projects.filter(project =>
+    isProjectOrEventMapRecord(project, knownProgramIds)
+  );
 
   const resolvedProjects = projectsAndEvents
     .map(project => resolveProjectMapPlacement(project, projects))
@@ -1733,9 +1736,10 @@ export function getMappedProjects(projects: Project[]): Project[] {
 }
 
 // Returns projects that could not be placed on the map (no coordinates and no resolvable address).
-export function getUnmappedProjects(projects: Project[]): Project[] {
+export function getUnmappedProjects(projects: Project[], programIds: string[] = []): Project[] {
+  const knownProgramIds = new Set(programIds);
   return projects.filter(project => {
-    if (!isProjectOrEventMapRecord(project)) {
+    if (!isProjectOrEventMapRecord(project, knownProgramIds)) {
       return false;
     }
     const resolved = resolveProjectMapPlacement(project, projects);
@@ -1751,8 +1755,8 @@ export function getUnmappedProjects(projects: Project[]): Project[] {
 }
 
 // Computes an initial map region that keeps all known projects in view.
-export function getInitialProjectRegion(projects: Project[]) {
-  const mappedProjects = getMappedProjects(projects);
+export function getInitialProjectRegion(projects: Project[], programIds: string[] = []) {
+  const mappedProjects = getMappedProjects(projects, programIds);
 
   if (mappedProjects.length === 0) {
     return NEGROS_REGION;
