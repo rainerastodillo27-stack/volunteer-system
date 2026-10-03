@@ -17,6 +17,7 @@ function normalizeProjectStatusValue(status?: Project['status'] | string | null)
     case 'in progress':
     case 'ongoing':
     case 'active':
+    case 'approved':
       return 'In Progress';
     case 'on hold':
       return 'On Hold';
@@ -28,6 +29,15 @@ function normalizeProjectStatusValue(status?: Project['status'] | string | null)
       return 'Planning';
   }
 }
+
+// Map pins and map legends share this palette across web and native maps.
+export const PROJECT_MAP_STATUS_COLORS: Record<Project['status'], string> = {
+  Planning: '#2563EB',
+  'In Progress': '#16A34A',
+  'On Hold': '#D97706',
+  Completed: '#7C3AED',
+  Cancelled: '#DC2626',
+};
 
 function getComparableDate(value?: string, endOfDay = false): Date | null {
   if (!value) {
@@ -76,6 +86,13 @@ export function getProjectDisplayStatus(
   // Backward-compatibility: legacy records used `status` directly for paused/cancelled states.
   if (!projectOrStatus.statusMode && (normalizedStatus === 'Cancelled' || normalizedStatus === 'On Hold')) {
     return normalizedStatus;
+  }
+
+  // Approval promotes partner proposals to active projects, even when their
+  // scheduled start date is still in the future. Map filters use this same
+  // display status so their count, label, and pin color stay in sync.
+  if (String(projectOrStatus.status || '').trim().toLowerCase() === 'approved') {
+    return 'In Progress';
   }
 
   const startDate = getComparableDate(projectOrStatus.startDate);

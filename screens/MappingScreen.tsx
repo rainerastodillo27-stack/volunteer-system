@@ -39,7 +39,7 @@ import {
   getProjectMarkerColor,
 } from '../utils/projectMap';
 import { getPartnerForMappedProject, getProjectIdsForPartnerUser } from '../utils/mapProjectLinks';
-import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { getProjectVolunteerMapEntries } from '../utils/projectVolunteers';
 import { getVolunteerJoinedEventIds } from '../utils/volunteerEventParticipation';
@@ -510,7 +510,7 @@ export default function MappingScreen({ navigation }: any) {
                   <View
                     style={[
                       styles.statusDot,
-                      { backgroundColor: getProjectStatusColor(selectedProject) },
+                      { backgroundColor: getProjectMarkerColor(selectedProject) },
                     ]}
                   />
                   <Text style={styles.statusText}>{getProjectDisplayStatus(selectedProject)}</Text>

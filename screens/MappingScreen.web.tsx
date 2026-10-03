@@ -34,7 +34,10 @@ import {
   getPrimaryProjectImageSource,
 } from '../utils/projectMap';
 import { getPartnerForMappedProject, getProjectIdsForPartner, getProjectIdsForPartnerUser } from '../utils/mapProjectLinks';
-import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import {
+  getProjectDisplayStatus,
+  PROJECT_MAP_STATUS_COLORS,
+} from '../utils/projectStatus';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 import { getProjectVolunteerMapEntries, getProjectVolunteersNeeded } from '../utils/projectVolunteers';
@@ -49,23 +52,15 @@ const MAP_SINGLE_MARKER_ZOOM = 10;
 type MapStatusFilter = 'Planning' | 'In Progress' | 'On Hold' | 'Completed' | 'Cancelled';
 
 const MAP_STATUS_FILTERS: Array<{ key: MapStatusFilter; label: string; color: string }> = [
-  { key: 'Planning', label: 'Planning (Draft)', color: '#2563EB' },
-  { key: 'In Progress', label: 'In Progress (Active)', color: '#16A34A' },
-  { key: 'On Hold', label: 'On Hold', color: '#D97706' },
-  { key: 'Completed', label: 'Completed (Closed)', color: '#7C3AED' },
-  { key: 'Cancelled', label: 'Cancelled', color: '#DC2626' },
+  { key: 'Planning', label: 'Planning (Draft)', color: PROJECT_MAP_STATUS_COLORS.Planning },
+  { key: 'In Progress', label: 'In Progress (Active)', color: PROJECT_MAP_STATUS_COLORS['In Progress'] },
+  { key: 'On Hold', label: 'On Hold', color: PROJECT_MAP_STATUS_COLORS['On Hold'] },
+  { key: 'Completed', label: 'Completed (Closed)', color: PROJECT_MAP_STATUS_COLORS.Completed },
+  { key: 'Cancelled', label: 'Cancelled', color: PROJECT_MAP_STATUS_COLORS.Cancelled },
 ];
 
 function matchesMapStatus(project: Project, status: MapStatusFilter): boolean {
-  const displayStatus = String(getProjectDisplayStatus(project));
-  const projectStatus = String(project.status || '');
-  if (status === 'Planning') {
-    return displayStatus === 'Planning' || displayStatus === 'Planned' || Boolean((project as any).proposalStage);
-  }
-  if (status === 'In Progress') {
-    return displayStatus === 'In Progress' || displayStatus === 'Active' || projectStatus === 'Approved';
-  }
-  return displayStatus === status;
+  return getProjectDisplayStatus(project) === status;
 }
 
 type MapStylePresetKey = 'admin-overview' | 'projects-view' | 'events-view' | 'volunteer-view' | 'partner-view';
@@ -205,12 +200,18 @@ function getGoogleMapsErrorMessage(error: unknown, apiKey: string) {
 }
 
 function getMapLegendTitle(selectedMapStyleKey: MapStylePresetKey) {
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'Project & Event Status';
+  }
   return selectedMapStyleKey === 'volunteer-view' || selectedMapStyleKey === 'events-view'
     ? 'Event Status'
     : 'Project Status';
 }
 
 function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: number) {
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'Total Map Pins';
+  }
   if (selectedMapStyleKey === 'volunteer-view' || selectedMapStyleKey === 'events-view') {
     return `Total ${count === 1 ? 'Event' : 'Events'}`;
   }
@@ -219,6 +220,9 @@ function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: n
 }
 
 function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey) {
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'Projects and events';
+  }
   if (selectedMapStyleKey === 'volunteer-view') {
     return 'Volunteer events';
   }
@@ -655,8 +659,8 @@ export default function MappingScreen({ navigation }: any) {
       const scheduleState = getEventScheduleState(project);
       return scheduleState === 'today' || scheduleState === 'upcoming';
     }).length;
-    const completedProjects = displayProjects.filter(p => p.status === 'Completed').length;
-    const inProgressProjects = displayProjects.filter(p => p.status === 'In Progress').length;
+    const completedProjects = displayProjects.filter(p => getProjectDisplayStatus(p) === 'Completed').length;
+    const inProgressProjects = displayProjects.filter(p => getProjectDisplayStatus(p) === 'In Progress').length;
     
     // Count unique volunteers engaged
     const uniqueVolunteerIds = new Set<string>();
@@ -717,11 +721,11 @@ export default function MappingScreen({ navigation }: any) {
     ? (eventSchedule.today.length > 0 ? eventSchedule.today : eventSchedule.upcoming).slice(1)
     : [];
   const statusLegend = [
-    { label: 'In Progress', color: '#5B9B57' },
-    { label: 'Planned', color: '#5F8FDC' },
-    { label: 'Completed', color: '#8E58D6' },
-    { label: 'On Hold', color: '#E7A23D' },
-    { label: 'Cancelled', color: '#B95258' },
+    { label: 'In Progress', color: PROJECT_MAP_STATUS_COLORS['In Progress'] },
+    { label: 'Planned', color: PROJECT_MAP_STATUS_COLORS.Planning },
+    { label: 'Completed', color: PROJECT_MAP_STATUS_COLORS.Completed },
+    { label: 'On Hold', color: PROJECT_MAP_STATUS_COLORS['On Hold'] },
+    { label: 'Cancelled', color: PROJECT_MAP_STATUS_COLORS.Cancelled },
   ];
 
   const clearMarkers = () => {
@@ -1749,7 +1753,7 @@ export default function MappingScreen({ navigation }: any) {
                 })()}
 
                 <View style={styles.statusBadge}>
-                  <View style={[styles.statusDot, { backgroundColor: getProjectStatusColor(selectedProject) }]} />
+                  <View style={[styles.statusDot, { backgroundColor: getProjectMarkerColor(selectedProject) }]} />
                   <Text style={styles.statusText}>{getProjectDisplayStatus(selectedProject)}</Text>
                 </View>
 

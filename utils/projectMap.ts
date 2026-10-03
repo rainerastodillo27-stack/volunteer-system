@@ -1,6 +1,6 @@
 import { ImageSourcePropType } from 'react-native';
 import { Project } from '../models/types';
-import { getProjectStatusColor } from './projectStatus';
+import { getProjectDisplayStatus, PROJECT_MAP_STATUS_COLORS } from './projectStatus';
 import { getAttachmentUris, isImageMediaUri } from './media';
 
 // Reuse unchanged remote/data-URI source objects. React Native Web can restart
@@ -1704,26 +1704,26 @@ export const IMPACT_MAP_MIN_REGION = {
 
 // Returns the marker color for a project or event based only on lifecycle status.
 export function getProjectMarkerColor(
-  project: Pick<Project, 'isEvent' | 'status' | 'startDate' | 'endDate'>
+  project: Pick<Project, 'isEvent' | 'status' | 'startDate' | 'endDate'> &
+    Partial<Pick<Project, 'statusMode' | 'manualStatus'>>
 ) {
-  return getProjectStatusColor(project);
+  return PROJECT_MAP_STATUS_COLORS[getProjectDisplayStatus(project)];
+}
+
+function isProjectOrEventMapRecord(project: Project) {
+  return Boolean(
+    project.isEvent ||
+    project.parentProjectId ||
+    // Approved partner proposals are project records even before they have a
+    // parent program. Include them while continuing to exclude program roots.
+    String(project.id || '').startsWith('project-proposal-')
+  );
 }
 
 export function getMappedProjects(projects: Project[]): Project[] {
-  // Filter out programs (top-level items that are neither events nor have a parent)
-  // Only show projects and events on the map
-  const projectsAndEvents = projects.filter(project => {
-    // If it has a parent, it's a project or event under a program - include it
-    if (project.parentProjectId) {
-      return true;
-    }
-    // If it's marked as an event, include it
-    if (project.isEvent) {
-      return true;
-    }
-    // Otherwise, it's a top-level program - exclude it
-    return false;
-  });
+  // Exclude top-level programs while including proposal projects that do not
+  // have a parent program yet.
+  const projectsAndEvents = projects.filter(isProjectOrEventMapRecord);
 
   const resolvedProjects = projectsAndEvents
     .map(project => resolveProjectMapPlacement(project, projects))
@@ -1735,6 +1735,9 @@ export function getMappedProjects(projects: Project[]): Project[] {
 // Returns projects that could not be placed on the map (no coordinates and no resolvable address).
 export function getUnmappedProjects(projects: Project[]): Project[] {
   return projects.filter(project => {
+    if (!isProjectOrEventMapRecord(project)) {
+      return false;
+    }
     const resolved = resolveProjectMapPlacement(project, projects);
     // A project is truly unmapped only if it still has no usable coordinates after all resolution
     // attempts AND its address is a placeholder (meaning the user never entered a real location).

@@ -9,7 +9,7 @@ import {
   getMappedProjects,
   getProjectMarkerColor,
 } from '../utils/projectMap';
-import { getProjectDisplayStatus } from '../utils/projectStatus';
+import { getProjectDisplayStatus, PROJECT_MAP_STATUS_COLORS } from '../utils/projectStatus';
 import { createGoogleMapsMarkerIcon, loadGoogleMaps } from '../utils/webGoogleMaps';
 
 const MapHost = 'div' as any;
@@ -204,10 +204,16 @@ function getMappedCountLabel(selectedMapStyleKey: MapStylePresetKey, count: numb
 }
 
 function getMapLegendTitle(selectedMapStyleKey: MapStylePresetKey) {
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'Project & Event Status';
+  }
   return selectedMapStyleKey === 'volunteer-view' ? 'Event Status' : 'Project Status';
 }
 
 function getMapLegendTotalLabel(selectedMapStyleKey: MapStylePresetKey, count: number) {
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'Total Map Pins';
+  }
   if (selectedMapStyleKey === 'volunteer-view') {
     return `Total ${count === 1 ? 'Event' : 'Events'}`;
   }
@@ -220,6 +226,9 @@ function getMapLegendFootnote(selectedMapStyleKey: MapStylePresetKey, selectedSt
     return 'Clear filters';
   }
 
+  if (selectedMapStyleKey === 'admin-overview') {
+    return 'Projects and events';
+  }
   return selectedMapStyleKey === 'volunteer-view' ? 'Volunteer events' : 'Across Philippines';
 }
 
@@ -692,9 +701,11 @@ export default function VolunteerImpactMap({
   const accountIconName = getAccountIconName(activeMapStyleKey);
 
   const statusLegend = [
-    { label: 'In Progress', color: '#5b9b57' }, { label: 'Planned', color: '#5f8fdc' },
-    { label: 'Completed', color: '#8e58d6' }, { label: 'On Hold', color: '#e7a23d' },
-    { label: 'Cancelled', color: '#b95258' },
+    { label: 'In Progress', color: PROJECT_MAP_STATUS_COLORS['In Progress'] },
+    { label: 'Planned', color: PROJECT_MAP_STATUS_COLORS.Planning },
+    { label: 'Completed', color: PROJECT_MAP_STATUS_COLORS.Completed },
+    { label: 'On Hold', color: PROJECT_MAP_STATUS_COLORS['On Hold'] },
+    { label: 'Cancelled', color: PROJECT_MAP_STATUS_COLORS.Cancelled },
   ];
 
   return (
