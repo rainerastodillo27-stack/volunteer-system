@@ -942,11 +942,15 @@ def _event_attendance_window_has_started(project: dict[str, Any], now: datetime 
         return True
 
     current_time = (now or datetime.now(timezone.utc)).astimezone(APP_TIMEZONE)
-    attendance_open_time = start_date.astimezone(APP_TIMEZONE).replace(
-        hour=9,
-        minute=0,
-        second=0,
-        microsecond=0,
+    local_start = start_date.astimezone(APP_TIMEZONE)
+    if current_time.date() < local_start.date():
+        return False
+
+    attendance_open_time = current_time.replace(
+        hour=local_start.hour,
+        minute=local_start.minute,
+        second=local_start.second,
+        microsecond=local_start.microsecond,
     )
     return current_time >= attendance_open_time
 
