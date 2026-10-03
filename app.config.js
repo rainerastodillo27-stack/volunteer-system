@@ -149,7 +149,7 @@ module.exports = () => {
       orientation: 'portrait',
       assetBundlePatterns: ['**/*'],
       web: {
-        favicon: './assets/nvc-app-icon.png',
+        favicon: './assets/nvc-browser-favicon.png',
         name: 'NVC Foundation Connect',
         shortName: 'NVC',
         themeColor: '#0f8a4b',
