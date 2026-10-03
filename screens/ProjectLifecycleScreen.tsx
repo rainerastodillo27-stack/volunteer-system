@@ -3419,6 +3419,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const windowScrollOffsetRef = React.useRef(0);
 
+  const partnerProjectListRedirectRef = React.useRef('');
+
   const shouldRestoreListScrollRef = React.useRef(false);
   const lastProgramSuiteNavKeyRef = React.useRef(route?.params?.programSuiteNavKey);
   const lastRouteNavTimestampRef = React.useRef((route?.params as any)?.navTimestamp);
@@ -4150,6 +4152,46 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       }
     }
   }, [route?.name, (route?.params as any)?.navTimestamp, route?.params?.programSuiteNavKey, route?.params?.programSuiteView, route?.params?.projectId, projects]);
+
+
+
+  useEffect(() => {
+
+    if (
+      !isPartnerUser ||
+      route?.name !== 'ProjectLifecycle' ||
+      getProgramSuiteViewFromRoute(route) !== 'projects'
+    ) {
+      return;
+    }
+
+    const requestedProjectId = String(route?.params?.projectId || '').trim();
+    const requestedProjectExists = Boolean(
+      requestedProjectId && projects.some(project => project.id === requestedProjectId)
+    );
+    const shouldReturnToPartnerProjects =
+      !requestedProjectId || (!isProjectsLoading && !requestedProjectExists);
+
+    if (!shouldReturnToPartnerProjects) {
+      partnerProjectListRedirectRef.current = '';
+      return;
+    }
+
+    const redirectKey = requestedProjectId || 'missing-project-id';
+    if (partnerProjectListRedirectRef.current !== redirectKey) {
+      partnerProjectListRedirectRef.current = redirectKey;
+      navigation?.navigate?.('Projects');
+    }
+
+  }, [
+    isPartnerUser,
+    isProjectsLoading,
+    navigation,
+    projects,
+    route?.name,
+    route?.params?.programSuiteView,
+    route?.params?.projectId,
+  ]);
 
 
 
@@ -23015,6 +23057,20 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     );
 
+  }
+
+
+  if (
+    isPartnerUser &&
+    route?.name === 'ProjectLifecycle' &&
+    getProgramSuiteViewFromRoute(route) === 'projects' &&
+    !activeSelectedProject
+  ) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#edf6ee' }}>
+        <ActivityIndicator size="small" color="#166534" />
+      </View>
+    );
   }
 
   return (
