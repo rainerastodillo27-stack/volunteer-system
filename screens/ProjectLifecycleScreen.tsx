@@ -3382,6 +3382,7 @@ const InlineProjectForm = React.memo(({
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const { user, isAdmin } = useAuth();
+  const isPartnerUser = String(user?.role || '').toLowerCase() === 'partner';
 
   const { width } = useWindowDimensions();
 
@@ -22081,25 +22082,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
           <View style={premiumDetailsStyles.breadcrumbBar}>
 
-            <TouchableOpacity onPress={handleReturnToProjectList}>
-
+            {isPartnerUser ? (
               <Text style={premiumDetailsStyles.breadcrumbText}>Projects</Text>
-
-            </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={handleReturnToProjectList}>
+                <Text style={premiumDetailsStyles.breadcrumbText}>Projects</Text>
+              </TouchableOpacity>
+            )}
 
             <MaterialIcons name="chevron-right" size={14} color="#64748b" style={{ marginHorizontal: 4 }} />
 
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel={`View ${getProjectProgramTitle(activeSelectedProject)} projects`}
-              onPress={handleReturnToProjectProgram}
-            >
+            {isPartnerUser ? (
               <Text style={premiumDetailsStyles.breadcrumbText}>
-
                 {getProjectProgramTitle(activeSelectedProject)}
-
               </Text>
-            </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                accessibilityRole="button"
+                accessibilityLabel={`View ${getProjectProgramTitle(activeSelectedProject)} projects`}
+                onPress={handleReturnToProjectProgram}
+              >
+                <Text style={premiumDetailsStyles.breadcrumbText}>
+                  {getProjectProgramTitle(activeSelectedProject)}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             <MaterialIcons name="chevron-right" size={14} color="#64748b" style={{ marginHorizontal: 4 }} />
 

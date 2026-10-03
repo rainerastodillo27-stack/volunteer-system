@@ -77,7 +77,7 @@ export default function PartnerHomeScreen() {
   };
 
   const handleLearnMore = () => {
-    navigation.navigate('Projects');
+    navigation.navigate('Programs');
   };
 
   const handleDonate = () => {

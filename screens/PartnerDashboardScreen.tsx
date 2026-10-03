@@ -1746,7 +1746,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
             style={styles.secondaryActionButton}
 
-            onPress={() => navigateToAvailableRoute(navigation, 'Projects')}
+            onPress={() => navigateToAvailableRoute(navigation, 'Programs')}
 
           >
 
@@ -1778,7 +1778,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
               onPress={() =>
 
-                navigateToAvailableRoute(navigation, 'Projects', {
+                navigateToAvailableRoute(navigation, 'ProjectLifecycle', {
 
                   projectId: project.id,
 
@@ -1829,7 +1829,7 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
                 onPress={() =>
 
-                  navigateToAvailableRoute(navigation, 'Projects', {
+                  navigateToAvailableRoute(navigation, 'ProjectLifecycle', {
 
                     projectId: project.id,
 
