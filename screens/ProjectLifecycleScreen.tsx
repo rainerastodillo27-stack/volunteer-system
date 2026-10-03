@@ -3831,10 +3831,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       : [];
 
-    nextDraft.communityNeed = parentProject.communityNeed || '';
-
-    nextDraft.expectedDeliverables = parentProject.expectedDeliverables || '';
-
     nextDraft.attachmentUrl =
 
       (parentProject.attachments || []).find(attachment => attachment.type === 'document')?.url || '';
@@ -5884,10 +5880,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       ? parentProject.skillsNeeded
 
       : [];
-
-    nextDraft.communityNeed = parentProject.communityNeed || '';
-
-    nextDraft.expectedDeliverables = parentProject.expectedDeliverables || '';
 
     nextDraft.attachmentUrl =
 
@@ -23225,14 +23217,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         <Text style={premiumDetailsStyles.fullDetailsFieldValue}>
                           {activeSelectedProject.volunteerRequirements?.length ? activeSelectedProject.volunteerRequirements.join(', ') : 'No requirements listed'}
                         </Text>
-                      </View>
-                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Community need</Text>
-                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.communityNeed || 'Not provided'}</Text>
-                      </View>
-                      <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                        <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Expected deliverables</Text>
-                        <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.expectedDeliverables || 'Not provided'}</Text>
                       </View>
                       <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
                         <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>
