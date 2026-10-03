@@ -5828,13 +5828,38 @@ _google_calendar_scheduler_started = False
 _google_calendar_scheduler_lock = threading.Lock()
 _google_calendar_sync_locks: dict[str, threading.Lock] = {}
 _google_calendar_sync_locks_guard = threading.Lock()
-_google_calendar_stale_scope_snapshots: dict[str, frozenset[str]] = {}
-_google_calendar_stale_snapshot_times: dict[str, float] = {}
+_google_calendar_sync_worker_semaphore = threading.BoundedSemaphore(value=1)
 _GOOGLE_CALENDAR_STALE_SWEEP_INTERVAL_SECONDS = 15 * 60
+_GOOGLE_CALENDAR_RECONCILE_INTERVAL_SECONDS = 5 * 60
+_GOOGLE_CALENDAR_SCHEDULER_INTERVAL_SECONDS = 30
+_GOOGLE_CALENDAR_SYNC_JOB_LEASE_SECONDS = 120
 
 
 def _ensure_google_calendar_tables(connection: Any) -> None:
     with connection.cursor() as cursor:
+        cursor.execute(
+            "select to_regclass('public.google_calendar_event_cleanup'), "
+            "to_regclass('public.google_calendar_sync_jobs'), "
+            "to_regclass('public.google_calendar_sync_jobs_ready_idx'), "
+            "to_regclass('public.google_calendar_connections'), "
+            "to_regclass('public.google_calendar_event_links'), "
+            "to_regclass('public.google_calendar_event_links_google_event_idx'), "
+            "exists (select 1 from pg_attribute "
+            "where attrelid = to_regclass('public.google_calendar_event_links') "
+            "and attname = 'last_exported_repeat' and not attisdropped), "
+            "exists (select 1 from pg_attribute "
+            "where attrelid = to_regclass('public.google_calendar_connections') "
+            "and attname = 'last_full_sync_at' and not attisdropped), "
+            "exists (select 1 from pg_attribute "
+            "where attrelid = to_regclass('public.google_calendar_connections') "
+            "and attname = 'approved_scope_hash' and not attisdropped), "
+            "exists (select 1 from pg_attribute "
+            "where attrelid = to_regclass('public.google_calendar_connections') "
+            "and attname = 'last_reconciled_at' and not attisdropped)"
+        )
+        existing = cursor.fetchone()
+        if existing and all(existing):
+            return
         cursor.execute(
             """
             create table if not exists google_calendar_event_cleanup (
@@ -5846,22 +5871,23 @@ def _ensure_google_calendar_tables(connection: Any) -> None:
             """
         )
         cursor.execute(
-            "select to_regclass('public.google_calendar_connections'), "
-            "to_regclass('public.google_calendar_event_links'), "
-            "to_regclass('public.google_calendar_event_links_google_event_idx'), "
-            "exists (select 1 from pg_attribute "
-            "where attrelid = to_regclass('public.google_calendar_event_links') "
-            "and attname = 'last_exported_repeat' and not attisdropped)"
-        )
-        existing = cursor.fetchone()
-        if existing and all(existing):
-            return
-        if existing and all(existing[:3]):
-            cursor.execute(
-                "alter table google_calendar_event_links add column if not exists "
-                "last_exported_repeat text not null default 'Does not repeat'"
+            """
+            create table if not exists google_calendar_sync_jobs (
+              partner_user_id text primary key,
+              requested_at timestamptz not null default now(),
+              expected_channel_id text,
+              attempt_count integer not null default 0,
+              next_attempt_at timestamptz not null default now(),
+              lease_token text,
+              lease_expires_at timestamptz,
+              last_error text
             )
-            return
+            """
+        )
+        cursor.execute(
+            "create index if not exists google_calendar_sync_jobs_ready_idx "
+            "on google_calendar_sync_jobs (next_attempt_at, requested_at)"
+        )
         cursor.execute(
             """
             create table if not exists google_calendar_connections (
@@ -5875,9 +5901,28 @@ def _ensure_google_calendar_tables(connection: Any) -> None:
               channel_token_hash text,
               resource_id text,
               channel_expiration bigint,
+              last_full_sync_at timestamptz,
+              approved_scope_hash text,
+              last_reconciled_at timestamptz,
               updated_at text not null
             )
             """
+        )
+        cursor.execute(
+            "alter table google_calendar_connections "
+            "add column if not exists last_full_sync_at timestamptz"
+        )
+        cursor.execute(
+            "alter table google_calendar_connections "
+            "add column if not exists approved_scope_hash text"
+        )
+        cursor.execute(
+            "alter table google_calendar_connections "
+            "add column if not exists last_reconciled_at timestamptz"
+        )
+        cursor.execute(
+            "update google_calendar_connections set last_reconciled_at = now() "
+            "where last_reconciled_at is null"
         )
         cursor.execute(
             """
@@ -5901,6 +5946,34 @@ def _ensure_google_calendar_tables(connection: Any) -> None:
         cursor.execute(
             "create index if not exists google_calendar_event_links_google_event_idx "
             "on google_calendar_event_links (google_event_id)"
+        )
+
+
+def _google_calendar_scope_hash(approved_items: dict[str, Any]) -> str:
+    scope = "\n".join(sorted(str(project_id) for project_id in approved_items))
+    return hashlib.sha256(scope.encode("utf-8")).hexdigest()
+
+
+def _enqueue_google_calendar_sync_job(
+    connection: Any,
+    partner_user_id: str,
+    expected_channel_id: str | None = None,
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            insert into google_calendar_sync_jobs (
+              partner_user_id, requested_at, expected_channel_id,
+              attempt_count, next_attempt_at, last_error
+            ) values (%s, now(), %s, 0, now(), null)
+            on conflict (partner_user_id) do update set
+              requested_at = excluded.requested_at,
+              expected_channel_id = excluded.expected_channel_id,
+              attempt_count = 0,
+              next_attempt_at = now(),
+              last_error = null
+            """,
+            (partner_user_id, expected_channel_id),
         )
 
 
@@ -6024,15 +6097,18 @@ def _google_calendar_upsert_connection(
     channel_token_hash: str,
     resource_id: str,
     channel_expiration: int,
+    approved_scope_hash: str,
 ) -> None:
+    synced_at = datetime.now(timezone.utc).isoformat()
     with connection.cursor() as cursor:
         cursor.execute(
             """
             insert into google_calendar_connections (
               partner_user_id, google_email, calendar_id, client_id,
               encrypted_refresh_token, sync_token, channel_id,
-              channel_token_hash, resource_id, channel_expiration, updated_at
-            ) values (%s, %s, 'primary', %s, %s, %s, %s, %s, %s, %s, %s)
+              channel_token_hash, resource_id, channel_expiration,
+              last_full_sync_at, approved_scope_hash, last_reconciled_at, updated_at
+            ) values (%s, %s, 'primary', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (partner_user_id) do update set
               google_email = excluded.google_email,
               calendar_id = excluded.calendar_id,
@@ -6043,6 +6119,9 @@ def _google_calendar_upsert_connection(
               channel_token_hash = excluded.channel_token_hash,
               resource_id = excluded.resource_id,
               channel_expiration = excluded.channel_expiration,
+              last_full_sync_at = excluded.last_full_sync_at,
+              approved_scope_hash = excluded.approved_scope_hash,
+              last_reconciled_at = excluded.last_reconciled_at,
               updated_at = excluded.updated_at
             """,
             (
@@ -6055,7 +6134,10 @@ def _google_calendar_upsert_connection(
                 channel_token_hash,
                 resource_id,
                 channel_expiration,
-                datetime.now(timezone.utc).isoformat(),
+                synced_at,
+                approved_scope_hash,
+                synced_at,
+                synced_at,
             ),
         )
 
@@ -6755,10 +6837,9 @@ def _connect_partner_google_calendar(
                 channel_token_hash=hashlib.sha256(channel_token.encode("utf-8")).hexdigest(),
                 resource_id=resource_id,
                 channel_expiration=expiration,
+                approved_scope_hash=_google_calendar_scope_hash(approved_items),
             )
             connection.commit()
-            _google_calendar_stale_scope_snapshots[partner_user_id] = frozenset(approved_items)
-            _google_calendar_stale_snapshot_times[partner_user_id] = time.monotonic()
         except Exception:
             _google_calendar_stop_watch(access_token, channel_id, resource_id)
             raise
@@ -6772,15 +6853,17 @@ def _connect_partner_google_calendar(
 
     # Replay edits that may have happened while the first snapshot and watch
     # were being established, then start regular push and incremental sync.
-    changed_keys.extend(
-        key_name
-        for key_name in _run_google_calendar_sync(
-            partner_user_id,
-            expected_channel_id=channel_id,
-            broadcast_changes=False,
-        )
-        if key_name not in changed_keys
+    replayed_keys = _run_google_calendar_sync(
+        partner_user_id,
+        expected_channel_id=channel_id,
+        broadcast_changes=False,
     )
+    if replayed_keys is None:
+        with get_connection() as connection:
+            _ensure_google_calendar_tables(connection)
+            _enqueue_google_calendar_sync_job(connection, partner_user_id, channel_id)
+    else:
+        changed_keys.extend(key_name for key_name in replayed_keys if key_name not in changed_keys)
     return synced, changed_keys
 
 
@@ -6798,12 +6881,13 @@ def _run_google_calendar_sync(
     *,
     expected_channel_id: str | None = None,
     broadcast_changes: bool = True,
-) -> list[str]:
+) -> list[str] | None:
     sync_lock = _google_calendar_lock_for_user(partner_user_id)
     if not sync_lock.acquire(blocking=False):
-        return []
+        return None
     changed_keys: list[str] = []
     committed_keys: list[str] = []
+    sync_committed = False
     try:
         ensure_message_storage_once()
         with get_connection() as connection:
@@ -6817,12 +6901,14 @@ def _run_google_calendar_sync(
                 return []
             sync_token = str(calendar_connection.get("sync_token") or "")
             _, current_approved_items = _approved_partner_calendar_items(connection, partner_user_id)
-            approved_scope = frozenset(current_approved_items)
-            last_stale_snapshot = _google_calendar_stale_snapshot_times.get(partner_user_id)
+            approved_scope_hash = _google_calendar_scope_hash(current_approved_items)
+            last_stale_snapshot = _parse_iso_datetime(calendar_connection.get("last_full_sync_at"))
+            now_utc = datetime.now(timezone.utc)
             needs_stale_snapshot = (
-                _google_calendar_stale_scope_snapshots.get(partner_user_id) != approved_scope
+                str(calendar_connection.get("approved_scope_hash") or "") != approved_scope_hash
                 or last_stale_snapshot is None
-                or time.monotonic() - last_stale_snapshot >= _GOOGLE_CALENDAR_STALE_SWEEP_INTERVAL_SECONDS
+                or (now_utc - last_stale_snapshot.astimezone(timezone.utc)).total_seconds()
+                >= _GOOGLE_CALENDAR_STALE_SWEEP_INTERVAL_SECONDS
             )
 
             refresh_token = decrypt_refresh_token(str(calendar_connection.get("encrypted_refresh_token") or ""))
@@ -6966,13 +7052,27 @@ def _run_google_calendar_sync(
 
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "update google_calendar_connections set sync_token = %s, updated_at = %s where partner_user_id = %s",
-                    (next_sync_token, datetime.now(timezone.utc).isoformat(), partner_user_id),
+                    """
+                    update google_calendar_connections
+                    set sync_token = %s,
+                        updated_at = %s,
+                        last_full_sync_at = case when %s then %s else last_full_sync_at end,
+                        approved_scope_hash = %s,
+                        last_reconciled_at = %s
+                    where partner_user_id = %s
+                    """,
+                    (
+                        next_sync_token,
+                        now_utc.isoformat(),
+                        full_sync,
+                        now_utc.isoformat(),
+                        approved_scope_hash,
+                        now_utc.isoformat(),
+                        partner_user_id,
+                    ),
                 )
             connection.commit()
-            _google_calendar_stale_scope_snapshots[partner_user_id] = approved_scope
-            if full_sync:
-                _google_calendar_stale_snapshot_times[partner_user_id] = time.monotonic()
+            sync_committed = True
             committed_keys = list(changed_keys)
 
         if changed_keys and broadcast_changes:
@@ -6991,15 +7091,238 @@ def _run_google_calendar_sync(
         return committed_keys
     except GoogleCalendarError as error:
         print(f"[WARN] Partner Google Calendar sync failed for {partner_user_id}: {error}", flush=True)
-        return committed_keys
+        return committed_keys if sync_committed else None
     except Exception as error:
         print(
             f"[WARN] Partner Google Calendar sync failed for {partner_user_id}: {type(error).__name__}",
             flush=True,
         )
-        return committed_keys
+        return committed_keys if sync_committed else None
     finally:
         sync_lock.release()
+
+
+def _claim_google_calendar_sync_job(
+    partner_user_id: str | None = None,
+) -> dict[str, Any] | None:
+    lease_token = uuid.uuid4().hex
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                if partner_user_id:
+                    cursor.execute(
+                        """
+                        update google_calendar_sync_jobs
+                        set lease_token = %s,
+                            lease_expires_at = now() + (%s * interval '1 second')
+                        where partner_user_id = %s
+                          and next_attempt_at <= now()
+                          and (lease_expires_at is null or lease_expires_at <= now())
+                        returning partner_user_id, requested_at, expected_channel_id, attempt_count
+                        """,
+                        (lease_token, _GOOGLE_CALENDAR_SYNC_JOB_LEASE_SECONDS, partner_user_id),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        with candidate as (
+                          select partner_user_id
+                          from google_calendar_sync_jobs
+                          where next_attempt_at <= now()
+                            and (lease_expires_at is null or lease_expires_at <= now())
+                          order by next_attempt_at, requested_at
+                          for update skip locked
+                          limit 1
+                        )
+                        update google_calendar_sync_jobs as queued
+                        set lease_token = %s,
+                            lease_expires_at = now() + (%s * interval '1 second')
+                        from candidate
+                        where queued.partner_user_id = candidate.partner_user_id
+                        returning queued.partner_user_id, queued.requested_at,
+                                  queued.expected_channel_id, queued.attempt_count
+                        """,
+                        (lease_token, _GOOGLE_CALENDAR_SYNC_JOB_LEASE_SECONDS),
+                    )
+                row = cursor.fetchone()
+    except Exception as error:
+        print(f"[WARN] Google Calendar sync job claim failed: {type(error).__name__}", flush=True)
+        return None
+
+    if not row:
+        return None
+    return {
+        "partner_user_id": str(row[0] or ""),
+        "requested_at": row[1],
+        "expected_channel_id": str(row[2] or "") or None,
+        "attempt_count": int(row[3] or 0),
+        "lease_token": lease_token,
+    }
+
+
+def _complete_google_calendar_sync_job(job: dict[str, Any]) -> None:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                delete from google_calendar_sync_jobs
+                where partner_user_id = %s
+                  and requested_at = %s
+                  and lease_token = %s
+                """,
+                (job["partner_user_id"], job["requested_at"], job["lease_token"]),
+            )
+            if cursor.rowcount == 0:
+                # A newer notification arrived while this sync was running.
+                # Keep that request and make it claimable immediately.
+                cursor.execute(
+                    """
+                    update google_calendar_sync_jobs
+                    set lease_token = null,
+                        lease_expires_at = null,
+                        next_attempt_at = now(),
+                        attempt_count = 0,
+                        last_error = null
+                    where partner_user_id = %s
+                      and lease_token = %s
+                      and requested_at <> %s
+                    """,
+                    (job["partner_user_id"], job["lease_token"], job["requested_at"]),
+                )
+
+
+def _retry_google_calendar_sync_job(job: dict[str, Any], reason: str) -> int:
+    delay_seconds = min(300, 5 * (2 ** min(int(job.get("attempt_count") or 0), 6)))
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update google_calendar_sync_jobs
+                set attempt_count = case when requested_at = %s then attempt_count + 1 else 0 end,
+                    next_attempt_at = case
+                      when requested_at = %s then now() + (%s * interval '1 second')
+                      else now()
+                    end,
+                    lease_token = null,
+                    lease_expires_at = null,
+                    last_error = case when requested_at = %s then %s else null end
+                where partner_user_id = %s and lease_token = %s
+                """,
+                (
+                    job["requested_at"],
+                    job["requested_at"],
+                    delay_seconds,
+                    job["requested_at"],
+                    str(reason or "sync temporarily unavailable")[:160],
+                    job["partner_user_id"],
+                    job["lease_token"],
+                ),
+            )
+    return delay_seconds
+
+
+def _process_google_calendar_sync_job(partner_user_id: str | None = None) -> bool:
+    if not _google_calendar_sync_worker_semaphore.acquire(blocking=False):
+        return False
+
+    try:
+        job = _claim_google_calendar_sync_job(partner_user_id)
+        if not job:
+            return False
+
+        partner_ref = hashlib.sha256(job["partner_user_id"].encode("utf-8")).hexdigest()[:10]
+        requested_at = _parse_iso_datetime(job.get("requested_at"))
+        queue_wait_ms = (
+            max(0, int((datetime.now(timezone.utc) - requested_at.astimezone(timezone.utc)).total_seconds() * 1000))
+            if requested_at else 0
+        )
+        started_at = time.monotonic()
+        print(
+            f"[INFO] Google Calendar sync started partner_ref={partner_ref} queue_wait_ms={queue_wait_ms}",
+            flush=True,
+        )
+        changed_keys = _run_google_calendar_sync(
+            job["partner_user_id"],
+            expected_channel_id=job.get("expected_channel_id"),
+        )
+        if changed_keys is None:
+            retry_seconds = _retry_google_calendar_sync_job(job, "sync busy or temporarily failed")
+            print(
+                f"[WARN] Google Calendar sync queued for retry partner_ref={partner_ref} delay_seconds={retry_seconds}",
+                flush=True,
+            )
+            return False
+
+        _complete_google_calendar_sync_job(job)
+        duration_ms = max(0, int((time.monotonic() - started_at) * 1000))
+        print(
+            f"[INFO] Google Calendar sync finished partner_ref={partner_ref} "
+            f"duration_ms={duration_ms} changed_keys={len(changed_keys)}",
+            flush=True,
+        )
+        return True
+    except Exception as error:
+        if "job" in locals() and job:
+            try:
+                retry_seconds = _retry_google_calendar_sync_job(job, type(error).__name__)
+                print(
+                    f"[WARN] Google Calendar sync queued for retry "
+                    f"partner_ref={hashlib.sha256(job['partner_user_id'].encode('utf-8')).hexdigest()[:10]} "
+                    f"delay_seconds={retry_seconds} error={type(error).__name__}",
+                    flush=True,
+                )
+            except Exception as retry_error:
+                print(
+                    f"[WARN] Google Calendar sync retry scheduling failed: {type(retry_error).__name__}",
+                    flush=True,
+                )
+        else:
+            print(f"[WARN] Google Calendar sync worker failed: {type(error).__name__}", flush=True)
+        return False
+    finally:
+        _google_calendar_sync_worker_semaphore.release()
+
+
+def _drain_google_calendar_sync_jobs(max_jobs: int = 1) -> int:
+    processed = 0
+    for _ in range(max(1, int(max_jobs))):
+        if not _process_google_calendar_sync_job():
+            break
+        processed += 1
+    return processed
+
+
+def _enqueue_due_google_calendar_reconciliations(batch_size: int = 50) -> int:
+    with get_connection() as connection:
+        _ensure_google_calendar_tables(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                with due as (
+                  select partner_user_id, channel_id
+                  from google_calendar_connections
+                  where last_reconciled_at is null
+                     or last_reconciled_at <= now() - (%s * interval '1 second')
+                  order by last_reconciled_at nulls first, partner_user_id
+                  for update skip locked
+                  limit %s
+                )
+                update google_calendar_connections as calendar
+                set last_reconciled_at = now()
+                from due
+                where calendar.partner_user_id = due.partner_user_id
+                returning calendar.partner_user_id, calendar.channel_id
+                """,
+                (_GOOGLE_CALENDAR_RECONCILE_INTERVAL_SECONDS, max(1, int(batch_size))),
+            )
+            due_connections = cursor.fetchall()
+            for due_connection in due_connections:
+                _enqueue_google_calendar_sync_job(
+                    connection,
+                    str(due_connection[0] or ""),
+                    str(due_connection[1] or "") or None,
+                )
+    return len(due_connections)
 
 
 def _renew_google_calendar_watch(
@@ -7062,7 +7385,9 @@ def _push_partner_google_calendar_item_sync(storage_key: str, project: dict[str,
         # Read the latest official record in the baseline-aware sync worker.
         # A delayed save notification must not push an obsolete payload over
         # a newer edit made in Google Calendar.
-        _run_google_calendar_sync(partner_user_id)
+        with get_connection() as connection:
+            _enqueue_google_calendar_sync_job(connection, partner_user_id)
+        _process_google_calendar_sync_job(partner_user_id)
 
 
 async def _push_partner_google_calendar_item(storage_key: str, project: dict[str, Any]) -> None:
@@ -7146,17 +7471,15 @@ def _drain_google_calendar_event_cleanup() -> int:
 
 
 def _google_calendar_scheduler_loop() -> None:
+    last_cleanup_at = time.monotonic()
     while True:
-        time.sleep(60)
+        time.sleep(_GOOGLE_CALENDAR_SCHEDULER_INTERVAL_SECONDS)
         try:
-            with get_connection() as connection:
-                _ensure_google_calendar_tables(connection)
-                with connection.cursor() as cursor:
-                    cursor.execute("select partner_user_id from google_calendar_connections")
-                    partner_user_ids = [str(row[0]) for row in cursor.fetchall() if row and row[0]]
-            _drain_google_calendar_event_cleanup()
-            for partner_user_id in partner_user_ids:
-                _run_google_calendar_sync(partner_user_id)
+            _enqueue_due_google_calendar_reconciliations()
+            _drain_google_calendar_sync_jobs(max_jobs=1)
+            if time.monotonic() - last_cleanup_at >= _GOOGLE_CALENDAR_RECONCILE_INTERVAL_SECONDS:
+                _drain_google_calendar_event_cleanup()
+                last_cleanup_at = time.monotonic()
         except Exception as error:
             print(f"[WARN] Partner Google Calendar scheduler skipped: {type(error).__name__}", flush=True)
 
@@ -13691,10 +14014,26 @@ async def google_calendar_partner_notification(
     # Google notifications only say that the collection changed; changed event
     # details are fetched using the persisted incremental sync token.
     if resource_state in {"exists", "sync"}:
+        partner_user_id = str(channel.get("partner_user_id") or "")
+        try:
+            with get_connection() as connection:
+                _ensure_google_calendar_tables(connection)
+                _enqueue_google_calendar_sync_job(connection, partner_user_id, channel_id)
+        except Exception as error:
+            print(f"[WARN] Google Calendar notification queue failed: {type(error).__name__}", flush=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Calendar change could not be queued for synchronization.",
+            ) from error
+
+        partner_ref = hashlib.sha256(partner_user_id.encode("utf-8")).hexdigest()[:10]
+        print(
+            f"[INFO] Google Calendar notification queued partner_ref={partner_ref} state={resource_state}",
+            flush=True,
+        )
         background_tasks.add_task(
-            _run_google_calendar_sync,
-            str(channel.get("partner_user_id") or ""),
-            expected_channel_id=channel_id,
+            _process_google_calendar_sync_job,
+            partner_user_id,
         )
     return Response(status_code=204)
 
