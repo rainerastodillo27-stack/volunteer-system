@@ -18845,6 +18845,33 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     };
 
+    const handleReturnToProjectProgram = () => {
+
+      const programTitle = getProjectProgramTitle(activeSelectedProject).trim().toLowerCase();
+
+      const programModule = getProgramSuiteModuleForProject(activeSelectedProject, activeProgramTracks);
+
+      const programSection = programSections.find(section =>
+        section.module === programModule ||
+        section.title.trim().toLowerCase() === programTitle ||
+        section.module.trim().toLowerCase() === programTitle
+      );
+
+      if (programSection) {
+        setProjectProgramFilter(programSection.module);
+        setExpandedProgramModules(current => new Set([...current, programSection.module]));
+      }
+
+      setProjectTypeFilter(null);
+      setStatusFilter(null);
+      setProjectSearchQuery('');
+      setActiveProjectsFilterMenu(null);
+      listScrollOffsetRef.current = 0;
+      windowScrollOffsetRef.current = 0;
+      handleReturnToProjectList();
+
+    };
+
 
 
     const handleAttendanceChange = async (volunteerId: string, status: 'Present' | 'Absent' | 'Late') => {
@@ -19360,6 +19387,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     const renderAttendanceTasksView = (project: Project) => {
 
       const compactLayout = width < 768;
+      const TaskRowsContainer: React.ComponentType<any> = compactLayout ? View : ScrollView;
+      const taskRowsContainerProps = compactLayout
+        ? {}
+        : { style: { maxHeight: 470 }, showsVerticalScrollIndicator: true };
 
       const selectedAttendanceDate = /^\d{4}-\d{2}-\d{2}$/.test(resolvedAttendanceDateKey)
         ? new Date(`${resolvedAttendanceDateKey}T00:00:00`)
@@ -19398,7 +19429,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const taskCount = taskRows.length;
 
-      const assignedTaskCount = taskRows.filter(task => task.status === 'Assigned' || task.status === 'Completed' || task.assignedVolunteerId).length;
+      const assignedTaskCount = taskRows.filter(task => getTaskAssignedVolunteerIds(task, volunteers).length > 0).length;
 
       const unassignedTaskCount = Math.max(taskCount - assignedTaskCount, 0);
 
@@ -20201,19 +20232,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
                 <View style={{
-
-                  backgroundColor: '#ffffff',
-
+                  backgroundColor: compactLayout ? '#f4f7f5' : '#ffffff',
                   borderRadius: 12,
-
-                  borderWidth: 1,
-
+                  borderWidth: compactLayout ? 0 : 1,
                   borderColor: '#e2e8f0',
-
-                  overflow: 'hidden',
-
-                  maxHeight: 520,
-
+                  overflow: compactLayout ? 'visible' : 'hidden',
+                  maxHeight: compactLayout ? undefined : 520,
                   shadowColor: '#0f172a',
 
                   shadowOffset: { width: 0, height: 2 },
@@ -20277,7 +20301,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                  <ScrollView style={{ maxHeight: 470 }} showsVerticalScrollIndicator={true}>
+                  <TaskRowsContainer {...taskRowsContainerProps}>
 
                     {taskCards.length === 0 ? (
 
@@ -20294,6 +20318,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       taskCards.map(task => {
 
                         const assignedVolunteerIds = getTaskAssignedVolunteerIds(task, volunteers);
+                        const assignedVolunteerEntries = assignedVolunteerIds.map((id, index) => {
+                          const matchedVolunteer = assignableVolunteers.find(
+                            volunteer => volunteer.id === id || volunteer.userId === id
+                          ) || volunteers.find(
+                            volunteer => volunteer.id === id || volunteer.userId === id
+                          );
+                          const storedName = task.assignedVolunteerNames?.[index] ||
+                            (index === 0 ? task.assignedVolunteerName : '');
+                          return {
+                            id,
+                            name: matchedVolunteer?.name || storedName || 'Volunteer',
+                          };
+                        });
 
                         const needed = getTaskVolunteerLimit(task, activeSelectedProject.volunteersNeeded);
 
@@ -20338,25 +20375,26 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           <View key={task.id} style={{
 
                             flexDirection: compactLayout ? 'column' : 'row',
-
                             alignItems: compactLayout ? 'stretch' : 'center',
-
-                            borderBottomWidth: 1,
-
+                            borderBottomWidth: compactLayout ? 0 : 1,
                             borderBottomColor: '#f1f5f9',
-
+                            backgroundColor: compactLayout ? '#ffffff' : 'transparent',
+                            borderWidth: compactLayout ? 1 : 0,
+                            borderColor: compactLayout ? '#e2e8f0' : 'transparent',
+                            borderRadius: compactLayout ? 14 : 0,
+                            marginHorizontal: compactLayout ? 10 : 0,
+                            marginVertical: compactLayout ? 6 : 0,
                             paddingVertical: 14,
-
                             paddingHorizontal: compactLayout ? 14 : 20,
-
                             flexWrap: compactLayout ? 'wrap' : 'nowrap',
-
                             gap: 12,
-
                             opacity: eventIsClosed || isCurrentlyDeleting ? 0.5 : 1,
-
                             zIndex: activeActionTaskId === task.id ? 50 : 1,
-
+                            shadowColor: compactLayout ? '#0f172a' : undefined,
+                            shadowOffset: compactLayout ? { width: 0, height: 2 } : undefined,
+                            shadowOpacity: compactLayout ? 0.04 : undefined,
+                            shadowRadius: compactLayout ? 6 : undefined,
+                            elevation: compactLayout ? 1 : 0,
                           }}>
 
                             <View style={{ flex: compactLayout ? undefined : 2.2, width: compactLayout ? '100%' : undefined, flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
@@ -20455,40 +20493,98 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                            <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '100%' : undefined, flexDirection: compactLayout ? 'row' : 'column', justifyContent: compactLayout ? 'space-between' : 'center', alignItems: 'center' }}>
-
-                              {compactLayout ? <Text style={{ fontSize: 11, color: '#64748b', fontWeight: '700' }}>Assigned</Text> : null}
-
-                              <Text style={{ fontSize: 14, fontWeight: '800', color: statusColor, marginBottom: 4 }}>
-
-                                {assignedVolunteerIds.length} / {needed}
-
-                              </Text>
-
-                              <View style={{ flexDirection: 'row' }}>
-
-                                {assignedVolunteerIds.slice(0, 4).map((id, index) => (
-
-                                  <View key={id} style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', marginLeft: index > 0 ? -8 : 0, borderWidth: 2, borderColor: '#fff' }}>
-
-                                    <MaterialIcons name="person" size={14} color="#64748b" />
-
+                            <View style={{
+                              flex: compactLayout ? undefined : 1.2,
+                              width: compactLayout ? '100%' : undefined,
+                              flexDirection: 'column',
+                              justifyContent: 'center',
+                              alignItems: compactLayout ? 'stretch' : 'center',
+                            }}>
+                              {compactLayout ? (
+                                <>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <Text style={{ fontSize: 11, color: '#64748b', fontWeight: '700' }}>Assigned</Text>
+                                    <Text style={{ fontSize: 14, fontWeight: '800', color: statusColor }}>
+                                      {assignedVolunteerIds.length} / {needed}
+                                    </Text>
                                   </View>
-
-                                ))}
-
-                                {assignedVolunteerIds.length > 4 && (
-
-                                  <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center', marginLeft: -8, borderWidth: 2, borderColor: '#fff' }}>
-
-                                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b' }}>+{assignedVolunteerIds.length - 4}</Text>
-
+                                  {assignedVolunteerEntries.length > 0 ? (
+                                    <View style={{ marginTop: 8, gap: 7 }}>
+                                      {assignedVolunteerEntries.map(assignment => (
+                                        <View
+                                          key={assignment.id}
+                                          style={{
+                                            minHeight: 42,
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            gap: 9,
+                                            padding: 7,
+                                            borderRadius: 10,
+                                            backgroundColor: '#f8fafc',
+                                            borderWidth: 1,
+                                            borderColor: '#e2e8f0',
+                                          }}
+                                        >
+                                          <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
+                                            <MaterialIcons name="person" size={16} color="#475569" />
+                                          </View>
+                                          <Text style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: '700', color: '#334155' }} numberOfLines={1}>
+                                            {assignment.name}
+                                          </Text>
+                                          {canManageTask ? (
+                                            <TouchableOpacity
+                                              accessibilityRole="button"
+                                              accessibilityLabel={`Unassign ${assignment.name} from ${task.title}`}
+                                              onPress={() => handleRemoveSpecificVolunteerFromTask(task, assignment.id, assignment.name)}
+                                              disabled={eventIsClosed || Boolean(isRemovingVolunteerId)}
+                                              style={{
+                                                minHeight: 32,
+                                                flexDirection: 'row',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: 4,
+                                                paddingHorizontal: 9,
+                                                borderRadius: 8,
+                                                backgroundColor: '#fff1f2',
+                                                borderWidth: 1,
+                                                borderColor: '#fecdd3',
+                                                opacity: eventIsClosed || isRemovingVolunteerId ? 0.55 : 1,
+                                              }}
+                                            >
+                                              {isRemovingVolunteerId === assignment.id ? (
+                                                <ActivityIndicator size="small" color="#be123c" />
+                                              ) : (
+                                                <MaterialIcons name="person-remove" size={14} color="#be123c" />
+                                              )}
+                                              <Text style={{ fontSize: 11, fontWeight: '800', color: '#be123c' }}>Unassign</Text>
+                                            </TouchableOpacity>
+                                          ) : null}
+                                        </View>
+                                      ))}
+                                    </View>
+                                  ) : (
+                                    <Text style={{ marginTop: 6, fontSize: 12, color: '#94a3b8' }}>No volunteers assigned</Text>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  <Text style={{ fontSize: 14, fontWeight: '800', color: statusColor, marginBottom: 4 }}>
+                                    {assignedVolunteerIds.length} / {needed}
+                                  </Text>
+                                  <View style={{ flexDirection: 'row' }}>
+                                    {assignedVolunteerIds.slice(0, 4).map((id, index) => (
+                                      <View key={id} style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', marginLeft: index > 0 ? -8 : 0, borderWidth: 2, borderColor: '#fff' }}>
+                                        <MaterialIcons name="person" size={14} color="#64748b" />
+                                      </View>
+                                    ))}
+                                    {assignedVolunteerIds.length > 4 && (
+                                      <View style={{ width: 24, height: 24, borderRadius: 12, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center', marginLeft: -8, borderWidth: 2, borderColor: '#fff' }}>
+                                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b' }}>+{assignedVolunteerIds.length - 4}</Text>
+                                      </View>
+                                    )}
                                   </View>
-
-                                )}
-
-                              </View>
-
+                                </>
+                              )}
                             </View>
 
 
@@ -20517,7 +20613,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     )}
 
-                  </ScrollView>
+                  </TaskRowsContainer>
 
                 </View>
 
@@ -21122,19 +21218,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
             {eventWorkspaceTab === 'Attendance' && (
 
               <View style={{
-
-                backgroundColor: '#ffffff',
-
-                borderRadius: 12,
-
-                borderWidth: 1,
-
+                backgroundColor: compactLayout ? '#f4f7f5' : '#ffffff',
+                borderRadius: compactLayout ? 16 : 12,
+                borderWidth: compactLayout ? 0 : 1,
                 borderColor: '#e2e8f0',
-
-                overflow: 'hidden',
-
+                overflow: compactLayout ? 'visible' : 'hidden',
                 maxHeight: compactLayout ? 680 : 560,
-
               }}>
 
                 <View style={{
@@ -21192,7 +21281,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                <ScrollView style={{ maxHeight: 510 }} showsVerticalScrollIndicator={true}>
+                <ScrollView
+                  style={{ maxHeight: compactLayout ? 660 : 510 }}
+                  contentContainerStyle={compactLayout ? { paddingVertical: 4 } : undefined}
+                  showsVerticalScrollIndicator={true}
+                >
 
                   {assignableVolunteers.length === 0 ? (
 
@@ -21297,27 +21390,159 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       const attendanceMarkBadgeColor = isChecked ? '#dcfce7' : '#fef3c7';
                       const attendanceMarkTextColor = isChecked ? '#166534' : '#92400e';
 
-                      return (
+                      return compactLayout ? (
+                        <View
+                          key={volunteer.id}
+                          style={{
+                            marginHorizontal: 10,
+                            marginVertical: 7,
+                            padding: 14,
+                            borderRadius: 16,
+                            backgroundColor: '#ffffff',
+                            borderWidth: 1,
+                            borderColor: isChecked ? '#bbf7d0' : '#e2e8f0',
+                            shadowColor: '#0f172a',
+                            shadowOffset: { width: 0, height: 2 },
+                            shadowOpacity: 0.05,
+                            shadowRadius: 8,
+                            elevation: 2,
+                          }}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11 }}>
+                            {renderInitialsAvatar(volunteer.name, 42)}
 
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <Text style={{ fontSize: 15, lineHeight: 20, fontWeight: '800', color: '#0f172a' }} numberOfLines={1} ellipsizeMode="tail">
+                                {volunteer.name}
+                              </Text>
+                            </View>
+
+                            <TouchableOpacity
+                              accessibilityRole="button"
+                              accessibilityLabel={`More attendance actions for ${volunteer.name}`}
+                              onPress={() => setActiveActionTaskId(activeActionTaskId === volunteer.id ? null : volunteer.id)}
+                              style={{
+                                width: 38,
+                                height: 38,
+                                borderRadius: 12,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                backgroundColor: '#f8fafc',
+                                borderWidth: 1,
+                                borderColor: '#e2e8f0',
+                              }}
+                            >
+                              <MaterialIcons name="more-vert" size={20} color="#475569" />
+                            </TouchableOpacity>
+                          </View>
+
+                          <View style={{ flexDirection: 'row', gap: 9, marginTop: 13 }}>
+                            <View style={{ flex: 1, minWidth: 0, padding: 11, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#f1f5f9' }}>
+                              <Text style={{ fontSize: 10, fontWeight: '800', letterSpacing: 0.35, color: '#64748b', marginBottom: 8 }}>ATTENDANCE</Text>
+                              <View style={{ alignSelf: 'flex-start', backgroundColor: badgeColor, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 }}>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: textColor }}>{attendanceStatus}</Text>
+                              </View>
+                            </View>
+                            <View style={{ flex: 1, minWidth: 0, padding: 11, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#f1f5f9' }}>
+                              <Text style={{ fontSize: 10, fontWeight: '800', letterSpacing: 0.35, color: '#64748b', marginBottom: 8 }}>VERIFICATION</Text>
+                              <View style={{ alignSelf: 'flex-start', backgroundColor: attendanceMarkBadgeColor, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 }}>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: attendanceMarkTextColor }}>{attendanceMarkStatus}</Text>
+                              </View>
+                            </View>
+                          </View>
+
+                          <View style={{ flexDirection: 'row', gap: 9, marginTop: 10 }}>
+                            <View style={{ flex: 0.9, minWidth: 0, padding: 11, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#f1f5f9' }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+                                <MaterialIcons name="schedule" size={14} color="#64748b" />
+                                <Text style={{ fontSize: 10, fontWeight: '800', letterSpacing: 0.35, color: '#64748b' }}>TIME IN</Text>
+                              </View>
+                              {activeLog ? (
+                                <>
+                                  <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>
+                                    {format(new Date(activeLog.timeIn), 'h:mm a')}
+                                  </Text>
+                                  <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                                    {format(new Date(activeLog.timeIn), 'MMM d, yyyy')}
+                                  </Text>
+                                </>
+                              ) : (
+                                <Text style={{ fontSize: 13, color: '#94a3b8' }}>
+                                  {selectedAttendanceDateNotStarted ? 'Not started' : 'Not timed in'}
+                                </Text>
+                              )}
+                            </View>
+
+                            <View style={{ flex: 1.1, minWidth: 0, padding: 11, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#f1f5f9' }}>
+                              <Text style={{ fontSize: 10, fontWeight: '800', letterSpacing: 0.35, color: '#64748b', marginBottom: 7 }}>ASSIGNED TASKS</Text>
+                              {assignedTasks.length > 0 ? (
+                                assignedTasks.map(task => (
+                                  <View key={task.id} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 5 }}>
+                                    <MaterialIcons
+                                      name={task.status === 'Completed' ? 'check-circle' : 'assignment'}
+                                      size={14}
+                                      color={task.status === 'Completed' ? '#166534' : '#64748b'}
+                                      style={{ marginTop: 1 }}
+                                    />
+                                    <Text style={{ flex: 1, fontSize: 12, lineHeight: 16, color: '#475569' }} numberOfLines={2}>
+                                      {task.title}
+                                    </Text>
+                                  </View>
+                                ))
+                              ) : (
+                                <Text style={{ fontSize: 13, color: '#94a3b8' }}>No task assigned</Text>
+                              )}
+                            </View>
+                          </View>
+
+                          {activeLog ? (
+                            <TouchableOpacity
+                              accessibilityRole="button"
+                              accessibilityLabel={`${isChecked ? 'Remove attendance mark for' : 'Mark attendance for'} ${volunteer.name}`}
+                              accessibilityState={{ disabled: Boolean(isCheckingAttendance) }}
+                              onPress={() => void handleToggleAttendanceCheck(activeLog, !isChecked)}
+                              disabled={Boolean(isCheckingAttendance)}
+                              activeOpacity={0.85}
+                              style={{
+                                minHeight: 44,
+                                marginTop: 10,
+                                borderRadius: 11,
+                                borderWidth: isChecked ? 1 : 0,
+                                borderColor: '#bbf7d0',
+                                backgroundColor: isChecked ? '#f0fdf4' : '#166534',
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: 8,
+                                paddingHorizontal: 12,
+                                opacity: isCheckingAttendance ? 0.7 : 1,
+                              }}
+                            >
+                              {isCheckingAttendance ? (
+                                <ActivityIndicator size="small" color={isChecked ? '#166534' : '#ffffff'} />
+                              ) : (
+                                <MaterialIcons
+                                  name={isChecked ? 'remove-done' : 'event-available'}
+                                  size={18}
+                                  color={isChecked ? '#166534' : '#ffffff'}
+                                />
+                              )}
+                              <Text style={{ fontSize: 13, fontWeight: '800', color: isChecked ? '#166534' : '#ffffff' }}>
+                                {isCheckingAttendance ? 'Saving…' : isChecked ? 'Remove attendance mark' : 'Mark attendance'}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      ) : (
                         <View key={volunteer.id} style={{
-
                           flexDirection: 'row',
-                          flexWrap: compactLayout ? 'wrap' : 'nowrap',
-
                           alignItems: 'center',
-
                           borderBottomWidth: 1,
-
                           borderBottomColor: '#f1f5f9',
-
                           paddingVertical: 14,
-
                           paddingHorizontal: 20,
-
                           gap: 12,
-
                         }}>
-
                           <TouchableOpacity
                             accessibilityRole="checkbox"
                             accessibilityLabel={`${isChecked ? 'Unmark' : 'Mark'} attendance for ${volunteer.name}`}
@@ -21326,159 +21551,76 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             onPress={() => activeLog && handleToggleAttendanceCheck(activeLog, !isChecked)}
                             disabled={!activeLog || Boolean(isCheckingAttendance)}
                           >
-
                             {isCheckingAttendance ? (
                               <ActivityIndicator size="small" color="#166534" />
                             ) : (
-                              <MaterialIcons
-                                name={isChecked ? "check-box" : "check-box-outline-blank"}
-                                size={20}
-                                color={isChecked ? "#166534" : "#cbd5e1"}
-                              />
+                              <MaterialIcons name={isChecked ? 'check-box' : 'check-box-outline-blank'} size={20} color={isChecked ? '#166534' : '#cbd5e1'} />
                             )}
-
                           </TouchableOpacity>
 
-                          <View style={{ flex: compactLayout ? 1 : 2, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-
+                          <View style={{ flex: 2, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                             {renderInitialsAvatar(volunteer.name, 36)}
-
                             <View style={{ flex: 1 }}>
-
                               <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>{volunteer.name}</Text>
-
                               <Text style={{ fontSize: 12, color: '#64748b', marginTop: 2 }} numberOfLines={1}>{assignedRoles}</Text>
-
                             </View>
-
                           </View>
 
-                          <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '46%' : undefined, alignItems: 'flex-start', paddingTop: compactLayout ? 8 : 0 }}>
-
-                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Attendance</Text> : null}
-
+                          <View style={{ flex: 1.2, alignItems: 'flex-start' }}>
                             <View style={{ backgroundColor: badgeColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
-
                               <Text style={{ fontSize: 12, fontWeight: '700', color: textColor }}>{attendanceStatus}</Text>
-
                             </View>
-
                           </View>
 
-                          <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '46%' : undefined, alignItems: 'flex-start', paddingTop: compactLayout ? 8 : 0 }}>
-
-                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Verification</Text> : null}
-
+                          <View style={{ flex: 1.2, alignItems: 'flex-start' }}>
                             <View style={{ backgroundColor: attendanceMarkBadgeColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
-
-                              <Text style={{ fontSize: 12, fontWeight: '700', color: attendanceMarkTextColor }}>
-                                {attendanceMarkStatus}
-                              </Text>
-
+                              <Text style={{ fontSize: 12, fontWeight: '700', color: attendanceMarkTextColor }}>{attendanceMarkStatus}</Text>
                             </View>
-
                             {canManageApprovedPartnerEvent(activeSelectedProject) && activeLog && !isChecked ? (
                               <TouchableOpacity
                                 accessibilityRole="button"
                                 accessibilityLabel={`Mark attendance for ${volunteer.name}`}
                                 onPress={() => void handleToggleAttendanceCheck(activeLog, true)}
                                 disabled={Boolean(isCheckingAttendance)}
-                                style={{
-                                  marginTop: 6,
-                                  paddingHorizontal: 8,
-                                  paddingVertical: 5,
-                                  borderRadius: 7,
-                                  backgroundColor: '#166534',
-                                  opacity: isCheckingAttendance ? 0.65 : 1,
-                                }}
+                                style={{ marginTop: 6, minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, borderRadius: 8, backgroundColor: '#166534', opacity: isCheckingAttendance ? 0.65 : 1 }}
                               >
-                                {isCheckingAttendance ? (
-                                  <ActivityIndicator size="small" color="#ffffff" />
-                                ) : (
-                                  <MaterialIcons name="event-available" size={16} color="#ffffff" />
-                                )}
-                                {compactLayout ? <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '700', marginLeft: 5 }}>{isCheckingAttendance ? 'Saving' : 'Mark'}</Text> : null}
+                                {isCheckingAttendance ? <ActivityIndicator size="small" color="#ffffff" /> : <MaterialIcons name="event-available" size={15} color="#ffffff" />}
+                                <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '700' }}>Mark</Text>
                               </TouchableOpacity>
                             ) : null}
-
                           </View>
 
-                          <View style={{ flex: compactLayout ? undefined : 1.2, width: compactLayout ? '46%' : undefined, paddingTop: compactLayout ? 8 : 0 }}>
-
-                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Time in</Text> : null}
-
+                          <View style={{ flex: 1.2 }}>
                             {activeLog ? (
-
                               <>
-
-                                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>
-
-                                  {format(new Date(activeLog.timeIn), 'h:mm a')}
-
-                                </Text>
-
-                                <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-
-                                  {format(new Date(activeLog.timeIn), 'MMM d, yyyy')}
-
-                                </Text>
-
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>{format(new Date(activeLog.timeIn), 'h:mm a')}</Text>
+                                <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{format(new Date(activeLog.timeIn), 'MMM d, yyyy')}</Text>
                               </>
-
                             ) : (
-
-                              <Text style={{ fontSize: 13, color: '#94a3b8' }}>
-                                {selectedAttendanceDateNotStarted ? 'Not started' : 'Not timed in'}
-                              </Text>
-
+                              <Text style={{ fontSize: 13, color: '#94a3b8' }}>{selectedAttendanceDateNotStarted ? 'Not started' : 'Not timed in'}</Text>
                             )}
-
                           </View>
 
-                          <View style={{ flex: compactLayout ? undefined : 2, width: compactLayout ? '100%' : undefined, justifyContent: 'center', paddingTop: compactLayout ? 8 : 0 }}>
-
-                            {compactLayout ? <Text style={{ fontSize: 10, color: '#64748b', fontWeight: '700', marginBottom: 4 }}>Assigned tasks</Text> : null}
-
-                            {assignedTasks.length > 0 ? (
-
-                              assignedTasks.map(t => (
-
-                                <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-
-                                  <MaterialIcons name={t.status === 'Completed' ? "check-circle" : "assignment"} size={14} color={t.status === 'Completed' ? "#166534" : "#64748b"} />
-
-                                  <Text style={{ fontSize: 12, color: '#475569' }} numberOfLines={1}>{t.title}</Text>
-
-                                </View>
-
-                              ))
-
-                            ) : (
-
-                              <Text style={{ fontSize: 13, color: '#94a3b8' }}>No task assigned</Text>
-
-                            )}
-
+                          <View style={{ flex: 2, justifyContent: 'center' }}>
+                            {assignedTasks.length > 0 ? assignedTasks.map(task => (
+                              <View key={task.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                <MaterialIcons name={task.status === 'Completed' ? 'check-circle' : 'assignment'} size={14} color={task.status === 'Completed' ? '#166534' : '#64748b'} />
+                                <Text style={{ fontSize: 12, color: '#475569' }} numberOfLines={1}>{task.title}</Text>
+                              </View>
+                            )) : <Text style={{ fontSize: 13, color: '#94a3b8' }}>No task assigned</Text>}
                           </View>
 
-                          <View style={{ width: 40, alignItems: 'flex-end', marginLeft: 'auto' }} {...({} as any)}>
-
+                          <View style={{ width: 40, alignItems: 'flex-end' }}>
                             <TouchableOpacity
-
+                              accessibilityRole="button"
+                              accessibilityLabel={`More attendance actions for ${volunteer.name}`}
                               onPress={() => setActiveActionTaskId(activeActionTaskId === volunteer.id ? null : volunteer.id)}
-
                               style={{ padding: 4 }}
-
                             >
-
                               <MaterialIcons name="more-vert" size={20} color="#64748b" />
-
                             </TouchableOpacity>
-
                           </View>
-
                         </View>
-
                       );
 
                     })
@@ -21947,11 +22089,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
             <MaterialIcons name="chevron-right" size={14} color="#64748b" style={{ marginHorizontal: 4 }} />
 
-            <Text style={premiumDetailsStyles.breadcrumbMuted}>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel={`View ${getProjectProgramTitle(activeSelectedProject)} projects`}
+              onPress={handleReturnToProjectProgram}
+            >
+              <Text style={premiumDetailsStyles.breadcrumbText}>
 
-              {getProjectProgramTitle(activeSelectedProject)}
+                {getProjectProgramTitle(activeSelectedProject)}
 
-            </Text>
+              </Text>
+            </TouchableOpacity>
 
             <MaterialIcons name="chevron-right" size={14} color="#64748b" style={{ marginHorizontal: 4 }} />
 

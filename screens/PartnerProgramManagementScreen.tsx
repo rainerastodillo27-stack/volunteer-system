@@ -452,6 +452,19 @@ export default function PartnerProgramManagementScreen() {
     });
   };
 
+  const handleOpenCalendarProject = (projectId: string) => {
+    const normalizedProjectId = String(projectId || '').trim();
+    const project = approvedProposalCalendarProjects.find(
+      item => String(item.id || '').trim() === normalizedProjectId
+    ) || allProjects.find(
+      item => String(item.id || '').trim() === normalizedProjectId
+    );
+
+    if (project) {
+      setDetailModalProject(project);
+    }
+  };
+
   const hasProgramContent = programs.length > 0 || allProjects.length > 0 || partnerApplications.length > 0;
 
   if (loading && !hasProgramContent) {
@@ -600,15 +613,13 @@ export default function PartnerProgramManagementScreen() {
             planningItems={planningItems}
             includeProjectEntries
             includeUnlinkedPlanningItems={false}
+            showProjectManagementActions={false}
             accentColor="#166534"
             emptyText="No scheduled items yet."
             statusFilter={statusFilter}
             setStatusFilter={setStatusFilter}
             hideSecondCalendar
-            onOpenProject={(projectId) => {
-              const match = allProjects.find(project => project.id === projectId);
-              if (match) setDetailModalProject(match);
-            }}
+            onOpenProject={handleOpenCalendarProject}
           />
         </>
       ) : null}
@@ -647,7 +658,7 @@ export default function PartnerProgramManagementScreen() {
             <View style={styles.detailModalCard}>
               <View style={styles.modalHeaderRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.detailModalEyebrow}>PROJECT</Text>
+                  <Text style={styles.detailModalEyebrow}>{detailModalProject.isEvent ? 'EVENT' : 'PROJECT'}</Text>
                   <Text style={styles.detailModalTitle}>{detailModalProject.title}</Text>
                 </View>
                 <TouchableOpacity onPress={() => setDetailModalProject(null)} style={styles.modalCloseButton}>
@@ -670,10 +681,6 @@ export default function PartnerProgramManagementScreen() {
               <View style={styles.modalFooterRow}>
                 <TouchableOpacity style={styles.modalCancelButton} onPress={() => setDetailModalProject(null)}>
                   <Text style={styles.modalCancelText}>Close</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.modalPrimaryButton} onPress={() => handleOpenProjectProposal(detailModalProject)}>
-                  <MaterialIcons name="handshake" size={17} color="#ffffff" />
-                  <Text style={styles.modalPrimaryText}>Partner With This Project</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -875,8 +882,6 @@ const styles = StyleSheet.create({
   modalFooterRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
   modalCancelButton: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: '#cbd5e1' },
   modalCancelText: { fontSize: 13, fontWeight: '700', color: '#475569' },
-  modalPrimaryButton: { flex: 2, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, backgroundColor: '#166534' },
-  modalPrimaryText: { fontSize: 13, fontWeight: '800', color: '#ffffff' },
   availableProgramHeader: {
     fontSize: 11,
     fontWeight: '800',

@@ -36,6 +36,7 @@ type ProjectTimelineCalendarCardProps = {
   hideSecondCalendar?: boolean;
   includeProjectEntries?: boolean;
   includeUnlinkedPlanningItems?: boolean;
+  showProjectManagementActions?: boolean;
   onAddEvent?: (date: Date) => void;
   onOpenProject?: (projectId: string) => void;
   onEditProject?: (projectId: string) => void;
@@ -143,6 +144,7 @@ export default function ProjectTimelineCalendarCard({
   hideSecondCalendar = false,
   includeProjectEntries = false,
   includeUnlinkedPlanningItems = true,
+  showProjectManagementActions = true,
   onAddEvent,
   onOpenProject,
   onEditProject,
@@ -806,22 +808,26 @@ export default function ProjectTimelineCalendarCard({
                         >
                           <MaterialIcons name="visibility" size={17} color={project?.id ? '#166534' : '#94a3b8'} />
                         </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.actionButton}
-                          disabled={!project?.id || !onEditProject}
-                          onPress={() => project?.id && onEditProject?.(project.id)}
-                          accessibilityLabel={`Edit ${entry.title}`}
-                        >
-                          <MaterialIcons name="edit" size={17} color={project?.id && onEditProject ? '#2563eb' : '#94a3b8'} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.actionButton}
-                          disabled={!project?.id || !onDeleteProject}
-                          onPress={() => project?.id && onDeleteProject?.(project.id)}
-                          accessibilityLabel={`Delete ${entry.title}`}
-                        >
-                          <MaterialIcons name="delete-outline" size={17} color={project?.id && onDeleteProject ? '#dc2626' : '#94a3b8'} />
-                        </TouchableOpacity>
+                        {showProjectManagementActions && onEditProject ? (
+                          <TouchableOpacity
+                            style={styles.actionButton}
+                            disabled={!project?.id}
+                            onPress={() => project?.id && onEditProject(project.id)}
+                            accessibilityLabel={`Edit ${entry.title}`}
+                          >
+                            <MaterialIcons name="edit" size={17} color={project?.id ? '#2563eb' : '#94a3b8'} />
+                          </TouchableOpacity>
+                        ) : null}
+                        {showProjectManagementActions && onDeleteProject ? (
+                          <TouchableOpacity
+                            style={styles.actionButton}
+                            disabled={!project?.id}
+                            onPress={() => project?.id && onDeleteProject(project.id)}
+                            accessibilityLabel={`Delete ${entry.title}`}
+                          >
+                            <MaterialIcons name="delete-outline" size={17} color={project?.id ? '#dc2626' : '#94a3b8'} />
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     )}
                   </TouchableOpacity>
