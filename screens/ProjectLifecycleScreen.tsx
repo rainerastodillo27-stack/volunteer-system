@@ -4175,11 +4175,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         ? projects.find(project => !project.isEvent && project.id === projectDraft.parentProjectId) || null
 
-        : null,
+        : projectDraft.isEvent && selectedProject && !selectedProject.isEvent
+          ? selectedProject
+          : null,
 
-    [projectDraft.isEvent, projectDraft.parentProjectId, projects]
+    [projectDraft.isEvent, projectDraft.parentProjectId, projects, selectedProject]
 
   );
+
+  const projectDraftParentVolunteerSlots = projectDraftParentProject
+    ? Number(projectDraftParentProject.volunteersNeeded)
+    : null;
 
 
 
@@ -5865,6 +5871,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     nextDraft.imageHidden = false;
 
+    nextDraft.volunteersNeeded = String(parentProject.volunteersNeeded ?? 0);
+
     nextDraft.address = parentProject.location.address || '';
 
     nextDraft.latitude = String(parentProject.location.latitude || '');
@@ -7439,22 +7447,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const parsedLongitude = Number(projectDraft.longitude);
 
-    const volunteersNeeded = Number(projectDraft.volunteersNeeded.trim() || 0);
-
-    const minimumVolunteerSlots = projectDraft.isEvent ? 1 : 0;
-
-    if (!Number.isInteger(volunteersNeeded) || volunteersNeeded < minimumVolunteerSlots) {
-
-      failProjectSaveValidation(
-        projectDraft.isEvent
-          ? 'Enter a whole number of volunteer slots (at least 1).'
-          : 'Volunteer slots must be a whole number of 0 or more.'
-      );
-
-      return;
-
-    }
-
     let startDateValue = new Date(projectDraft.startDate);
 
     let endDateValue = new Date(projectDraft.endDate);
@@ -7526,6 +7518,26 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         ? projects.find(project => !project.isEvent && project.id === resolvedEventParentProjectId) || null
 
         : null;
+
+    const volunteersNeeded = projectDraft.isEvent && resolvedEventParentProject
+      ? Number(resolvedEventParentProject.volunteersNeeded)
+      : Number(projectDraft.volunteersNeeded.trim() || 0);
+
+    const minimumVolunteerSlots = projectDraft.isEvent && !resolvedEventParentProject ? 1 : 0;
+
+    if (!Number.isInteger(volunteersNeeded) || volunteersNeeded < minimumVolunteerSlots) {
+
+      failProjectSaveValidation(
+        projectDraft.isEvent && resolvedEventParentProject
+          ? 'The parent project volunteer slot limit must be a whole number of 0 or more.'
+          : projectDraft.isEvent
+            ? 'Choose a parent project with a valid volunteer slot limit.'
+            : 'Volunteer slots must be a whole number of 0 or more.'
+      );
+
+      return;
+
+    }
 
     const parentLocationSelection = getProjectLocationSelection(resolvedEventParentProject);
 
@@ -13951,6 +13963,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                               partnerId: parentProj.partnerId,
 
+                              volunteersNeeded: String(parentProj.volunteersNeeded ?? 0),
+
                             }));
 
                             setProjectRegionCode(locSel.regionCode || '');
@@ -13998,6 +14012,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                               ...prev,
 
                               parentProjectId: val,
+
+                              volunteersNeeded: '',
 
                             }));
 
@@ -14659,7 +14675,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     <TextInput
 
-                      style={[styles.formInput, { height: 38, marginBottom: 0 }]}
+                      style={[styles.formInput, { height: 38, marginBottom: 0 }, projectDraft.isEvent && { backgroundColor: '#f1f5f9', color: '#64748b' }]}
 
                       keyboardType="numeric"
 
@@ -14667,11 +14683,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       placeholderTextColor="#94a3b8"
 
-                      value={String(projectDraft.volunteersNeeded || '')}
+                      value={projectDraft.isEvent
+                        ? Number.isInteger(projectDraftParentVolunteerSlots)
+                          ? String(projectDraftParentVolunteerSlots)
+                          : ''
+                        : String(projectDraft.volunteersNeeded || '')}
+
+                      editable={!projectDraft.isEvent}
 
                       onChangeText={value => handleProjectDraftChange('volunteersNeeded', value)}
 
                     />
+
+                    {projectDraft.isEvent && (
+                      <Text style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                        Set by the parent project and locked for this event.
+                      </Text>
+                    )}
 
                   </View>
 
@@ -15795,7 +15823,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                       <TextInput
 
-                        style={styles.formInput}
+                        style={[styles.formInput, projectDraft.isEvent && { backgroundColor: '#f1f5f9', color: '#64748b' }]}
 
                         placeholder="Volunteer slots"
 
@@ -15803,11 +15831,23 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         keyboardType="number-pad"
 
-                        value={projectDraft.volunteersNeeded}
+                        value={projectDraft.isEvent
+                          ? Number.isInteger(projectDraftParentVolunteerSlots)
+                            ? String(projectDraftParentVolunteerSlots)
+                            : ''
+                          : projectDraft.volunteersNeeded}
+
+                        editable={!projectDraft.isEvent}
 
                         onChangeText={value => handleProjectDraftChange('volunteersNeeded', value)}
 
                       />
+
+                      {projectDraft.isEvent && (
+                        <Text style={styles.formFieldDescText}>
+                          Set by the parent project and locked for this event.
+                        </Text>
+                      )}
 
                     </View>
 
