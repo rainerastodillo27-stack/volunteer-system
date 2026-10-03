@@ -11,7 +11,7 @@ import {
   Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import presImage from '../assets/about-us-2020.jpg';
 import livelihoodImage from '../assets/programs/livelihood.jpg';
@@ -76,15 +76,7 @@ export default function VolunteerHomeScreen() {
         {/* Header App Bar */}
         <View style={styles.appbar}>
           <View style={styles.brand}>
-            <View style={styles.brandMark}>
-              <Svg width={18} height={18} viewBox="0 0 24 24" fill="none">
-                <Path
-                  d="M12 3C9 7 6 9 6 13a6 6 0 0 0 12 0c0-4-3-6-6-10Z"
-                  fill="#E8A33D"
-                />
-              </Svg>
-            </View>
-              <AppLogo width={64} />
+            <AppLogo width={64} />
           </View>
           <TouchableOpacity
             style={styles.iconBtn}
@@ -337,22 +329,6 @@ const styles = StyleSheet.create({
   brand: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  brandMark: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    backgroundColor: '#1F3A2E',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  brandName: {
-    fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',
-    fontWeight: '700',
-    fontSize: 16,
-    color: '#22201B',
-    letterSpacing: 0.2,
   },
   iconBtn: {
     width: 36,

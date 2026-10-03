@@ -8,7 +8,7 @@ type AppLogoProps = {
 
 // Displays the NVC logo image
 export default function AppLogo({ width = 96 }: AppLogoProps) {
-  const height = Math.round(width * 0.56); // NVC logo aspect ratio (approximately 1.77:1)
+  const height = Math.round(width * (140 / 422));
 
   return (
     <Image

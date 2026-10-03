@@ -170,7 +170,8 @@ module.exports = () => {
         icon: './assets/nvc-app-icon.png',
         versionCode: 1,
         adaptiveIcon: {
-          backgroundColor: '#ffffff',
+          foregroundImage: './assets/nvc-app-icon-foreground.png',
+          backgroundColor: '#FFFFFF',
         },
         config: mobileGoogleMapsApiKey
           ? {
