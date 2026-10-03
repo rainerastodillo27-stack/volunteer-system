@@ -204,6 +204,13 @@ function formatProjectDateRange(startValue?: string, endValue?: string): string 
   return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
 }
 
+function formatEventStartTime(startValue?: string): string {
+  const startDate = startValue ? new Date(startValue) : null;
+  return startDate && !Number.isNaN(startDate.getTime())
+    ? format(startDate, 'h:mm a')
+    : 'the scheduled start time';
+}
+
 function getReportBeneficiariesServed(report: PartnerReport): number {
   const beneficiaryKeys = [
     'beneficiariesServed',
@@ -958,7 +965,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       if (startDate && !Number.isNaN(startDate.getTime()) && !hasEventStartedForToday(project.startDate)) {
         Alert.alert(
           'Event not started',
-          `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at 9:00 AM once the event begins.`
+          `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at ${formatEventStartTime(project.startDate)}.`
         );
         return;
       }
@@ -1591,7 +1598,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
             ? `No attendance is scheduled today. Next attendance is ${nextOccurrenceLabel}.`
             : 'No attendance is scheduled today or on a future date. Please contact the event administrator to confirm the schedule.'
           : eventHasNotStarted && startDate
-          ? `Assigned. Attendance confirmation becomes available at 9:00 AM on ${format(startDate, 'MMM d')}.`
+          ? `Assigned. Attendance confirmation becomes available at ${formatEventStartTime(project.startDate)} on ${format(startDate, 'MMM d')}.`
           : 'Admin assigned you to this event. You can confirm attendance now.'
         : 'You are approved to join this event, but you need an assigned task before timing in.'
       : isPendingApproval
@@ -2030,7 +2037,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                         return Alert.alert(
                                           'Event not started',
                                           startDate
-                                            ? `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at 9:00 AM when the event starts.`
+                                            ? `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at ${formatEventStartTime(event.startDate)}.`
                                             : 'This event has not started yet. Please refresh when the event begins.'
                                         );
                                       }
@@ -2314,7 +2321,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                 return Alert.alert(
                                   'Event not started',
                                   startDate
-                                    ? `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at 9:00 AM when the event starts.`
+                                    ? `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at ${formatEventStartTime(item.startDate)}.`
                                     : 'This event has not started yet. Please refresh when the event begins.'
                                 );
                               }
@@ -2360,7 +2367,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           <View style={styles.logMeta}>
                             <Text style={styles.logMetaLabel}>Attendance availability</Text>
                             <Text style={styles.logMetaValue}>
-                              {item.startDate ? `Available from 9:00 AM on ${format(new Date(item.startDate), 'MMM d')}` : 'Awaiting event start'}
+                              {item.startDate ? `Available from ${formatEventStartTime(item.startDate)} on ${format(new Date(item.startDate), 'MMM d')}` : 'Awaiting event start'}
                             </Text>
                           </View>
                         )}
@@ -3093,7 +3100,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           return Alert.alert(
                             'Not started yet',
                             startDate
-                              ? `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at 9:00 AM when the event starts.`
+                              ? `This event starts on ${format(startDate, 'MMM d')}. Attendance confirmation opens at ${formatEventStartTime(selectedEvent.startDate)}.`
                               : 'This event has not started yet. Please refresh when the event begins.'
                           );
                         }

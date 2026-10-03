@@ -25,3 +25,6 @@ google-calendar-credentials.json
 runtime/message-attachments/
 playwright-report/
 test-results/
+
+# APK build artifacts
+artifacts/*.apk
