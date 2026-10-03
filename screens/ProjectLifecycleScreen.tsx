@@ -9160,16 +9160,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   };
 
   const getProjectVolunteerSummary = (project: Project) => {
-    const relatedProjects = project.isEvent
-      ? [project]
-      : projects.filter(candidate =>
-        candidate.id === project.id ||
-        (candidate.isEvent && candidate.parentProjectId === project.id)
-      );
-    const needed = relatedProjects.reduce(
-      (total, candidate) => total + Math.max(0, Number(candidate.volunteersNeeded || 0)),
-      0
-    );
+    // A project's slot limit already governs its child events. Adding event
+    // capacities here double-counts the same project limit in project rows.
+    const configuredLimit = Number(project.volunteersNeeded || 0);
+    const needed = Number.isFinite(configuredLimit) ? Math.max(0, configuredLimit) : 0;
 
     return {
       count: getActiveProjectGroupJoinCount(project, projects, volunteerJoinRecords),
