@@ -1017,10 +1017,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
     setActiveProposalProgramId(null);
 
-    setSelectedProposalSkillOption('');
-
-    setCustomProposalSkill('');
-
     setSelectedRegionCode('');
 
     setSelectedCityCode('');

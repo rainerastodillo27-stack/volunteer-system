@@ -181,7 +181,6 @@ type PartnerProposalDraft = {
   proposedStartDate: string;
   proposedEndDate: string;
   proposedLocation: string;
-  skillsNeeded: string;
   communityNeed: string;
   expectedDeliverables: string;
   proposalPhoto: string;
@@ -273,7 +272,6 @@ function createPartnerProposalDraft(project: Project): PartnerProposalDraft {
     proposedStartDate: project.startDate.slice(0, 10),
     proposedEndDate: project.endDate.slice(0, 10),
     proposedLocation: project.location.address,
-    skillsNeeded: (project.skillsNeeded || []).join(', '),
     communityNeed: '',
     expectedDeliverables: '',
     proposalPhoto: '',
@@ -307,7 +305,6 @@ function buildPartnerProposalDetails(
     proposedEndDate: draft.proposedEndDate.trim(),
     proposedLocation: draft.proposedLocation.trim(),
     proposedVolunteersNeeded: 0,
-    skillsNeeded: draft.skillsNeeded.split(',').map(s => s.trim()).filter(s => s.length > 0),
     communityNeed: draft.communityNeed.trim(),
     expectedDeliverables: draft.expectedDeliverables.trim(),
     attachments,
