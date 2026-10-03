@@ -3420,6 +3420,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const windowScrollOffsetRef = React.useRef(0);
 
   const partnerProjectListRedirectRef = React.useRef('');
+  const partnerProjectRouteIdRef = React.useRef('');
 
   const shouldRestoreListScrollRef = React.useRef(false);
   const lastProgramSuiteNavKeyRef = React.useRef(route?.params?.programSuiteNavKey);
@@ -3433,6 +3434,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
+
+  const [validatedPartnerProjectRouteId, setValidatedPartnerProjectRouteId] = useState('');
 
   const [isProjectsLoading, setIsProjectsLoading] = useState(true);
 
@@ -4166,11 +4169,30 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
 
     const requestedProjectId = String(route?.params?.projectId || '').trim();
+    if (!requestedProjectId) {
+      partnerProjectRouteIdRef.current = '';
+    } else if (partnerProjectRouteIdRef.current !== requestedProjectId) {
+      // Wait for loadProjects to validate this route against a fresh snapshot.
+      // Otherwise an old in-memory project list can send a valid workspace
+      // request back to the partner project list before the refresh completes.
+      partnerProjectRouteIdRef.current = requestedProjectId;
+      setValidatedPartnerProjectRouteId('');
+      partnerProjectListRedirectRef.current = '';
+      return;
+    }
+
     const requestedProjectExists = Boolean(
       requestedProjectId && projects.some(project => project.id === requestedProjectId)
     );
-    const shouldReturnToPartnerProjects =
-      !requestedProjectId || (!isProjectsLoading && !requestedProjectExists);
+    const hasActiveWorkspace = requestedProjectId
+      ? selectedProject?.id === requestedProjectId
+      : Boolean(selectedProject);
+    const routeProjectWasValidated = validatedPartnerProjectRouteId === requestedProjectId;
+    // The selection effect clears projectId after copying the project into
+    // selectedProject. That is an open workspace, not a request for the list.
+    const shouldReturnToPartnerProjects = requestedProjectId
+      ? routeProjectWasValidated && !requestedProjectExists && !hasActiveWorkspace
+      : !hasActiveWorkspace;
 
     if (!shouldReturnToPartnerProjects) {
       partnerProjectListRedirectRef.current = '';
@@ -4185,9 +4207,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   }, [
     isPartnerUser,
-    isProjectsLoading,
     navigation,
     projects,
+    selectedProject?.id,
+    validatedPartnerProjectRouteId,
     route?.name,
     route?.params?.programSuiteView,
     route?.params?.projectId,
@@ -4580,6 +4603,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const loadProjects = async (forceRefresh = false) => {
     const requestGeneration = ++projectsLoadGenerationRef.current;
+    const partnerWorkspaceProjectId =
+      isPartnerUser && route?.name === 'ProjectLifecycle'
+        ? String(route?.params?.projectId || '').trim()
+        : '';
     const showInitialLoadingState = projects.length === 0;
     if (showInitialLoadingState) {
       setIsProjectsLoading(true);
@@ -4693,6 +4720,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     } finally {
       if (showInitialLoadingState) {
         setIsProjectsLoading(false);
+      }
+      if (
+        requestGeneration === projectsLoadGenerationRef.current &&
+        partnerWorkspaceProjectId &&
+        partnerProjectRouteIdRef.current === partnerWorkspaceProjectId
+      ) {
+        setValidatedPartnerProjectRouteId(partnerWorkspaceProjectId);
       }
     }
 
