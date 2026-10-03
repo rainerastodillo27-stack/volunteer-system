@@ -24,6 +24,7 @@ import {
 } from '../models/storage';
 import { PartnerProjectApplication, Project, VolunteerProjectJoinRecord, VolunteerTimeLog } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
+import { formatProjectLocation } from '../utils/locationFormat';
 import {
   getPrimaryProjectImageSource,
   mergeProjectRecordsPreservingMedia,
@@ -492,7 +493,7 @@ export default function PartnerProjectsScreen({ route }: any) {
 
                   <View style={styles.projectBoxFooter}>
                     <Text style={styles.projectBoxFooterText} numberOfLines={1}>
-                      {project.location.address || 'Location to be announced'}
+                      {formatProjectLocation(project)}
                     </Text>
                     <Text style={styles.projectTapHint}>
                       Tap to view details
@@ -578,7 +579,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                   </View>
 
                   <Text style={styles.projectDetailText}>
-                    {selectedProjectMetrics.project.location.address || 'Location to be announced'}
+                    {formatProjectLocation(selectedProjectMetrics.project)}
                   </Text>
                   <Text style={styles.projectDetailText}>
                     {formatDateRange(
@@ -599,7 +600,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                         navigation.navigate('ProjectLifecycle', { projectId });
                       }}
                     >
-                      <Text style={styles.moreHereText}>More here</Text>
+                      <Text style={styles.moreHereText}>Open project workspace</Text>
                     </TouchableOpacity>
                   </View>
                   {selectedProjectMetrics.linkedEvents.length === 0 ? (
@@ -653,7 +654,7 @@ export default function PartnerProjectsScreen({ route }: any) {
                           </View>
 
                           <Text style={styles.eventAddress}>
-                            {event.location.address || 'Location to be announced'}
+                            {formatProjectLocation(event)}
                           </Text>
 
                           <View style={styles.eventPillRow}>
@@ -676,7 +677,28 @@ export default function PartnerProjectsScreen({ route }: any) {
                                 {eventVerifiedAttendanceCount} verified attendance
                               </Text>
                             </View>
+                            <View style={styles.eventPill}>
+                              <MaterialIcons name="assignment" size={14} color="#475569" />
+                              <Text style={styles.eventPillText}>
+                                {event.internalTasks?.length || 0} task{event.internalTasks?.length === 1 ? '' : 's'}
+                              </Text>
+                            </View>
                           </View>
+                          <TouchableOpacity
+                            style={styles.eventDetailsButton}
+                            accessibilityRole="button"
+                            accessibilityLabel={`View full details for ${event.title}`}
+                            onPress={() => {
+                              setSelectedProjectId(null);
+                              navigation.navigate('ProjectLifecycle', {
+                                projectId: event.id,
+                                fullDetailsProjectId: event.id,
+                              });
+                            }}
+                          >
+                            <Text style={styles.eventDetailsButtonText}>View full event details</Text>
+                            <MaterialIcons name="arrow-forward" size={16} color="#ffffff" />
+                          </TouchableOpacity>
                         </View>
                       );
                     })
@@ -1147,5 +1169,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#334155',
+  },
+  eventDetailsButton: {
+    minHeight: 42,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#166534',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  eventDetailsButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });

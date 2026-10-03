@@ -5397,6 +5397,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   }, [navigation, projects, route?.params?.projectId]);
 
+  useEffect(() => {
+    const requestedFullDetailsProjectId = route?.params?.fullDetailsProjectId;
+    if (!requestedFullDetailsProjectId || selectedProject?.id !== requestedFullDetailsProjectId) {
+      return;
+    }
+
+    setShowProjectFullDetailsModal(true);
+    navigation?.setParams?.({ fullDetailsProjectId: undefined });
+  }, [navigation, route?.params?.fullDetailsProjectId, selectedProject?.id]);
+
 
 
   // Opens the project editor pre-wired to a specific program track.
@@ -18632,6 +18642,31 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
 
+    const fullDetailsTasks = [
+      ...internalTasks.map(task => ({ task, taskProject: activeSelectedProject })),
+      ...linkedEvents.flatMap(event =>
+        (Array.isArray(event.internalTasks) ? event.internalTasks : []).map(task => ({
+          task,
+          taskProject: event,
+        }))
+      ),
+    ];
+    const linkedEventsWithTasks = linkedEvents.filter(
+      event => Array.isArray(event.internalTasks) && event.internalTasks.length > 0
+    );
+    const linkedEventTaskCount = linkedEventsWithTasks.reduce(
+      (count, event) => count + (event.internalTasks?.length || 0),
+      0
+    );
+    const fullDetailsTaskSummary = linkedEventsWithTasks.length > 0
+      ? `${fullDetailsTasks.length} total, ${linkedEventTaskCount} in ${linkedEventsWithTasks.length} event${linkedEventsWithTasks.length === 1 ? '' : 's'}`
+      : fullDetailsTasks.length
+        ? `${fullDetailsTasks.length} task${fullDetailsTasks.length === 1 ? '' : 's'}`
+        : 'No tasks created';
+    const fullDetailsTaskLabel = !activeSelectedProject.isEvent && linkedEventsWithTasks.length > 0
+      ? internalTasks.length > 0 ? 'Project and event tasks' : 'Tasks across events'
+      : 'Tasks';
+
     const heroHighlights = [
 
       {
@@ -19392,6 +19427,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const taskRowsContainerProps = compactLayout
         ? {}
         : { style: { maxHeight: 470 }, showsVerticalScrollIndicator: true };
+      const AttendanceRowsContainer: React.ComponentType<any> = compactLayout ? View : ScrollView;
+      const attendanceRowsContainerProps = compactLayout
+        ? { style: { paddingVertical: 4 } }
+        : { style: { maxHeight: 510 }, showsVerticalScrollIndicator: true };
 
       const selectedAttendanceDate = /^\d{4}-\d{2}-\d{2}$/.test(resolvedAttendanceDateKey)
         ? new Date(`${resolvedAttendanceDateKey}T00:00:00`)
@@ -20722,12 +20761,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                         onValueChange={(val) => {
                                           setUnassignedTaskSelections(prev => ({ ...prev, [uv.id]: String(val || '') }));
                                         }}
-                                        style={{ height: 38 }}
+                                        style={{
+                                          height: 48,
+                                          color: '#0f172a',
+                                          fontSize: 14,
+                                        }}
                                         enabled={!eventIsClosed && availableTasks.length > 0 && quickAssignLoadingId === null}
                                       >
-                                        <Picker.Item label="Select task" value="" />
+                                        <Picker.Item label="Select task" value="" color="#64748b" />
                                         {availableTasks.map(t => (
-                                          <Picker.Item key={t.id} label={t.title} value={t.id} />
+                                          <Picker.Item key={t.id} label={t.title} value={t.id} color="#0f172a" />
                                         ))}
                                       </Picker>
                                     </View>
@@ -21224,7 +21267,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 borderWidth: compactLayout ? 0 : 1,
                 borderColor: '#e2e8f0',
                 overflow: compactLayout ? 'visible' : 'hidden',
-                maxHeight: compactLayout ? 680 : 560,
+                maxHeight: compactLayout ? undefined : 560,
               }}>
 
                 <View style={{
@@ -21282,11 +21325,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-                <ScrollView
-                  style={{ maxHeight: compactLayout ? 660 : 510 }}
-                  contentContainerStyle={compactLayout ? { paddingVertical: 4 } : undefined}
-                  showsVerticalScrollIndicator={true}
-                >
+                <AttendanceRowsContainer {...attendanceRowsContainerProps}>
 
                   {assignableVolunteers.length === 0 ? (
 
@@ -21628,7 +21667,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   )}
 
-                </ScrollView>
+                </AttendanceRowsContainer>
 
               </View>
 
@@ -22873,8 +22912,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{activeSelectedProject.expectedDeliverables || 'Not provided'}</Text>
                   </View>
                   <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Tasks</Text>
-                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{internalTasks.length ? `${internalTasks.length} task${internalTasks.length === 1 ? '' : 's'}` : 'No tasks created'}</Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>
+                      {fullDetailsTaskLabel}
+                    </Text>
+                    <Text style={premiumDetailsStyles.fullDetailsFieldValue}>{fullDetailsTaskSummary}</Text>
                   </View>
                   <View style={[premiumDetailsStyles.fullDetailsField, !isDesktop && premiumDetailsStyles.fullDetailsFieldMobile]}>
                     <Text style={premiumDetailsStyles.fullDetailsFieldLabel}>Document attachment</Text>
@@ -22883,6 +22924,69 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                     </Text>
                   </View>
                 </View>
+
+                {fullDetailsTasks.length > 0 ? (
+                  <>
+                    <Text style={premiumDetailsStyles.fullDetailsSectionTitle}>Task details</Text>
+                    <View style={premiumDetailsStyles.fullDetailsTaskList}>
+                      {fullDetailsTasks.map(({ task, taskProject }, index) => {
+                      const assignedVolunteerIds = Array.from(new Set([
+                        task.assignedVolunteerId,
+                        ...(Array.isArray(task.assignedVolunteerIds) ? task.assignedVolunteerIds : []),
+                      ].map(id => String(id || '').trim()).filter(Boolean)));
+                      const assignedNames = [
+                        ...(Array.isArray(task.assignedVolunteerNames) ? task.assignedVolunteerNames : []),
+                        task.assignedVolunteerName,
+                        ...assignedVolunteerIds.map(id =>
+                          volunteers.find(volunteer => volunteer.id === id || volunteer.userId === id)?.name
+                        ),
+                      ]
+                        .map(name => String(name || '').trim())
+                        .filter((name, nameIndex, names) => name && names.indexOf(name) === nameIndex);
+                      const taskSkills = Array.isArray(task.skillsNeeded)
+                        ? task.skillsNeeded.filter(Boolean)
+                        : [];
+
+                        return (
+                          <View key={`${taskProject.id}-${task.id || `${task.title}-${index}`}`} style={premiumDetailsStyles.fullDetailsTaskCard}>
+                            <View style={premiumDetailsStyles.fullDetailsTaskHeader}>
+                              <View style={premiumDetailsStyles.fullDetailsTaskTitleWrap}>
+                                <Text style={premiumDetailsStyles.fullDetailsTaskTitle}>{task.title || 'Untitled task'}</Text>
+                                {!activeSelectedProject.isEvent && taskProject.isEvent ? (
+                                  <Text style={premiumDetailsStyles.fullDetailsTaskMeta}>Event: {taskProject.title}</Text>
+                                ) : null}
+                                <Text style={premiumDetailsStyles.fullDetailsTaskMeta}>
+                                  {[task.category, task.priority ? `${task.priority} priority` : '']
+                                    .filter(Boolean)
+                                    .join(' · ') || 'General'}
+                                </Text>
+                              </View>
+                              <View style={premiumDetailsStyles.fullDetailsTaskStatus}>
+                                <Text style={premiumDetailsStyles.fullDetailsTaskStatusText}>{task.status || 'Unassigned'}</Text>
+                              </View>
+                            </View>
+
+                            {task.description?.trim() ? (
+                              <Text style={premiumDetailsStyles.fullDetailsTaskDescription}>{task.description.trim()}</Text>
+                            ) : null}
+
+                            <Text style={premiumDetailsStyles.fullDetailsTaskMeta}>
+                              {assignedNames.length
+                                ? `Assigned to ${assignedNames.join(', ')}`
+                                : assignedVolunteerIds.length
+                                  ? `${assignedVolunteerIds.length} volunteer${assignedVolunteerIds.length === 1 ? '' : 's'} assigned`
+                                  : 'No volunteers assigned'}
+                            </Text>
+
+                            {taskSkills.length > 0 ? (
+                              <Text style={premiumDetailsStyles.fullDetailsTaskMeta}>Skills: {taskSkills.join(', ')}</Text>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : null}
               </ScrollView>
 
               <View style={premiumDetailsStyles.fullDetailsFooter}>
@@ -38216,6 +38320,110 @@ const premiumDetailsStyles = StyleSheet.create({
     fontWeight: '700',
 
     color: '#0f172a',
+
+  },
+
+  fullDetailsTaskList: {
+
+    gap: 10,
+
+    marginTop: -2,
+
+    marginBottom: 8,
+
+  },
+
+  fullDetailsTaskCard: {
+
+    padding: 14,
+
+    borderRadius: 12,
+
+    borderWidth: 1,
+
+    borderColor: '#dbe5de',
+
+    backgroundColor: '#ffffff',
+
+    gap: 8,
+
+  },
+
+  fullDetailsTaskHeader: {
+
+    flexDirection: 'row',
+
+    alignItems: 'flex-start',
+
+    justifyContent: 'space-between',
+
+    gap: 10,
+
+  },
+
+  fullDetailsTaskTitleWrap: {
+
+    flex: 1,
+
+    gap: 4,
+
+  },
+
+  fullDetailsTaskTitle: {
+
+    fontSize: 14,
+
+    lineHeight: 19,
+
+    fontWeight: '800',
+
+    color: '#0f172a',
+
+  },
+
+  fullDetailsTaskMeta: {
+
+    fontSize: 12,
+
+    lineHeight: 18,
+
+    fontWeight: '600',
+
+    color: '#64748b',
+
+  },
+
+  fullDetailsTaskDescription: {
+
+    fontSize: 13,
+
+    lineHeight: 19,
+
+    color: '#334155',
+
+  },
+
+  fullDetailsTaskStatus: {
+
+    paddingHorizontal: 9,
+
+    paddingVertical: 5,
+
+    borderRadius: 999,
+
+    backgroundColor: '#eaf5ed',
+
+  },
+
+  fullDetailsTaskStatusText: {
+
+    fontSize: 10,
+
+    lineHeight: 14,
+
+    fontWeight: '800',
+
+    color: '#166534',
 
   },
 
