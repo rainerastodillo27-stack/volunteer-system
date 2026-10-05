@@ -2262,8 +2262,7 @@ export function PartnerReportsDashboard({
                     </View>
                   </View>
                 </View>
-                );
-              })
+              ))
             ) : photoFolders.length === 0 ? (
               <Text style={{ fontSize: 12, color: '#64748b' }}>
                 No connected event folders were found for this partner project.
