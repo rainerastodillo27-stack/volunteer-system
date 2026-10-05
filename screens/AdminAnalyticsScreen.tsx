@@ -2178,10 +2178,6 @@ export default function AdminAnalyticsScreen() {
                     <Text style={styles.executiveReportMetricValue}>{filteredPartners.length}</Text>
                     <Text style={styles.executiveReportMetricLabel}>Partners</Text>
                   </View>
-                  <View style={styles.executiveReportMetricCard}>
-                    <Text style={styles.executiveReportMetricValue}>{completedHours}</Text>
-                    <Text style={styles.executiveReportMetricLabel}>Hours</Text>
-                  </View>
                 </View>
 
                 <Text style={styles.executiveReportSectionHeading}>Included report sections</Text>
