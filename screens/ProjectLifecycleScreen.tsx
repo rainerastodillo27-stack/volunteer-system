@@ -2116,26 +2116,45 @@ function getProjectLocationSelection(project: Project | null | undefined): {
   }
 
   const addressTokens = address.split(',').map(token => token.trim()).filter(Boolean);
-  const normalizeBarangayToken = (value: string) =>
-    normalizeAddressToken(value.replace(/^(?:brgy\.?|barangay)\s*/i, ''));
+  const normalizeCityToken = (value: string) =>
+    normalizeAddressToken(
+      value
+        .replace(/^(?:city|municipality|province)\s+of\s+/i, '')
+        .replace(/\s+(?:city|municipality|province)$/i, '')
+    );
   const regionName = normalizeAddressToken(
     project.location?.region || project.locationRegion || ''
   );
-  const explicitCityName = normalizeAddressToken(
+  const explicitCityName = normalizeCityToken(
     project.location?.city || project.locationCity || ''
   );
+  const findRegion = (value: string) => {
+    const normalizedValue = normalizeAddressToken(value);
+    return PHRegions.find(region => {
+      const parenthesizedAlias = region.name.match(/\(([^)]+)\)/)?.[1] || '';
+      const mainLabel = region.name.replace(/\s*\([^)]*\)\s*$/, '');
+      return [region.name, mainLabel, parenthesizedAlias, region.code]
+        .some(alias => normalizeAddressToken(alias) === normalizedValue);
+    });
+  };
+  // Prefer a recognized region in the address over potentially stale legacy
+  // region metadata so ambiguous city names resolve to the address's city.
   const region =
-    PHRegions.find(item => normalizeAddressToken(item.name) === regionName) ||
-    PHRegions.find(item =>
-      addressTokens.some(token => normalizeAddressToken(token) === normalizeAddressToken(item.name))
-    );
+    addressTokens.map(findRegion).find(Boolean) ||
+    findRegion(regionName);
   const allCities = getAllCities();
-  const cityNamesToTry = [explicitCityName, ...addressTokens.map(normalizeAddressToken)].filter(Boolean);
-  const provinceNamesToTry = [regionName, ...addressTokens.map(normalizeAddressToken)].filter(Boolean);
+  const cityNamesToTry = [
+    explicitCityName,
+    ...addressTokens.map(normalizeCityToken),
+  ].filter(Boolean);
+  const provinceNamesToTry = [
+    regionName,
+    ...addressTokens.map(normalizeAddressToken),
+  ].filter(Boolean);
   const matchingCities = cityNamesToTry.flatMap(candidate =>
     allCities.filter(item =>
-      normalizeAddressToken(item.displayName) === candidate ||
-      normalizeAddressToken(item.name) === candidate
+      normalizeCityToken(item.displayName) === candidate ||
+      normalizeCityToken(item.name) === candidate
     )
   );
   const uniqueMatchingCities = matchingCities.filter((city, index, cities) =>
@@ -2165,8 +2184,8 @@ function getProjectLocationSelection(project: Project | null | undefined): {
     ...addressTokens.map(token => token.replace(/^(?:brgy\.?|barangay)\s*/i, '')),
   ].map(normalizeAddressToken).filter(Boolean);
   const barangay = getBarangaysByCity(city.code).find(item =>
-    barangayNamesToTry.includes(normalizeBarangayToken(item.name)) ||
-    barangayNamesToTry.includes(normalizeBarangayToken(item.displayName))
+    barangayNamesToTry.includes(normalizeAddressToken(item.name)) ||
+    barangayNamesToTry.includes(normalizeAddressToken(item.displayName))
   );
 
   return {
