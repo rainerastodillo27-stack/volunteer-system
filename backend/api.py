@@ -4428,6 +4428,68 @@ def _normalize_named_duplicate_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
 
 
+def _reject_duplicate_project_names(
+    connection: Any,
+    items: list[Any],
+    *,
+    replacing_collection: bool = False,
+    replacing_storage_key: str = "projects",
+) -> None:
+    """Reject project titles already used in either project storage collection."""
+    incoming_ids = {
+        str(item.get("id") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    existing_by_title: dict[str, list[dict[str, Any]]] = {}
+    for storage_key in ("projects", "programs"):
+        for existing in get_postgres_hot_storage_collection(connection, storage_key, include_images=False):
+            if not isinstance(existing, dict) or bool(existing.get("isEvent")):
+                continue
+            existing_id = str(existing.get("id") or "").strip()
+            if (
+                replacing_collection
+                and storage_key == replacing_storage_key
+                and existing_id not in incoming_ids
+            ):
+                continue
+            title = _normalize_named_duplicate_text(existing.get("title"))
+            if title:
+                existing_by_title.setdefault(title, []).append(existing)
+
+    incoming_by_title: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or bool(item.get("isEvent")):
+            continue
+        title = _normalize_named_duplicate_text(item.get("title"))
+        if not title:
+            continue
+        item_id = str(item.get("id") or "").strip()
+        existing_matches = existing_by_title.get(title, [])
+        same_id_unchanged = any(
+            str(existing.get("id") or "").strip() == item_id
+            for existing in existing_matches
+        )
+        if not same_id_unchanged and existing_matches:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'A project named "{str(item.get("title") or "").strip()}" already exists. '
+                    "Project names must be unique regardless of dates. Edit the existing project or choose a different name."
+                ),
+            )
+        previous = incoming_by_title.get(title)
+        if previous and str(previous.get("id") or "").strip() != item_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'A project named "{str(item.get("title") or "").strip()}" appears more than once. '
+                    "Project names must be unique regardless of dates."
+                ),
+            )
+        incoming_by_title[title] = item
+
+
 def _reject_duplicate_event_names(
     connection: Any,
     items: list[Any],
@@ -4506,15 +4568,10 @@ def _named_duplicate_signature(
         return "program", title
 
     if key == "projects":
-        # Allow a project title to recur within one program when its schedule
-        # differs. An empty parent is one shared top-level scope for projects
-        # without a program.
+        # Event compatibility rows are validated through the event-name rule.
         if item.get("isEvent"):
             return None
-        parent_id = _normalize_named_duplicate_text(item.get("parentProjectId"))
-        start_date = _event_duplicate_date(item.get("startDate"))
-        end_date = _event_duplicate_date(item.get("endDate") or item.get("startDate"))
-        return f"project:{parent_id}", title, start_date, end_date
+        return "project", title
 
     return None
 
@@ -4534,17 +4591,11 @@ def _raise_duplicate_named_item_error(
             ),
         )
 
-    start_date = _event_duplicate_date(item.get("startDate"))
-    end_date = _event_duplicate_date(item.get("endDate") or item.get("startDate"))
-    schedule = start_date or end_date or "the same unscheduled dates"
-    if start_date and end_date and end_date != start_date:
-        schedule = f"{start_date} to {end_date}"
-
     raise HTTPException(
         status_code=409,
         detail=(
-            f'A project named "{title}" already exists in this program for {schedule}. '
-            "Choose different dates or edit the existing project."
+            f'A project named "{title}" already exists. '
+            "Project names must be unique regardless of dates. Edit the existing project or choose a different name."
         ),
     )
 
@@ -4563,6 +4614,13 @@ def _reject_duplicate_named_writes(
         _reject_cross_type_duplicate_names(connection, key, items)
 
     incoming_records = [item for item in items if isinstance(item, dict)]
+    _reject_duplicate_project_names(
+        connection,
+        incoming_records,
+        replacing_collection=replacing_collection,
+        replacing_storage_key=key,
+    )
+
     compatibility_events = [item for item in incoming_records if bool(item.get("isEvent"))]
     if compatibility_events:
         _reject_duplicate_event_names(
