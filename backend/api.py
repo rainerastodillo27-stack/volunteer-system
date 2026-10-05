@@ -4320,44 +4320,54 @@ def _reject_cross_type_duplicate_names(
     items: list[Any],
 ) -> None:
     """Prevent a project and an event from sharing a title."""
-    if key not in {"projects", "events"}:
+    if key not in {"projects", "programs", "events"}:
         return
 
-    opposite_key = "events" if key == "projects" else "projects"
-    opposite_by_title: dict[str, dict[str, Any]] = {}
-    for existing in get_postgres_hot_storage_collection(connection, opposite_key):
-        if not isinstance(existing, dict):
-            continue
-        # The projects collection can also contain compatibility event rows.
-        if opposite_key == "projects" and existing.get("isEvent"):
-            continue
-        title = _normalize_named_duplicate_text(existing.get("title"))
-        if title:
-            opposite_by_title.setdefault(title, existing)
+    # Project-like records can live in either the projects or programs
+    # collection. Events can also appear as compatibility rows in those
+    # collections, so classify each record by storage key and isEvent.
+    opposite_by_title: dict[bool, dict[str, dict[str, Any]]] = {
+        True: {},
+        False: {},
+    }
+    for storage_key in ("projects", "programs", "events"):
+        for existing in get_postgres_hot_storage_collection(connection, storage_key, include_images=False):
+            if not isinstance(existing, dict):
+                continue
+            existing_is_event = storage_key == "events" or bool(existing.get("isEvent"))
+            title = _normalize_named_duplicate_text(existing.get("title"))
+            if title:
+                # Index by the type of incoming record that this would block.
+                opposite_by_title[not existing_is_event].setdefault(title, existing)
 
     existing_by_id = {
         str(existing.get("id") or "").strip(): existing
-        for existing in get_postgres_hot_storage_collection(connection, key)
+        for existing in get_postgres_hot_storage_collection(connection, key, include_images=False)
         if isinstance(existing, dict) and str(existing.get("id") or "").strip()
     }
     for item in items:
         if not isinstance(item, dict):
             continue
-        # Ignore compatibility event rows in the projects collection.
-        if key == "projects" and item.get("isEvent"):
-            continue
         title = _normalize_named_duplicate_text(item.get("title"))
         if not title:
             continue
 
+        item_is_event = key == "events" or bool(item.get("isEvent"))
         item_id = str(item.get("id") or "").strip()
         previous = existing_by_id.get(item_id) if item_id else None
-        if previous and _normalize_named_duplicate_text(previous.get("title")) == title:
+        previous_is_event = bool(previous) and (
+            key == "events" or bool(previous.get("isEvent"))
+        )
+        if (
+            previous
+            and previous_is_event == item_is_event
+            and _normalize_named_duplicate_text(previous.get("title")) == title
+        ):
             # An unchanged legacy record should remain editable even if it
             # predates this cross-type name rule.
             continue
 
-        matching_opposite = opposite_by_title.get(title)
+        matching_opposite = opposite_by_title[item_is_event].get(title)
         if matching_opposite:
             raise HTTPException(
                 status_code=409,
@@ -4474,7 +4484,7 @@ def _reject_duplicate_named_writes(
     """Reject duplicate program/project names while allowing same-ID updates."""
     if key not in {"programs", "projects"}:
         return
-    if key == "projects":
+    if key in {"projects", "programs"}:
         _reject_cross_type_duplicate_names(connection, key, items)
 
     incoming_records = [item for item in items if isinstance(item, dict)]
