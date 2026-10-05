@@ -24358,8 +24358,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                 <Text style={styles.projectsAccordionTitle}>{section.title}</Text>
 
-                                <Text style={styles.projectsAccordionSubtitle}>{section.module}</Text>
-
                               </View>
 
                             </View>
@@ -28127,18 +28125,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
 
     color: '#0f172a'
-
-  },
-
-  projectsAccordionSubtitle: {
-
-    fontSize: 11,
-
-    fontWeight: '700',
-
-    color: '#64748b',
-
-    marginTop: 1
 
   },
 
