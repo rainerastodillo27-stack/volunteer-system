@@ -182,6 +182,7 @@ export default function VolunteerDashboardScreen() {
   const [volunteerProfile, setVolunteerProfile] = useState<Volunteer | null>(null);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerMatches, setVolunteerMatches] = useState<VolunteerProjectMatch[]>([]);
+  const [joiningProjectIds, setJoiningProjectIds] = useState<Set<string>>(() => new Set());
   const [timeLogs, setTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [planningItems, setPlanningItems] = useState<AdminPlanningItem[]>([]);
@@ -657,6 +658,14 @@ export default function VolunteerDashboardScreen() {
       Alert.alert('Notice', 'Please sign in before joining.');
       return;
     }
+    const lifecycleStatus = getProjectDisplayStatus(project);
+    if (lifecycleStatus === 'Completed' || lifecycleStatus === 'Cancelled') {
+      Alert.alert('Event Closed', lifecycleStatus === 'Completed'
+        ? 'This event has already been completed.'
+        : 'This event has been cancelled.');
+      return;
+    }
+
     const capacity = Number(project.volunteersNeeded || 0);
     const joinedCount = getActiveProjectJoinCount(project, volunteerJoinRecords, volunteerMatches);
     if (Platform.OS === 'android' && capacity > 0 && joinedCount >= capacity) {
@@ -666,14 +675,23 @@ export default function VolunteerDashboardScreen() {
     }
 
     try {
+      setJoiningProjectIds(previous => new Set(previous).add(project.id));
       setLoading(true);
-      await requestVolunteerProjectJoin(project.id, user.id);
+      const savedMatch = await requestVolunteerProjectJoin(project.id, user.id);
+      setVolunteerMatches(previous => [
+        savedMatch,
+        ...previous.filter(match => match.id !== savedMatch.id),
+      ]);
       setLoading(false);
       Alert.alert('Success', `Successfully requested to join "${project.title}"!`);
-      void loadDashboardData(true);
     } catch (err) {
       Alert.alert('Error', getRequestErrorMessage(err, 'Failed to join project'));
     } finally {
+      setJoiningProjectIds(previous => {
+        const next = new Set(previous);
+        next.delete(project.id);
+        return next;
+      });
       setLoading(false);
     }
   };
@@ -994,12 +1012,35 @@ export default function VolunteerDashboardScreen() {
             displayProjects.map(project => {
               const skillMatch = checkEventSkillMatch(project, volunteerProfile);
               const isJoined = isProjectJoined(project);
+              const lifecycleStatus = getProjectDisplayStatus(project);
+              const match = volunteerMatches.find(item => item.projectId === project.id);
+              const isCompleted = lifecycleStatus === 'Completed' || match?.status === 'Completed';
+              const isCancelled = lifecycleStatus === 'Cancelled';
+              const isPending = joiningProjectIds.has(project.id) || match?.status === 'Requested';
+              const isMatched = match?.status === 'Matched';
+              const isRejected = match?.status === 'Rejected';
+              const isUnavailable = isCompleted || isCancelled || isPending || isMatched || isJoined;
               const capacity = Number(project.volunteersNeeded || 0);
               const isFull =
                 Platform.OS === 'android' &&
-                !isJoined &&
+                !isUnavailable &&
                 capacity > 0 &&
                 getActiveProjectJoinCount(project, volunteerJoinRecords, volunteerMatches) >= capacity;
+              const buttonLabel = isCompleted
+                ? 'Completed'
+                : isCancelled
+                  ? 'Cancelled'
+                  : isPending
+                    ? 'Pending'
+                    : isMatched || isJoined
+                      ? 'Joined'
+                      : isFull
+                        ? 'Event Full'
+                        : isRejected
+                          ? 'Apply Again'
+                          : 'Join';
+              const isLifecycleClosed = isCompleted || isCancelled;
+              const isDisabled = isUnavailable || isFull;
               return (
                 <View key={project.id} style={styles.projectRow}>
                   <View style={styles.projectIcon}>
@@ -1020,13 +1061,24 @@ export default function VolunteerDashboardScreen() {
                     </Text>
                   </View>
                   <TouchableOpacity
-                    style={[styles.projectJoin, isJoined && styles.projectJoined, isFull && styles.projectFull]}
-                    onPress={() => !isJoined && !isFull && handleJoinProject(project)}
-                    disabled={isJoined || isFull}
+                    style={[
+                      styles.projectJoin,
+                      (isJoined || isMatched) && styles.projectJoined,
+                      isPending && styles.projectPending,
+                      isLifecycleClosed && styles.projectClosed,
+                      isFull && styles.projectFull,
+                    ]}
+                    onPress={() => !isDisabled && handleJoinProject(project)}
+                    disabled={isDisabled}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.projectJoinText, isJoined && styles.projectJoinedText, isFull && styles.projectFullText]}>
-                      {isJoined ? 'Joined' : isFull ? 'Event Full' : 'Join'}
+                    <Text style={[
+                      styles.projectJoinText,
+                      (isJoined || isMatched) && styles.projectJoinedText,
+                      isLifecycleClosed && styles.projectClosedText,
+                      isFull && styles.projectFullText,
+                    ]}>
+                      {buttonLabel}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -1526,6 +1578,15 @@ const styles = StyleSheet.create({
   },
   projectJoinedText: {
     color: '#ffffff',
+  },
+  projectPending: {
+    backgroundColor: '#FEF3C7',
+  },
+  projectClosed: {
+    backgroundColor: '#E7E5E4',
+  },
+  projectClosedText: {
+    color: '#57534E',
   },
   projectFull: {
     backgroundColor: '#FEE2E2',
