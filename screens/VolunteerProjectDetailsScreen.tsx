@@ -171,6 +171,14 @@ export default function VolunteerProjectDetailsScreen({
 
   const handleJoinEvent = async () => {
     if (!user?.id || !project) return;
+    const lifecycleStatus = getProjectDisplayStatus(project);
+    if (lifecycleStatus === 'Completed' || lifecycleStatus === 'Cancelled') {
+      Alert.alert(
+        lifecycleStatus === 'Completed' ? 'Event completed' : 'Event cancelled',
+        'This event is no longer accepting volunteers.'
+      );
+      return;
+    }
     const currentJoinedCount = getActiveProjectJoinCount(project, joinRecords, volunteerMatches, allVolunteers);
     const capacity = Number(project.volunteersNeeded || 0);
     if (capacity > 0 && currentJoinedCount >= capacity) {
@@ -229,6 +237,8 @@ export default function VolunteerProjectDetailsScreen({
     hasConfirmedJoin;
   const isPending = !isJoined && currentMatch?.status === 'Requested';
   const wasRejected = currentMatch?.status === 'Rejected';
+  const eventLifecycleStatus = getProjectDisplayStatus(project);
+  const isEventClosed = eventLifecycleStatus === 'Completed' || eventLifecycleStatus === 'Cancelled';
 
   const partnerInfo = partners.find((p) => p.id === project.partnerId) || null;
 
@@ -270,6 +280,14 @@ export default function VolunteerProjectDetailsScreen({
   const projectImageSource = getPrimaryProjectImageSource(project, parentProject || undefined);
 
   const renderJoinButton = (styleProps = {}) => {
+    if (isEventClosed) {
+      return (
+        <View style={[styles.joinBtn, styles.joinBtnClosed, styleProps]}>
+          <MaterialIcons name="event-busy" size={18} color="#475569" style={{ marginRight: 6 }} />
+          <Text style={[styles.joinBtnText, { color: '#475569' }]}>{eventLifecycleStatus}</Text>
+        </View>
+      );
+    }
     if (isPending) {
       return (
         <View style={[styles.joinBtn, styles.joinBtnPending, styleProps]}>
@@ -332,9 +350,9 @@ export default function VolunteerProjectDetailsScreen({
           <View style={[styles.heroDetails, !isDesktop && styles.heroDetailsMobile]}>
             <Text style={styles.heroTitle}>{project.title}</Text>
 
-            <View style={[styles.statusBadge, { backgroundColor: isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : isFull ? '#fde8e8' : '#e6f4ea' }]}>
-              <Text style={[styles.statusBadgeText, { color: isJoined ? '#137333' : isPending ? '#b06000' : isFull ? '#c53030' : '#137333' }]}>
-                {isJoined ? 'Approved' : isPending ? 'Pending' : isFull ? 'Event Full' : 'Open'}
+            <View style={[styles.statusBadge, { backgroundColor: isEventClosed ? '#e2e8f0' : isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : isFull ? '#fde8e8' : '#e6f4ea' }]}>
+              <Text style={[styles.statusBadgeText, { color: isEventClosed ? '#475569' : isJoined ? '#137333' : isPending ? '#b06000' : isFull ? '#c53030' : '#137333' }]}>
+                {isEventClosed ? eventLifecycleStatus : isJoined ? 'Approved' : isPending ? 'Pending' : isFull ? 'Event Full' : 'Open'}
               </Text>
             </View>
 
@@ -794,6 +812,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#e6f4ea',
     borderWidth: 1.5,
     borderColor: '#a7f3d0',
+  },
+  joinBtnClosed: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 0,
   },
   joinBtnText: {
     color: '#ffffff',

@@ -955,21 +955,63 @@ def _event_attendance_window_has_started(project: dict[str, Any], now: datetime 
     return current_time >= attendance_open_time
 
 
-def _event_attendance_window_has_ended(project: dict[str, Any], now: datetime | None = None) -> bool:
-    status = str(project.get("status") or "").strip()
-    if status in {"Completed", "Cancelled"}:
-        return True
+def _normalize_project_status(value: Any) -> str:
+    normalized = " ".join(str(value or "").strip().lower().split())
+    return {
+        "planning": "Planning",
+        "planned": "Planning",
+        "in progress": "In Progress",
+        "ongoing": "In Progress",
+        "active": "In Progress",
+        "approved": "In Progress",
+        "on hold": "On Hold",
+        "completed": "Completed",
+        "cancelled": "Cancelled",
+    }.get(normalized, "Planning")
 
-    if not bool(project.get("isEvent")):
-        return False
 
+def _get_project_display_status(project: dict[str, Any], now: datetime | None = None) -> str:
+    """Mirror the admin and volunteer event lifecycle status rules."""
+    status = _normalize_project_status(project.get("status"))
+    raw_manual_status = project.get("manualStatus")
+    manual_status = _normalize_project_status(raw_manual_status) if raw_manual_status else None
+    status_mode = str(project.get("statusMode") or "").strip().lower()
+
+    if status_mode == "manual" and manual_status:
+        return manual_status
+    if not status_mode and status in {"Cancelled", "On Hold"}:
+        return status
+    if str(project.get("status") or "").strip().lower() == "approved":
+        return "In Progress"
+
+    start_date = _parse_iso_datetime(project.get("startDate"))
     end_date = _parse_iso_datetime(project.get("endDate") or project.get("startDate"))
-    if end_date is None:
-        return False
+    if start_date is None or end_date is None:
+        return manual_status or status
 
     current_time = (now or datetime.now(timezone.utc)).astimezone(APP_TIMEZONE)
-    end_of_day = end_date.astimezone(APP_TIMEZONE).replace(hour=23, minute=59, second=59, microsecond=999999)
-    return current_time > end_of_day
+    local_start = start_date.astimezone(APP_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
+    local_end = end_date.astimezone(APP_TIMEZONE).replace(hour=23, minute=59, second=59, microsecond=999999)
+    if current_time < local_start:
+        return "Planning"
+    if current_time > local_end:
+        return "Completed"
+    return "In Progress"
+
+
+def _event_attendance_window_has_ended(project: dict[str, Any], now: datetime | None = None) -> bool:
+    if not bool(project.get("isEvent")):
+        return False
+    return _get_project_display_status(project, now) in {"Completed", "Cancelled"}
+
+
+def _event_join_closed_message(project: dict[str, Any]) -> str | None:
+    status = _get_project_display_status(project)
+    if status == "Completed":
+        return "This event is completed and no longer accepting volunteers."
+    if status == "Cancelled":
+        return "This event is cancelled and no longer accepting volunteers."
+    return None
 
 
 def _event_occurrence_is_scheduled_today(project: dict[str, Any], now: datetime | None = None) -> bool:
@@ -11242,6 +11284,9 @@ async def request_volunteer_match(
             raise HTTPException(status_code=404, detail="Project not found.")
         if not bool(project.get("isEvent")):
             raise HTTPException(status_code=400, detail="Volunteers can only request event membership.")
+        closed_message = _event_join_closed_message(project)
+        if closed_message:
+            raise HTTPException(status_code=409, detail=closed_message)
 
         existing_matches = _postgres_get_hot_items_by_field(
             connection,
@@ -11338,6 +11383,10 @@ async def review_volunteer_match(
             raise HTTPException(status_code=404, detail="Project not found.")
         if not bool(project.get("isEvent")):
             raise HTTPException(status_code=400, detail="Volunteers can only join events.")
+        if next_status == "Matched":
+            closed_message = _event_join_closed_message(project)
+            if closed_message:
+                raise HTTPException(status_code=409, detail=closed_message)
 
         if next_status == "Matched":
             try:

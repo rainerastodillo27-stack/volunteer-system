@@ -679,7 +679,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
               color="#fff"
             />
             <Text style={styles.floatingBadgeText}>
-              {isCancelled ? 'Event Cancelled' : isCompleted ? 'Event Ended' : isFull && !isJoined ? 'Event Full' : statusLabel}
+              {isCancelled ? 'Cancelled' : isCompleted ? 'Completed' : isFull && !isJoined ? 'Event Full' : statusLabel}
             </Text>
           </View>
         </View>
@@ -743,7 +743,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
                 : isCancelled
                 ? 'Event Cancelled'
                 : isCompleted
-                ? 'Event Ended'
+                ? 'Completed'
                 : isFull && !isJoined
                 ? 'Event Full'
                 : isPending

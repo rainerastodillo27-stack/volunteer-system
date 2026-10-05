@@ -29,6 +29,7 @@ import {
 import { Project, Volunteer, VolunteerProjectMatch, VolunteerProjectJoinRecord, AdminPlanningCalendar, AdminPlanningItem } from '../models/types';
 import { getRequestErrorMessage } from '../utils/requestErrors';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
+import { getProjectDisplayStatus } from '../utils/projectStatus';
 import {
   getPrimaryProjectImageSource,
   mergeProjectRecordsPreservingMedia,
@@ -364,6 +365,13 @@ export default function VolunteerEventsScreen() {
   const getEventStatus = (event: Project) => {
     if (event.id.startsWith('planner-item-') || event.id.startsWith('gcal-')) {
       return { label: 'View only', color: '#70757a', joinable: false };
+    }
+    const eventLifecycleStatus = getProjectDisplayStatus(event);
+    if (eventLifecycleStatus === 'Completed') {
+      return { label: 'Completed', color: '#5B564C', joinable: false };
+    }
+    if (eventLifecycleStatus === 'Cancelled') {
+      return { label: 'Cancelled', color: '#70757a', joinable: false };
     }
     const currentJoinRecord = getCurrentUserJoinRecord(event);
     const isJoined = currentJoinRecord && (currentJoinRecord.participationStatus || 'Active') === 'Active';
