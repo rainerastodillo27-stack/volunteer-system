@@ -217,6 +217,8 @@ import {
 
   getBarangaysByCity,
 
+  getAllCities,
+
   getCitiesByRegion,
 
   PHBarangay,
@@ -2099,99 +2101,80 @@ function parsePhilippineAddressSelection(address: string): {
 
 
 function getProjectLocationSelection(project: Project | null | undefined): {
-
   regionCode: string;
-
   cityCode: string;
-
   barangayCode: string;
-
 } {
-
   if (!project) {
-
     return { regionCode: '', cityCode: '', barangayCode: '' };
-
   }
 
-
-
-  const parsedSelection = parsePhilippineAddressSelection(project.location?.address || '');
-
+  const address = project.location?.address || '';
+  const parsedSelection = parsePhilippineAddressSelection(address);
   if (parsedSelection.regionCode && parsedSelection.cityCode) {
-
-    return {
-
-      regionCode: parsedSelection.regionCode,
-
-      cityCode: parsedSelection.cityCode,
-
-      barangayCode: parsedSelection.barangayCode,
-
-    };
-
+    return parsedSelection;
   }
 
-
-
+  const addressTokens = address.split(',').map(token => token.trim()).filter(Boolean);
+  const normalizeBarangayToken = (value: string) =>
+    normalizeAddressToken(value.replace(/^(?:brgy\.?|barangay)\s*/i, ''));
   const regionName = normalizeAddressToken(
-
     project.location?.region || project.locationRegion || ''
-
   );
+  const explicitCityName = normalizeAddressToken(
+    project.location?.city || project.locationCity || ''
+  );
+  const region =
+    PHRegions.find(item => normalizeAddressToken(item.name) === regionName) ||
+    PHRegions.find(item =>
+      addressTokens.some(token => normalizeAddressToken(token) === normalizeAddressToken(item.name))
+    );
+  const allCities = getAllCities();
+  const cityNamesToTry = [explicitCityName, ...addressTokens.map(normalizeAddressToken)].filter(Boolean);
+  const provinceNamesToTry = [regionName, ...addressTokens.map(normalizeAddressToken)].filter(Boolean);
+  const matchingCities = cityNamesToTry.flatMap(candidate =>
+    allCities.filter(item =>
+      normalizeAddressToken(item.displayName) === candidate ||
+      normalizeAddressToken(item.name) === candidate
+    )
+  );
+  const uniqueMatchingCities = matchingCities.filter((city, index, cities) =>
+    cities.findIndex(candidate => candidate.code === city.code) === index
+  );
+  const citiesInResolvedRegion = region
+    ? uniqueMatchingCities.filter(city => city.regionCode === region.code)
+    : [];
+  const citiesInResolvedProvince = uniqueMatchingCities.filter(city =>
+    provinceNamesToTry.includes(normalizeAddressToken(city.provinceName))
+  );
+  const city =
+    citiesInResolvedRegion[0] ||
+    citiesInResolvedProvince[0] ||
+    (uniqueMatchingCities.length === 1 ? uniqueMatchingCities[0] : undefined);
 
-  const region = PHRegions.find(item => normalizeAddressToken(item.name) === regionName);
-
-  if (!region) {
-
+  if (!city) {
     return {
-
       regionCode: parsedSelection.regionCode,
-
       cityCode: parsedSelection.cityCode,
-
       barangayCode: parsedSelection.barangayCode,
-
     };
-
   }
 
-
-
-  const cityName = normalizeAddressToken(
-
-    project.location?.city || project.locationCity || ''
-
+  const barangayNamesToTry = [
+    project.location?.barangay || project.locationBarangay || '',
+    ...addressTokens.map(token => token.replace(/^(?:brgy\.?|barangay)\s*/i, '')),
+  ].map(normalizeAddressToken).filter(Boolean);
+  const barangay = getBarangaysByCity(city.code).find(item =>
+    barangayNamesToTry.includes(normalizeBarangayToken(item.name)) ||
+    barangayNamesToTry.includes(normalizeBarangayToken(item.displayName))
   );
-
-  const city = getCitiesByRegion(region.code).find(
-
-    item =>
-
-      normalizeAddressToken(item.displayName) === cityName ||
-
-      normalizeAddressToken(item.name) === cityName
-
-  );
-
-
 
   return {
-
-    regionCode: region.code,
-
-    cityCode: city?.code || parsedSelection.cityCode,
-
-    barangayCode: parsedSelection.barangayCode,
-
+    regionCode: city.regionCode || region?.code || parsedSelection.regionCode,
+    cityCode: city.code || parsedSelection.cityCode,
+    barangayCode: parsedSelection.barangayCode || barangay?.code || '',
   };
-
 }
-
-
-
-
-
 interface CustomToggleProps {
 
   value: boolean;
@@ -3828,7 +3811,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     resetProjectLocationSelection();
 
-    applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
+    applyProjectLocationSelectionFromParent(parentProject);
 
     setProjectSaveError(null);
 
@@ -4354,6 +4337,25 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+  const applyProjectLocationSelectionFromParent = (parentProject: Project) => {
+    const parentSelection = getProjectLocationSelection(parentProject);
+    const cities = parentSelection.regionCode
+      ? getCitiesByRegion(parentSelection.regionCode)
+      : [];
+    const barangays = parentSelection.cityCode
+      ? getBarangaysByCity(parentSelection.cityCode)
+      : [];
+
+    setProjectRegionCode(parentSelection.regionCode);
+    setProjectLocationCities(cities);
+    setProjectCityCode(parentSelection.cityCode);
+    setProjectLocationBarangays(barangays);
+    setProjectBarangayCode(
+      parentSelection.barangayCode && barangays.some(barangay => barangay.code === parentSelection.barangayCode)
+        ? parentSelection.barangayCode
+        : ''
+    );
+  };
   const applyProjectLocationSelectionFromAddress = (address: string) => {
 
     const parsedSelection = parsePhilippineAddressSelection(address);
@@ -4398,57 +4400,35 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
   useEffect(() => {
-
-    if (!showProjectModal || !projectDraft.isEvent || !projectDraftParentProject) {
-
+    if (!showProjectModal || !projectDraft.isEvent) {
       return;
-
     }
-
-
 
     const parentSelection = getProjectLocationSelection(projectDraftParentProject);
-
-    if (!parentSelection.regionCode || !parentSelection.cityCode) {
-
-      return;
-
-    }
-
-
-
-    const cities = getCitiesByRegion(parentSelection.regionCode);
-
-    const barangays = getBarangaysByCity(parentSelection.cityCode);
+    const cities = parentSelection.regionCode
+      ? getCitiesByRegion(parentSelection.regionCode)
+      : [];
+    const barangays = parentSelection.cityCode
+      ? getBarangaysByCity(parentSelection.cityCode)
+      : [];
 
     setProjectRegionCode(parentSelection.regionCode);
-
     setProjectLocationCities(cities);
-
     setProjectCityCode(parentSelection.cityCode);
-
     setProjectLocationBarangays(barangays);
-
     setProjectBarangayCode(current =>
-
-      barangays.some(barangay => barangay.code === current) ? current : ''
-
+      parentSelection.barangayCode && barangays.some(barangay => barangay.code === parentSelection.barangayCode)
+        ? parentSelection.barangayCode
+        : barangays.some(barangay => barangay.code === current)
+          ? current
+          : ''
     );
-
   }, [
-
     showProjectModal,
-
     projectDraft.isEvent,
-
     projectDraft.parentProjectId,
-
     projectDraftParentProject,
-
   ]);
-
-
-
   const shiftSchedulerMonth = (delta: number) => {
 
     setSelectedSchedulerMonth(currentMonth => {
@@ -5848,7 +5828,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     resetProjectLocationSelection();
 
-    applyProjectLocationSelectionFromAddress(parentProject.location.address || '');
+    applyProjectLocationSelectionFromParent(parentProject);
 
     setProjectSaveError(null);
 
@@ -7484,7 +7464,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       projectDraft.isEvent
 
-        ? (parentLocationSelection.regionCode || projectRegionCode)
+        ? parentLocationSelection.regionCode
 
         : projectRegionCode;
 
@@ -7492,7 +7472,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       projectDraft.isEvent
 
-        ? (parentLocationSelection.cityCode || projectCityCode)
+        ? parentLocationSelection.cityCode
 
         : projectCityCode;
 
@@ -7514,9 +7494,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       !projectDraft.endDate.trim() ? 'end date' : '',
 
-      !effectiveProjectRegionCode ? 'region' : '',
+      !projectDraft.isEvent && !effectiveProjectRegionCode ? 'region' : '',
 
-      !effectiveProjectCityCode ? 'city' : '',
+      !projectDraft.isEvent && !effectiveProjectCityCode ? 'city' : '',
 
       projectDraft.isEvent && !effectiveProjectBarangayCode ? 'barangay' : '',
 
@@ -7559,6 +7539,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     )) {
       failProjectSaveValidation(
         'Open a project in your partner workspace before creating an event.'
+      );
+      return;
+    }
+
+    if (projectDraft.isEvent && (!effectiveProjectRegionCode || !effectiveProjectCityCode)) {
+      failProjectSaveValidation(
+        'The selected parent project needs a recognized region and city location before its event barangays can be loaded.'
       );
       return;
     }
@@ -10403,7 +10390,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 onValueChange={(itemValue: string) => handleProjectBarangayChange(itemValue)}
 
-                enabled={projectCityCode !== ''}
+                enabled={projectLocationBarangays.length > 0}
 
                 style={{ height: 36, color: '#1e293b' }}
 
@@ -10420,6 +10407,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
               </Picker>
 
             </View>
+
+            <Text style={{ fontSize: 10, color: '#64748b' }}>
+              {projectLocationBarangays.length > 0
+                ? 'Region and city are inherited from the parent project.'
+                : 'The parent project needs a saved city location to load its barangays.'}
+            </Text>
 
           </View>
 
@@ -13623,6 +13616,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const activeParentProject = projects.find(p => p.id === projectDraft.parentProjectId);
 
+      const activeParentLocationSelection = getProjectLocationSelection(activeParentProject);
+
+      const effectiveEventBarangayCode = projectBarangayCode || activeParentLocationSelection.barangayCode;
+
       const isMobile = width < 768;
 
       const eventProgramName = activeParentProject
@@ -13684,7 +13681,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         endDate: !projectDraft.endDate.trim() ? 'End date is required.' : '',
         parentProject: !resolvedParentId ? 'Parent project is required.' : '',
         location: !projectPlaceVenue.trim() ? 'Location / venue is required.' : '',
-        barangay: !projectBarangayCode ? 'Barangay is required.' : '',
+        barangay: !effectiveEventBarangayCode ? 'Barangay is required.' : '',
       } : {};
 
       const errBorder = (field: string): object =>
@@ -13900,53 +13897,37 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             setProjectRegionCode(locSel.regionCode || '');
 
+                            setProjectLocationCities(locSel.regionCode ? getCitiesByRegion(locSel.regionCode) : []);
+
                             setProjectCityCode(locSel.cityCode || '');
 
 
 
                             const cityCode = locSel.cityCode || '';
-
-                            if (cityCode) {
-
-                              const barangays = getBarangaysByCity(cityCode);
-
-                              setProjectLocationBarangays(barangays);
-
-                              const parentBarangayName = parentProj.location.barangay || parentProj.locationBarangay || '';
-
-                              const matchedBarangay = barangays.find(b => b.name.toLowerCase() === parentBarangayName.toLowerCase());
-
-                              if (matchedBarangay) {
-
-                                setProjectBarangayCode(matchedBarangay.code);
-
-                              } else {
-
-                                setProjectBarangayCode('');
-
-                              }
-
-                            } else {
-
-                              setProjectBarangayCode('');
-
-                            }
-
-
+                            const barangays = cityCode ? getBarangaysByCity(cityCode) : [];
+                            setProjectLocationBarangays(barangays);
+                            setProjectBarangayCode(
+                              locSel.barangayCode && barangays.some(barangay => barangay.code === locSel.barangayCode)
+                                ? locSel.barangayCode
+                                : ''
+                            );
 
                             setProjectPlaceVenue(parentProj.location.address || '');
 
                           } else {
 
                             setProjectDraft(prev => ({
-
                               ...prev,
-
                               parentProjectId: val,
-
                               volunteersNeeded: '',
-
+                              address: '',
                             }));
+                            setProjectRegionCode('');
+                            setProjectLocationCities([]);
+                            setProjectCityCode('');
+                            setProjectLocationBarangays([]);
+                            setProjectBarangayCode('');
+                            setProjectPlaceVenue('');
 
                           }
 
@@ -14281,7 +14262,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           onValueChange={(itemValue: string) => handleProjectBarangayChange(itemValue)}
 
-                          enabled={projectCityCode !== ''}
+                          enabled={projectLocationBarangays.length > 0}
 
                           style={[styles.formPicker, isMobile && styles.eventFormPickerMobile, { minWidth: 0 }]}
 
@@ -14298,6 +14279,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         </Picker>
 
                       </View>
+                      <Text style={{ fontSize: 11, color: '#64748b' }}>
+                        {projectLocationBarangays.length > 0
+                          ? 'Region and city are inherited from the parent project.'
+                          : 'The parent project needs a saved city location to load its barangays.'}
+                      </Text>
                       <FieldError field="barangay" />
 
                     </View>
