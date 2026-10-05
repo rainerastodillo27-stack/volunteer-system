@@ -4381,12 +4381,26 @@ def _reject_cross_type_duplicate_names(
 def _reject_duplicate_event_writes(
     connection: Any,
     items: list[Any],
+    *,
+    replacing_collection: bool = False,
 ) -> None:
-    """Reject semantic event duplicates while allowing updates to the same id."""
+    """Reject duplicate event names while allowing updates to the same id."""
     _reject_cross_type_duplicate_names(connection, "events", items)
+    _reject_duplicate_event_names(
+        connection,
+        items,
+        replacing_collection=replacing_collection,
+    )
+    incoming_ids = {
+        str(item.get("id") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
     existing_by_signature: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for existing in get_postgres_hot_storage_collection(connection, "events"):
         if not isinstance(existing, dict):
+            continue
+        if replacing_collection and str(existing.get("id") or "").strip() not in incoming_ids:
             continue
         signature = _event_duplicate_signature(existing)
         if signature:
@@ -4412,6 +4426,67 @@ def _reject_duplicate_event_writes(
 def _normalize_named_duplicate_text(value: Any) -> str:
     """Normalize names for case-insensitive, whitespace-insensitive checks."""
     return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _reject_duplicate_event_names(
+    connection: Any,
+    items: list[Any],
+    *,
+    replacing_collection: bool = False,
+    replacing_storage_key: str = "events",
+) -> None:
+    """Reject event titles already used by another event, regardless of schedule."""
+    incoming_ids = {
+        str(item.get("id") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    existing_by_title: dict[str, list[dict[str, Any]]] = {}
+    for storage_key in ("projects", "programs", "events"):
+        for existing in get_postgres_hot_storage_collection(connection, storage_key, include_images=False):
+            if not isinstance(existing, dict):
+                continue
+            is_event = storage_key == "events" or bool(existing.get("isEvent"))
+            if not is_event:
+                continue
+            existing_id = str(existing.get("id") or "").strip()
+            if (
+                replacing_collection
+                and storage_key == replacing_storage_key
+                and existing_id not in incoming_ids
+            ):
+                continue
+            title = _normalize_named_duplicate_text(existing.get("title"))
+            if title:
+                existing_by_title.setdefault(title, []).append(existing)
+
+    incoming_by_title: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_named_duplicate_text(item.get("title"))
+        if not title:
+            continue
+        item_id = str(item.get("id") or "").strip()
+        existing_matches = existing_by_title.get(title, [])
+        if any(str(existing.get("id") or "").strip() != item_id for existing in existing_matches):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'An event named "{str(item.get("title") or "").strip()}" already exists. '
+                    "Event names must be unique regardless of dates. Edit the existing event or choose a different name."
+                ),
+            )
+        previous = incoming_by_title.get(title)
+        if previous and str(previous.get("id") or "").strip() != item_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'An event named "{str(item.get("title") or "").strip()}" appears more than once. '
+                    "Event names must be unique regardless of dates."
+                ),
+            )
+        incoming_by_title[title] = item
 
 
 def _named_duplicate_signature(
@@ -4488,6 +4563,15 @@ def _reject_duplicate_named_writes(
         _reject_cross_type_duplicate_names(connection, key, items)
 
     incoming_records = [item for item in items if isinstance(item, dict)]
+    compatibility_events = [item for item in incoming_records if bool(item.get("isEvent"))]
+    if compatibility_events:
+        _reject_duplicate_event_names(
+            connection,
+            compatibility_events,
+            replacing_collection=replacing_collection,
+            replacing_storage_key=key,
+        )
+
     incoming_ids = {
         str(item.get("id") or "").strip()
         for item in incoming_records
@@ -14463,7 +14547,11 @@ async def _put_storage_item_once(
                     removed_project_ids = current_ids - next_ids
 
                 if key == "events":
-                    _reject_duplicate_event_writes(connection, payload.value)
+                    _reject_duplicate_event_writes(
+                        connection,
+                        payload.value,
+                        replacing_collection=True,
+                    )
                 elif key in {"programs", "projects"}:
                     _reject_duplicate_named_writes(
                         connection,
