@@ -17503,6 +17503,50 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const activeSelectedProject = getCurrentSelectedProject();
 
+  useEffect(() => {
+    if (!showVolunteerApplicationsModal || !activeSelectedProject || allVolunteerMatches.length === 0) {
+      return;
+    }
+
+    const targetTitle = String(activeSelectedProject.title || '').trim().toLowerCase();
+    const relatedProjectIds = new Set<string>([
+      String(activeSelectedProject.id || '').trim(),
+      String(activeSelectedProject.parentProjectId || '').trim(),
+    ].filter(Boolean));
+
+    projects.forEach(candidate => {
+      if (candidate.isEvent && candidate.parentProjectId === activeSelectedProject.id) {
+        relatedProjectIds.add(String(candidate.id || '').trim());
+      }
+
+      const candidateTitle = String(candidate.title || '').trim().toLowerCase();
+      if (candidateTitle && candidateTitle === targetTitle) {
+        relatedProjectIds.add(String(candidate.id || '').trim());
+        if (candidate.parentProjectId) {
+          relatedProjectIds.add(String(candidate.parentProjectId).trim());
+        }
+      }
+    });
+
+    const latestMatches = allVolunteerMatches.filter(match =>
+      relatedProjectIds.has(String(match.projectId || '').trim())
+    );
+    setSelectedEventMatches(latestMatches);
+    setSelectedMatch(current => {
+      if (!current) {
+        return latestMatches[0] || null;
+      }
+      return latestMatches.find(match => match.id === current.id) || latestMatches[0] || null;
+    });
+  }, [
+    activeSelectedProject?.id,
+    activeSelectedProject?.parentProjectId,
+    activeSelectedProject?.title,
+    allVolunteerMatches,
+    projects,
+    showVolunteerApplicationsModal,
+  ]);
+
   const isProjectReadOnly = activeSelectedProject
 
     ? (getProjectDisplayStatus(activeSelectedProject) === 'Completed' || getProjectDisplayStatus(activeSelectedProject) === 'Cancelled')

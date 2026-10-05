@@ -5858,6 +5858,14 @@ export async function requestVolunteerProjectJoin(
     throw new Error('Volunteer join request did not complete.');
   }
 
+  const cachedMatches = memoryStorageCache.get(STORAGE_KEYS.VOLUNTEER_MATCHES);
+  if (Array.isArray(cachedMatches)) {
+    upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_MATCHES, savedMatch);
+  } else {
+    invalidateSharedStorageCache([STORAGE_KEYS.VOLUNTEER_MATCHES]);
+  }
+  notifyStorageChanged([STORAGE_KEYS.VOLUNTEER_MATCHES]);
+
   // Notification delivery is best effort and must not extend the join action.
   void getVolunteerByUserId(userId)
     .then(volunteer => {
