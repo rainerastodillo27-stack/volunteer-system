@@ -209,6 +209,7 @@ import { getAttachmentLabel, getPrimaryReportMediaUri, isImageMediaUri, openAtta
 
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
 import { formatProjectLocation } from '../utils/locationFormat';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 
 import {
 
@@ -3469,6 +3470,7 @@ const InlineProjectForm = React.memo(({
 export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const { user, isAdmin } = useAuth();
+  const userProfilePhotos = useUserProfilePhotos(Boolean(user?.id));
   const isPartnerUser = String(user?.role || '').toLowerCase() === 'partner';
 
   const { width } = useWindowDimensions();
@@ -9175,6 +9177,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   };
 
+  const getVolunteerProfilePhotoForId = (volunteerId?: string | null) => {
+    const identifier = String(volunteerId || '').trim();
+    if (!identifier) return '';
+    const volunteer = volunteers.find(v => v.id === identifier || v.userId === identifier);
+    return userProfilePhotos[volunteer?.userId || identifier] || '';
+  };
+
 
 
   const getVolunteerDisplayNameForMatch = (match: VolunteerProjectMatch) => {
@@ -12417,7 +12426,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    const renderAvatar = (name: string, size = 40) => {
+    const renderAvatar = (name: string, size = 40, photoUri?: string) => {
 
       const initials = name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
 
@@ -12449,11 +12458,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         }} {...({} as any)}>
 
-          <Text style={{ fontSize: size * 0.4, fontWeight: '700', color: '#ffffff' }}>
-
-            {initials}
-
-          </Text>
+          {photoUri && isImageMediaUri(photoUri) ? (
+            <Image
+              source={{ uri: photoUri }}
+              style={{ width: size, height: size, borderRadius: size / 2 }}
+              resizeMode="cover"
+              accessibilityLabel={`${name} profile photo`}
+            />
+          ) : (
+            <Text style={{ fontSize: size * 0.4, fontWeight: '700', color: '#ffffff' }}>
+              {initials}
+            </Text>
+          )}
 
         </View>
 
@@ -12879,7 +12895,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </View>
 
-                          {renderAvatar(name, 40)}
+                          {renderAvatar(name, 40, getVolunteerProfilePhotoForId(match.volunteerId))}
 
                           <View style={{ flex: 1 }}>
 
@@ -12992,7 +13008,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                           </View>
 
-                          {renderAvatar(name, 40)}
+                          {renderAvatar(name, 40, getVolunteerProfilePhotoForId(match.volunteerId))}
 
                           <View style={{ flex: 1 }}>
 
@@ -13110,7 +13126,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
 
-                          {renderAvatar(name, 40)}
+                          {renderAvatar(name, 40, getVolunteerProfilePhotoForId(match.volunteerId))}
 
                           <View style={{ flex: 1 }}>
 
@@ -13214,7 +13230,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24 }} {...({} as any)}>
 
-                    {renderAvatar(selectedVolunteerName, 56)}
+                    {renderAvatar(selectedVolunteerName, 56, getVolunteerProfilePhotoForId(selectedMatch.volunteerId))}
 
                     <View style={{ flex: 1 }}>
 
@@ -19733,9 +19749,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       }
     };
 
-    const renderInitialsAvatar = (name: string, size = 40) => {
+    const renderInitialsAvatar = (name: string, size = 40, volunteerId?: string) => {
 
       const initials = name ? name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : 'V';
+      const photoUri = getVolunteerProfilePhotoForId(volunteerId);
 
       return (
 
@@ -19759,11 +19776,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         }}>
 
-          <Text style={{ fontSize: size * 0.35, fontWeight: '700', color: '#1b5e20' }}>
-
-            {initials}
-
-          </Text>
+          {photoUri && isImageMediaUri(photoUri) ? (
+            <Image
+              source={{ uri: photoUri }}
+              style={{ width: size, height: size, borderRadius: size / 2 }}
+              resizeMode="cover"
+              accessibilityLabel={`${name} profile photo`}
+            />
+          ) : (
+            <Text style={{ fontSize: size * 0.35, fontWeight: '700', color: '#1b5e20' }}>
+              {initials}
+            </Text>
+          )}
 
         </View>
 
@@ -21802,7 +21826,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           }}
                         >
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11 }}>
-                            {renderInitialsAvatar(volunteer.name, 42)}
+                            {renderInitialsAvatar(volunteer.name, 42, volunteer.id)}
 
                             <View style={{ flex: 1, minWidth: 0 }}>
                               <Text style={{ fontSize: 15, lineHeight: 20, fontWeight: '800', color: '#0f172a' }} numberOfLines={1} ellipsizeMode="tail">
@@ -21952,7 +21976,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           </TouchableOpacity>
 
                           <View style={{ flex: 2, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                            {renderInitialsAvatar(volunteer.name, 36)}
+                            {renderInitialsAvatar(volunteer.name, 36, volunteer.id)}
                             <View style={{ flex: 1 }}>
                               <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>{volunteer.name}</Text>
                               <Text style={{ fontSize: 12, color: '#64748b', marginTop: 2 }} numberOfLines={1}>{assignedRoles}</Text>
@@ -22163,6 +22187,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           {removePickerAssignedIds.map(vid => {
                             const volEntry = assignableVolunteers.find(v => v.id === vid) || { id: vid, name: 'Volunteer' };
                             const fullVol = volunteers.find(v => v.id === vid || v.userId === vid);
+                            const profilePhotoUri = getVolunteerProfilePhotoForId(fullVol?.userId || vid);
                             const isThisRemoving = isRemovingVolunteerId === vid;
 
                             return (
@@ -22181,10 +22206,19 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 }}
                               >
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                                  <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
-                                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>
-                                      {volEntry.name.charAt(0).toUpperCase()}
-                                    </Text>
+                                  <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                                    {profilePhotoUri && isImageMediaUri(profilePhotoUri) ? (
+                                      <Image
+                                        source={{ uri: profilePhotoUri }}
+                                        style={{ width: 34, height: 34, borderRadius: 17 }}
+                                        resizeMode="cover"
+                                        accessibilityLabel={`${volEntry.name} profile photo`}
+                                      />
+                                    ) : (
+                                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>
+                                        {volEntry.name.charAt(0).toUpperCase()}
+                                      </Text>
+                                    )}
                                   </View>
                                   <View style={{ flex: 1 }}>
                                     <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{volEntry.name}</Text>

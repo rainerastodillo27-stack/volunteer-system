@@ -27,6 +27,7 @@ import type { Project, VolunteerTimeLog, VolunteerProjectJoinRecord, Volunteer }
 import { buildTablePdf, downloadPdfFile, type PdfTable } from '../utils/pdfDownload';
 import { downloadAttachmentUri, getAttachmentUris, isImageMediaUri } from '../utils/media';
 import DownloadPreviewModal from './DownloadPreviewModal';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 
 function initialsPartner(name: string) {
   const parts = (name || 'U').trim().split(/\s+/).filter(Boolean);
@@ -280,7 +281,9 @@ export function VolunteerReportsDashboard({
   }, [scopedEventIds, visibleReports]);
 
   const { user: authUser } = useAuth() as any;
+  const userProfilePhotos = useUserProfilePhotos();
   const realVolunteerName = (volunteerJoinRecords[0] as any)?.volunteerName || visibleReports[0]?.submitterName || authUser?.name || 'My Volunteer Account';
+  const ownProfilePhoto = userProfilePhotos[authUser?.id || ''] || authUser?.profilePhoto;
   const realEventJoins = new Set(
     [...volunteerJoinRecords.map(r => (r as any).projectId), ...volunteerTimeLogs.map(l => (l as any).projectId)]
       .map(projectId => String(projectId || '').trim())
@@ -421,7 +424,7 @@ export function VolunteerReportsDashboard({
       const name = (join as any)?.volunteerName || 'Volunteer';
       const vDetails = volunteerById.get((log as any).volunteerId) || volunteerByUserId.get((log as any).volunteerId);
       const key = (join as any)?.volunteerId || (join as any)?.volunteerUserId || vDetails?.id || vDetails?.userId || (log as any).volunteerId || name;
-      const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
+      const avatarUri = userProfilePhotos[vDetails?.userId || ''] || userProfilePhotos[(log as any).volunteerId || ''] || undefined;
       const volunteerName = vDetails?.name || name;
 
       const submittedAt = new Date((log as any).timeIn || (log as any).timeOut || '').getTime();
@@ -441,7 +444,7 @@ export function VolunteerReportsDashboard({
       );
       const vDetails = volunteerById.get(rep.submittedBy) || volunteerByUserId.get(rep.submittedBy);
       const key = (join as any)?.volunteerId || (join as any)?.volunteerUserId || vDetails?.id || vDetails?.userId || rep.submittedBy || rep.submitterName || `rep-${rep.id}`;
-      const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
+      const avatarUri = userProfilePhotos[vDetails?.userId || ''] || userProfilePhotos[rep.submittedBy || ''] || undefined;
       const volunteerName = vDetails?.name || rep.submitterName || 'Volunteer';
 
       const submittedAt = new Date(rep.submittedAt).getTime();
@@ -458,14 +461,14 @@ export function VolunteerReportsDashboard({
       const key = (rec as any).volunteerId || (rec as any).volunteerUserId || (rec as any).volunteerName;
 
       const vDetails = volunteerById.get((rec as any).volunteerId) || volunteerByUserId.get((rec as any).volunteerId) || volunteerById.get((rec as any).volunteerUserId) || volunteerByUserId.get((rec as any).volunteerUserId);
-      const avatarUri = (vDetails as any)?.validIdPhoto || (vDetails as any)?.avatarUri || undefined;
+      const avatarUri = userProfilePhotos[vDetails?.userId || ''] || userProfilePhotos[(rec as any).volunteerUserId || ''] || undefined;
       const volunteerName = vDetails?.name || (rec as any).volunteerName || 'Volunteer';
 
       const submittedAt = new Date((rec as any).joinedAt || '').getTime();
       if (!map.has(key)) map.set(key, { key, name: volunteerName, submittedDate: new Date(submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }), submittedAt, photos: [], avatarUri });
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [selectedEventId, volunteerTimeLogs, volunteerJoinRecords, visibleReports, volunteers]);
+  }, [selectedEventId, volunteerTimeLogs, volunteerJoinRecords, visibleReports, volunteers, userProfilePhotos]);
 
   const renderReportItem = ({ item }: { item: SubmittedReport }) => (
     <TouchableOpacity
@@ -669,7 +672,7 @@ export function VolunteerReportsDashboard({
                   <View key={row.key} style={[styles.volunteerRow, isCompactLayout && styles.volunteerRowCompact]}>
                     <View style={[styles.volunteerTd, styles.volunteerIdentityCell, isCompactLayout && styles.volunteerIdentityCellCompact, { flex: isCompactLayout ? 0 : 1.2 }]}>
                       <View style={styles.volunteerAvatar}>
-                        {row.avatarUri ? (
+                        {row.avatarUri && isImageMediaUri(row.avatarUri) ? (
                           <Image source={{ uri: row.avatarUri }} style={{ width: '100%', height: '100%', borderRadius: 16 }} />
                         ) : (
                           <Text style={styles.volunteerAvatarText}>{row.name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()}</Text>
@@ -760,11 +763,18 @@ export function VolunteerReportsDashboard({
                 </View>
               </View>
             ) : (
-              allVolunteerAccountsForAdmin.map(acc => (
+              allVolunteerAccountsForAdmin.map(acc => {
+                const volunteer = volunteers.find(entry => entry.id === acc.key || entry.userId === acc.key);
+                const profilePhoto = userProfilePhotos[volunteer?.userId || acc.key];
+                return (
                 <View key={acc.key} style={styles.reportItem}>
                   <View style={styles.reportItemLeft}>
                     <View style={[styles.volunteerAvatar, { backgroundColor: '#E4EEE7' }]}>
-                      <Text style={styles.volunteerAvatarText}>{acc.name.split(' ').map((n:string)=>n[0]).join('').slice(0,2).toUpperCase()}</Text>
+                      {profilePhoto && isImageMediaUri(profilePhoto) ? (
+                        <Image source={{ uri: profilePhoto }} style={{ width: '100%', height: '100%', borderRadius: 16 }} />
+                      ) : (
+                        <Text style={styles.volunteerAvatarText}>{acc.name.split(' ').map((n:string)=>n[0]).join('').slice(0,2).toUpperCase()}</Text>
+                      )}
                     </View>
                     <View style={styles.reportItemContent}>
                       <Text style={styles.reportItemTitle}>{acc.name}</Text>
@@ -774,13 +784,18 @@ export function VolunteerReportsDashboard({
                     </View>
                   </View>
                 </View>
-              ))
+                );
+              })
             )
           ) : (
             <View style={styles.reportItem}>
               <View style={styles.reportItemLeft}>
                 <View style={[styles.volunteerAvatar, { backgroundColor: '#E4EEE7' }]}>
-                  <Text style={styles.volunteerAvatarText}>{realVolunteerName.split(' ').map((n:string)=>n[0]).join('').slice(0,2).toUpperCase()}</Text>
+                  {ownProfilePhoto && isImageMediaUri(ownProfilePhoto) ? (
+                    <Image source={{ uri: ownProfilePhoto }} style={{ width: '100%', height: '100%', borderRadius: 16 }} />
+                  ) : (
+                    <Text style={styles.volunteerAvatarText}>{realVolunteerName.split(' ').map((n:string)=>n[0]).join('').slice(0,2).toUpperCase()}</Text>
+                  )}
                 </View>
                 <View style={styles.reportItemContent}>
                   <Text style={styles.reportItemTitle}>{realVolunteerName}</Text>
@@ -2247,7 +2262,8 @@ export function PartnerReportsDashboard({
                     </View>
                   </View>
                 </View>
-              ))
+                );
+              })
             ) : photoFolders.length === 0 ? (
               <Text style={{ fontSize: 12, color: '#64748b' }}>
                 No connected event folders were found for this partner project.

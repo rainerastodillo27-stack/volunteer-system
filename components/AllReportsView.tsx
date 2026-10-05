@@ -9,6 +9,7 @@ import { buildTablePdf, downloadPdfFile } from '../utils/pdfDownload';
 import type { PdfTable } from '../utils/pdfDownload';
 import { getAttendanceReportMetrics } from '../utils/attendanceReportMetrics';
 import DownloadPreviewModal from './DownloadPreviewModal';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 
 interface Props {
   reports: SubmittedReport[];
@@ -379,6 +380,7 @@ function buildBatchReportPdf(
 }
 
 export default function AllReportsView({ reports, projects, volunteerTimeLogs = [], volunteers = [], onViewReport, onRequestReportMedia, onRequestAttendanceMedia, mediaRefreshVersion = 0, onUploadReport, reportType = 'all' }: Props) {
+  const profilePhotosByUserId = useUserProfilePhotos();
   const { width: viewportWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const isNarrow = viewportWidth < 700;
@@ -397,6 +399,12 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
 
   const toggleSection = (section: keyof typeof collapsedSections) => {
     setCollapsedSections(current => ({ ...current, [section]: !current[section] }));
+  };
+  const getSubmitterProfilePhoto = (report: SubmittedReport) => {
+    const volunteer = volunteers.find(entry =>
+      entry.id === report.submittedBy || entry.userId === report.submittedBy || entry.name === report.submitterName
+    );
+    return profilePhotosByUserId[volunteer?.userId || report.submittedBy] || '';
   };
   const [downloadPreview, setDownloadPreview] = useState<ReportDownloadPreview | null>(null);
   const [photoPreview, setPhotoPreview] = useState<{
@@ -795,6 +803,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
     const eventSub = proj?.location?.address || proj?.category || rep.category || 'NVC';
     const dateStr = new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     const bg = avatarBg(rep.submitterName);
+    const profilePhoto = getSubmitterProfilePhoto(rep);
     const ic = fileIcon(rep);
     return (
       <View key={rep.id} style={styles.tr}>
@@ -827,7 +836,11 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
         </View>
         <View style={[styles.td, { flex: 1.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
           <View style={[styles.avatar, { backgroundColor: bg }]}>
-            <Text style={styles.avatarText}>{initials(rep.submitterName)}</Text>
+            {profilePhoto && isImageMediaUri(profilePhoto) ? (
+              <Image source={{ uri: profilePhoto }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarText}>{initials(rep.submitterName)}</Text>
+            )}
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.submitterName} numberOfLines={1}>{rep.submitterName}</Text>
@@ -1310,6 +1323,7 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
             const projectSub = proj?.location?.address || proj?.category || rep.category || 'NVC';
             const dateStr = new Date(rep.submittedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
             const bg = avatarBg(rep.submitterName);
+            const profilePhoto = getSubmitterProfilePhoto(rep);
             const ic = fileIcon(rep);
             return (
               <View key={rep.id} style={styles.tr}>
@@ -1334,7 +1348,11 @@ export default function AllReportsView({ reports, projects, volunteerTimeLogs = 
                 </View>
                 <View style={[styles.td, { flex: 1.2, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
                   <View style={[styles.avatar, { backgroundColor: bg }]}>
-                    <Text style={styles.avatarText}>{initials(rep.submitterName)}</Text>
+                    {profilePhoto && isImageMediaUri(profilePhoto) ? (
+                      <Image source={{ uri: profilePhoto }} style={styles.avatarImage} />
+                    ) : (
+                      <Text style={styles.avatarText}>{initials(rep.submitterName)}</Text>
+                    )}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.submitterName} numberOfLines={1}>{rep.submitterName}</Text>
@@ -1819,6 +1837,12 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 14,
   },
   avatarText: { fontSize: 11, fontWeight: '800', color: '#1F2937' },
   submitterName: { fontSize: 13, fontWeight: '700', color: '#1F2937' },

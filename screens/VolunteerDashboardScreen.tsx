@@ -4,6 +4,7 @@ import {
   View,
   Text,
   StyleSheet,
+  Image,
   TouchableOpacity,
   Platform,
   Alert,
@@ -32,6 +33,8 @@ import {
 import type { Project, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, AdminPlanningItem, ProgramTrack, VolunteerProjectMatch } from '../models/types';
 import { getProjectDisplayStatus, getProjectStatusColor } from '../utils/projectStatus';
 import { getRequestErrorMessage } from '../utils/requestErrors';
+import { isImageMediaUri } from '../utils/media';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 import { getVolunteerEventParticipationSummary, getVolunteerJoinedEventIds } from '../utils/volunteerEventParticipation';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import { getScheduledAttendanceDateKeys } from '../utils/attendanceSchedule';
@@ -174,6 +177,10 @@ function checkEventSkillMatch(
 
 export default function VolunteerDashboardScreen() {
   const { user } = useAuth();
+  const profilePhotosByUserId = useUserProfilePhotos(Boolean(user?.id));
+  const userProfilePhoto = user?.id
+    ? profilePhotosByUserId[user.id] || user.profilePhoto
+    : user?.profilePhoto;
   const navigation = useNavigation<VolunteerNavProp>();
   const insets = useSafeAreaInsets();
 
@@ -743,7 +750,11 @@ export default function VolunteerDashboardScreen() {
               <Text style={styles.greetingName}>Hello, {user?.name || 'Volunteer'}</Text>
             </View>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'V'}</Text>
+              {userProfilePhoto && isImageMediaUri(userProfilePhoto) ? (
+                <Image source={{ uri: userProfilePhoto }} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'V'}</Text>
+              )}
             </View>
           </View>
           <Text style={styles.headerSub}>Track your service, schedule, tasks, and messages in one place.</Text>
@@ -1150,6 +1161,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#E8A33D',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 20,
   },
   avatarText: {
     fontFamily: Platform.OS === 'web' ? "'Nunito', sans-serif" : 'Nunito',

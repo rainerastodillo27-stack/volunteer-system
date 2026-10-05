@@ -45,6 +45,7 @@ import LogoutConfirmationModal from '../components/LogoutConfirmationModal';
 import LocationMapPicker from '../components/LocationMapPicker';
 
 import { useAuth } from '../contexts/AuthContext';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 
 import {
 
@@ -448,6 +449,10 @@ function parseDateValue(value: string): Date | null {
 export default function PartnerDashboardScreen({ navigation, route }: any) {
 
   const { user, logout } = useAuth();
+  const profilePhotosByUserId = useUserProfilePhotos(Boolean(user?.id));
+  const userProfilePhoto = user?.id
+    ? profilePhotosByUserId[user.id] || user.profilePhoto
+    : user?.profilePhoto;
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const [loading, setLoading] = useState(true);
@@ -1619,7 +1624,11 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
         <View style={styles.avatar}>
 
-          <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'P'}</Text>
+          {userProfilePhoto && isImageMediaUri(userProfilePhoto) ? (
+            <Image source={{ uri: userProfilePhoto }} style={styles.avatarImage} />
+          ) : (
+            <Text style={styles.avatarText}>{user?.name?.charAt(0) || 'P'}</Text>
+          )}
 
         </View>
 
@@ -2727,6 +2736,12 @@ const styles = StyleSheet.create({
 
     ...ModernTheme.shadows.sm,
 
+  },
+
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: ModernTheme.borderRadius.full,
   },
 
   avatarText: {

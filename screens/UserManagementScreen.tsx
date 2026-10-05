@@ -10,6 +10,7 @@ import {
   ScrollView,
   Platform,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -38,8 +39,9 @@ import {
   rejectUser,
 } from '../models/storage';
 import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
-import { getAttachmentLabel } from '../utils/media';
+import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle } from '../utils/requestErrors';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 
 const roleOptions: UserRole[] = ['admin', 'partner', 'volunteer'];
 
@@ -60,6 +62,7 @@ function escapeCsvCell(value: string): string {
 
 export default function UserManagementScreen({ navigation }: any) {
   const { user, isAdmin } = useAuth();
+  const profilePhotosByUserId = useUserProfilePhotos(isAdmin);
 
   // Confirmation dialog hook
   const { dialogState, showConfirm, handleConfirm, handleCancel } = useConfirmDialog();
@@ -834,9 +837,13 @@ export default function UserManagementScreen({ navigation }: any) {
                 {/* User Column */}
                 <View style={[styles.colCell, styles.colUser]}>
                   <View style={[styles.avatarCircle, { backgroundColor: avatarBg }]}>
-                    <Text style={[styles.avatarText, { color: avatarTextColor }]}>
-                      {account.name.charAt(0).toUpperCase()}
-                    </Text>
+                    {profilePhotosByUserId[account.id] && isImageMediaUri(profilePhotosByUserId[account.id]) ? (
+                      <Image source={{ uri: profilePhotosByUserId[account.id] }} style={styles.accountAvatarImage} />
+                    ) : (
+                      <Text style={[styles.avatarText, { color: avatarTextColor }]}>
+                        {account.name.charAt(0).toUpperCase()}
+                      </Text>
+                    )}
                   </View>
                   <View style={styles.userNameMeta}>
                     <Text style={styles.userNameText}>{account.name}</Text>
@@ -1075,9 +1082,13 @@ export default function UserManagementScreen({ navigation }: any) {
               {/* Profile Header */}
               <View style={styles.reviewSummaryBox}>
                 <View style={styles.reviewAvatarBig}>
-                  <Text style={styles.reviewAvatarTextBig}>
-                    {reviewTarget.record.name.charAt(0).toUpperCase()}
-                  </Text>
+                  {profilePhotosByUserId[reviewTarget.record.id] && isImageMediaUri(profilePhotosByUserId[reviewTarget.record.id]) ? (
+                    <Image source={{ uri: profilePhotosByUserId[reviewTarget.record.id] }} style={styles.reviewAvatarImageBig} />
+                  ) : (
+                    <Text style={styles.reviewAvatarTextBig}>
+                      {reviewTarget.record.name.charAt(0).toUpperCase()}
+                    </Text>
+                  )}
                 </View>
                 <View>
                   <Text style={styles.reviewNameText}>{reviewTarget.record.name}</Text>
@@ -1751,6 +1762,12 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  accountAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 18,
   },
   avatarText: {
     fontSize: 14,
@@ -2233,6 +2250,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#dcfce7',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  reviewAvatarImageBig: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 30,
   },
   reviewAvatarTextBig: {
     fontSize: 24,

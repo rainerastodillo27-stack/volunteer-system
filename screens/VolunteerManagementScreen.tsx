@@ -47,6 +47,7 @@ import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
 import { getVolunteerEventParticipationSummary } from '../utils/volunteerEventParticipation';
 import { downloadXlsxFile } from '../utils/xlsxDownload';
 import { formatSocialMediaInfo, mergeSocialMediaInfo } from '../utils/socialMedia';
+import { useUserProfilePhotos } from '../hooks/useUserProfilePhotos';
 
 type VolunteerDocumentField = 'validIdPhoto' | 'certificationsOrTrainings';
 
@@ -76,6 +77,7 @@ function getVolunteerDocumentUri(
 // Lets admins inspect volunteers, update availability, and assign projects.
 export default function VolunteerManagementScreen({ navigation, route }: any) {
   const { user, isAdmin } = useAuth();
+  const profilePhotosByUserId = useUserProfilePhotos(isAdmin);
   const insets = useSafeAreaInsets();
   const confirmDialogRef = useRef<ConfirmDialogHandle>(null);
 
@@ -865,7 +867,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const userType: UserType | undefined = selectedUser?.userType;
     const profileName = (selectedUser?.name || selectedVolunteer.name || '').trim() || 'Unnamed volunteer';
     const legacyVolunteerPhoto = (selectedVolunteer as Volunteer & { profilePhoto?: string }).profilePhoto;
-    const profilePhotoUri = [selectedUser?.profilePhoto, legacyVolunteerPhoto]
+    const profilePhotoUri = [
+      profilePhotosByUserId[selectedVolunteer.userId],
+      selectedUser?.profilePhoto,
+      legacyVolunteerPhoto,
+    ]
       .find(photo => typeof photo === 'string' && photo.trim())
       ?.trim();
     const profileEmail = (selectedUser?.email || selectedVolunteer.email || '').trim().toLowerCase();
@@ -1610,7 +1616,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               {selectedVolunteer && (
                 <View style={{ backgroundColor: '#f8fafc', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: '#475569' }}>{profileName.charAt(0)}</Text>
+                    {profilePhotoUri && isImageMediaUri(profilePhotoUri) ? (
+                      <Image source={{ uri: profilePhotoUri }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+                    ) : (
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: '#475569' }}>{profileName.charAt(0)}</Text>
+                    )}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>{profileName}</Text>
@@ -2060,9 +2070,13 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
             onPress={() => handleSelectVolunteer(volunteer)}
           >
             <View style={styles.volunteerCardAvatar}>
-              <Text style={styles.volunteerCardAvatarText}>
-                {volunteer.name.charAt(0)}
-              </Text>
+              {profilePhotosByUserId[volunteer.userId] && isImageMediaUri(profilePhotosByUserId[volunteer.userId]) ? (
+                <Image source={{ uri: profilePhotosByUserId[volunteer.userId] }} style={styles.volunteerCardAvatarImage} />
+              ) : (
+                <Text style={styles.volunteerCardAvatarText}>
+                  {volunteer.name.charAt(0)}
+                </Text>
+              )}
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.volunteerCardName}>{volunteer.name}</Text>
@@ -2607,6 +2621,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#4CAF50',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  volunteerCardAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 18,
   },
   volunteerCardAvatarText: {
     color: '#fff',
