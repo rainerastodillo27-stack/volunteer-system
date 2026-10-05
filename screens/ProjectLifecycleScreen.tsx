@@ -3717,51 +3717,21 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-  const isApprovedPartnerProposalProject = (
-    parentProject: Project,
-    applications: PartnerProjectApplication[] = allPartnerApplications,
-  ) => {
-    if (isAdmin) {
-      return !parentProject.isEvent;
-    }
-    if (user?.role !== 'partner' || parentProject.isEvent || !user.id) {
+  const canCreateEventForProject = (parentProject: Project) => {
+    if (parentProject.isEvent) {
       return false;
     }
+    if (isAdmin) {
+      return true;
+    }
 
-    const currentUserId = String(user.id).trim();
-    return applications.some(application => {
-      if (
-        application.status !== 'Approved' ||
-        String(application.partnerUserId || '').trim() !== currentUserId
-      ) {
-        return false;
-      }
-      const applicationProjectId = String(application.projectId || '').trim();
-      const proposalDetails = (application.proposalDetails || {}) as Record<string, unknown>;
-      const approvedProjectId = String(proposalDetails.approvedProjectId || '').trim();
-      const isProposalApplication =
-        applicationProjectId.startsWith('project-proposal-') ||
-        [
-          'proposedTitle',
-          'proposedDescription',
-          'proposedStartDate',
-          'proposedEndDate',
-          'proposedLocation',
-          'communityNeed',
-          'expectedDeliverables',
-        ].some(field => String(proposalDetails[field] || '').trim().length > 0);
-      if (!isProposalApplication) {
-        return false;
-      }
-      const parentProjectId = String(parentProject.id || '').trim();
-      return applicationProjectId === parentProjectId || approvedProjectId === parentProjectId;
-    });
+    // The partner project workspace is already scoped to projects this
+    // account can access. Let partners create events from that project
+    // context without waiting for a separate proposal-status lookup.
+    return isPartnerUser && projects.some(project => project.id === parentProject.id);
   };
 
-  const canCreateEventForProject = (parentProject: Project) =>
-    isApprovedPartnerProposalProject(parentProject);
-
-  const canManageApprovedPartnerEvent = (eventProject: Project | null | undefined) => {
+  const canManagePartnerEvent = (eventProject: Project | null | undefined) => {
     if (!eventProject?.isEvent) {
       return false;
     }
@@ -3773,18 +3743,18 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     }
     const parentProjectId = String(eventProject.parentProjectId || '').trim();
     const parentProject = projects.find(project => !project.isEvent && project.id === parentProjectId);
-    return Boolean(parentProject && isApprovedPartnerProposalProject(parentProject));
+    return Boolean(parentProject && canCreateEventForProject(parentProject));
   };
 
   const canManageProjectTasks = (project: Project | null | undefined) =>
-    Boolean(isAdmin || (project?.isEvent && canManageApprovedPartnerEvent(project)));
+    Boolean(isAdmin || (project?.isEvent && canManagePartnerEvent(project)));
 
   const startInlineEventCreation = (parentProject: Project) => {
 
     if (!canCreateEventForProject(parentProject)) {
       Alert.alert(
-        'Approval Required',
-        'You can create events only under a project approved from your partner proposal.'
+        'Project Unavailable',
+        'Open a project in your partner workspace to create an event.'
       );
       return;
     }
@@ -5711,28 +5681,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const openCreateEventInProgramModal = async (trackId: string, trackTitle: string) => {
 
-    const getEligibleParentProjects = (applications?: PartnerProjectApplication[]) => projects.filter(
+    const getEligibleParentProjects = () => projects.filter(
       project =>
         !project.isEvent &&
         (project.program_id === trackId || project.parentProjectId === trackId) &&
-        (isAdmin
-          ? true
-          : isApprovedPartnerProposalProject(project, applications ?? allPartnerApplications))
+        canCreateEventForProject(project)
     );
 
     let parentProjects = getEligibleParentProjects();
-
-    // Applications are loaded lazily on this screen.  Refresh them before
-    // deciding that a partner has no eligible proposal project.
-    if (!isAdmin && user?.role === 'partner' && parentProjects.length === 0) {
-      try {
-        const applications = await getAllPartnerProjectApplications();
-        setAllPartnerApplications(applications);
-        parentProjects = getEligibleParentProjects(applications);
-      } catch (error) {
-        console.warn('Failed to load partner proposal approvals:', error);
-      }
-    }
 
 
 
@@ -5742,7 +5698,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         'No Project Available',
         isAdmin
           ? `Create a project in ${trackTitle} before adding an event.`
-          : 'Only projects from your approved partner proposals can have events added.'
+          : 'Create an event from a project in your partner workspace.'
       );
 
       return;
@@ -5817,22 +5773,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
   const openCreateEventModal = async (parentProject: Project) => {
 
-    let permitted = canCreateEventForProject(parentProject);
-    if (!permitted && !isAdmin && user?.role === 'partner') {
-      try {
-        // Applications are loaded lazily on this screen. Fetch once more when
-        // a partner opens the form before that deferred load has completed.
-        const applications = await getAllPartnerProjectApplications();
-        setAllPartnerApplications(applications);
-        permitted = isApprovedPartnerProposalProject(parentProject, applications);
-      } catch (error) {
-        console.warn('Failed to verify partner proposal approval:', error);
-      }
-    }
+    const permitted = canCreateEventForProject(parentProject);
     if (!permitted) {
       Alert.alert(
-        'Approval Required',
-        'You can create events only under a project approved from your partner proposal.'
+        'Project Unavailable',
+        'Open a project in your partner workspace to create an event.'
       );
       return;
     }
@@ -7609,29 +7554,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     }
 
-    if (isPartnerEventCreation) {
-      let approvedForParent = Boolean(
-        resolvedEventParentProject &&
-        isApprovedPartnerProposalProject(resolvedEventParentProject)
+    if (isPartnerEventCreation && !(
+      resolvedEventParentProject && canCreateEventForProject(resolvedEventParentProject)
+    )) {
+      failProjectSaveValidation(
+        'Open a project in your partner workspace before creating an event.'
       );
-      if (!approvedForParent) {
-        try {
-          const applications = await getAllPartnerProjectApplications();
-          setAllPartnerApplications(applications);
-          approvedForParent = Boolean(
-            resolvedEventParentProject &&
-            isApprovedPartnerProposalProject(resolvedEventParentProject, applications)
-          );
-        } catch (error) {
-          console.warn('Failed to verify partner proposal approval before event save:', error);
-        }
-      }
-      if (!approvedForParent) {
-        failProjectSaveValidation(
-          'Partners can create events only under a project approved from their proposal.'
-        );
-        return;
-      }
+      return;
     }
 
 
@@ -17339,24 +17268,16 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
         );
 
-        const sectionEvents = sectionItems.filter(project => project.isEvent);
-
-
-
-        // Also include events from child projects (events where parentProjectId points to a project in this program)
-
-        const sectionProjectIds = new Set(sectionProjects.map(p => p.id));
-
+        // Only show events that belong to a project in this program. Matching an
+        // event's category/module alone can leak events from unrelated projects
+        // into this section.
         const eventsFromChildProjects = projects.filter(
-
-          project => project.isEvent && project.parentProjectId && sectionProjectIds.has(project.parentProjectId)
-
+          event =>
+            event.isEvent &&
+            sectionProjects.some(parentProject => isEventLinkedToProject(event, parentProject, projects))
         );
 
-        const allSectionEvents = [...sectionEvents, ...eventsFromChildProjects]
-
-          .filter((event, index, array) => array.findIndex(e => e.id === event.id) === index) // Remove duplicates
-
+        const allSectionEvents = eventsFromChildProjects
           .sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
 
 
@@ -21993,7 +21914,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             <View style={{ backgroundColor: attendanceMarkBadgeColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
                               <Text style={{ fontSize: 12, fontWeight: '700', color: attendanceMarkTextColor }}>{attendanceMarkStatus}</Text>
                             </View>
-                            {canManageApprovedPartnerEvent(activeSelectedProject) && activeLog && !isChecked ? (
+                            {canManagePartnerEvent(activeSelectedProject) && activeLog && !isChecked ? (
                               <TouchableOpacity
                                 accessibilityRole="button"
                                 accessibilityLabel={`Mark attendance for ${volunteer.name}`}
@@ -22486,7 +22407,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    if (showAttendanceTasks && canManageApprovedPartnerEvent(activeSelectedProject)) {
+    if (showAttendanceTasks && canManagePartnerEvent(activeSelectedProject)) {
 
       return renderAttendanceTasksView(activeSelectedProject);
 
@@ -23188,7 +23109,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                 onCreateEvent={!activeSelectedProject.isEvent && canCreateEventForProject(activeSelectedProject) && !isProjectReadOnly
                   ? () => openCreateEventModal(activeSelectedProject)
                   : undefined}
-                onAttendance={canManageApprovedPartnerEvent(activeSelectedProject)
+                onAttendance={canManagePartnerEvent(activeSelectedProject)
                   ? () => setShowAttendanceTasks(true)
                   : undefined}
                 onReports={() => {
@@ -23752,8 +23673,6 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                               <View style={{ flex: 1 }}>
 
                                 <Text style={styles.programCardTitle} numberOfLines={1}>{section.title}</Text>
-
-                                <Text style={styles.programCardSubtitle} numberOfLines={1}>{section.module}</Text>
 
                               </View>
 
@@ -27666,18 +27585,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
 
     color: '#0f172a'
-
-  },
-
-  programCardSubtitle: {
-
-    fontSize: 11,
-
-    fontWeight: '700',
-
-    color: '#64748b',
-
-    marginTop: 1
 
   },
 

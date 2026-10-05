@@ -2324,6 +2324,8 @@ function isExpectedRemoteStorageError(error: unknown): boolean {
     maybeError.name === 'AbortError' ||
     message.includes('network request failed') ||
     message.includes('failed to fetch') ||
+    message.includes('unknownhostexception') ||
+    message.includes('unable to resolve host') ||
     message.includes('aborted') ||
     message.includes('timed out')
   );
@@ -2661,8 +2663,6 @@ export async function getPartnerDashboardSnapshot(
   adminPlanningCalendars: AdminPlanningCalendar[];
   adminPlanningItems: AdminPlanningItem[];
 }> {
-  await ensurePartnerOwnershipLinks();
-
   const coreKeys = [
     STORAGE_KEYS.USERS,
     STORAGE_KEYS.PROJECTS,
@@ -4416,11 +4416,16 @@ export async function savePartner(
   const existingPartner = options?.existingPartner || await getPartner(partner.id);
 
   let ownerUserId = partner.ownerUserId || existingPartner?.ownerUserId;
-  if (!ownerUserId && partner.contactEmail?.trim()) {
+  if (!ownerUserId && (partner.contactEmail?.trim() || partner.contactPhone?.trim())) {
     const users = await getAllUsers();
     ownerUserId = users.find(user =>
       user.role === 'partner' &&
-      user.email?.toLowerCase() === partner.contactEmail?.trim().toLowerCase()
+      (
+        (partner.contactEmail?.trim() &&
+          user.email?.trim().toLowerCase() === partner.contactEmail.trim().toLowerCase()) ||
+        (partner.contactPhone?.trim() &&
+          normalizeComparablePhone(user.phone) === normalizeComparablePhone(partner.contactPhone))
+      )
     )?.id;
   }
 
@@ -4453,7 +4458,19 @@ export async function getPartner(id: string): Promise<Partner | null> {
 // Returns partner organizations owned by a specific partner account.
 export async function getPartnersByOwnerUserId(ownerUserId: string): Promise<Partner[]> {
   const partners = await getAllPartners();
-  const ownedPartners = partners.filter(partner => partner.ownerUserId === ownerUserId);
+  const users = (await getStorageItemFast<User[]>(STORAGE_KEYS.USERS)) || [];
+  const owner = users.find(user => user.id === ownerUserId);
+  const ownerEmail = String(owner?.email || '').trim().toLowerCase();
+  const ownerPhone = normalizeComparablePhone(owner?.phone);
+  const ownedPartners = partners.filter(partner => {
+    if (partner.ownerUserId) {
+      return partner.ownerUserId === ownerUserId;
+    }
+    return Boolean(
+      (ownerEmail && String(partner.contactEmail || '').trim().toLowerCase() === ownerEmail) ||
+      (ownerPhone && normalizeComparablePhone(partner.contactPhone) === ownerPhone)
+    );
+  });
   return Promise.all(
     ownedPartners.map(async partner => (await getPartner(partner.id)) || partner),
   );
@@ -6483,7 +6500,7 @@ export async function reviewPartnerRegistration(
   }
 
   const now = new Date().toISOString();
-  const updatedPartner: Partner = {
+  const reviewedPartner: Partner = {
     ...partner,
     status,
     validatedBy: reviewedBy,
@@ -6492,7 +6509,11 @@ export async function reviewPartnerRegistration(
     verificationNotes: rejectionReason?.trim() || partner.verificationNotes,
   };
 
-  const linkedUser = await getLinkedUserAccountForPartner(updatedPartner);
+  const linkedUser = await getLinkedUserAccountForPartner(reviewedPartner);
+  const updatedPartner: Partner = {
+    ...reviewedPartner,
+    ownerUserId: reviewedPartner.ownerUserId || linkedUser?.id,
+  };
   const linkedUserUpdate = linkedUser
     ? saveUser({
         ...linkedUser,
@@ -7149,6 +7170,15 @@ function normalizeComparablePhone(value?: string): string {
 }
 
 async function ensurePartnerOwnershipLinks(): Promise<void> {
+  // Ownership repair writes the whole partner collection, which is an
+  // administrator operation. Partner screens can read their own legacy row
+  // through the server's email/phone ownership fallback without attempting
+  // that privileged migration from a partner session.
+  const currentUser = await getStorageItem<User>(STORAGE_KEYS.CURRENT_USER);
+  if (currentUser?.role !== 'admin') {
+    return;
+  }
+
   const [partners, users] = await Promise.all([
     getStorageItem<Partner[]>(STORAGE_KEYS.PARTNERS),
     getStorageItem<User[]>(STORAGE_KEYS.USERS),

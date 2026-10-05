@@ -45,9 +45,16 @@ export default function PartnerHomeScreen() {
         try {
           const snapshot = await getPartnerDashboardSnapshot(false, true);
           if (!isCurrent) return;
+          const normalizePhone = (value?: string) => {
+            const digits = String(value || '').replace(/\D/g, '');
+            return /^0\d{9,11}$/.test(digits) ? `63${digits.slice(1)}` : digits;
+          };
           const owned = snapshot.partners.find((p: Partner) =>
             p.ownerUserId === user.id ||
-            (p.contactEmail && p.contactEmail.toLowerCase() === user.email?.toLowerCase())
+            (!p.ownerUserId && Boolean(
+              (p.contactEmail && p.contactEmail.toLowerCase() === user.email?.toLowerCase()) ||
+              (normalizePhone(p.contactPhone) && normalizePhone(p.contactPhone) === normalizePhone(user.phone))
+            ))
           );
           setPartner(owned || null);
         } catch {}

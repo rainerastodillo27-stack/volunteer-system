@@ -5049,7 +5049,49 @@ def _scope_volunteer_storage_collection(
     ]
 
 
-def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str]:
+def _get_partner_organization_ids(connection: Any, partner_user_id: str) -> set[str]:
+    """Return organization ids explicitly or uniquely linked to a partner user."""
+    normalized_user_id = str(partner_user_id or "").strip()
+    if not normalized_user_id:
+        return set()
+
+    user = _postgres_get_hot_item_by_id(
+        connection,
+        "users",
+        normalized_user_id,
+        include_media=False,
+    ) or {}
+    user_email = str(user.get("email") or "").strip().lower()
+    user_phone = _normalize_comparable_phone(user.get("phone"))
+    partner_records = get_postgres_hot_storage_collection(connection, "partners", include_images=False)
+    partner_ids: set[str] = set()
+    for partner in partner_records:
+        if not isinstance(partner, dict):
+            continue
+        owner_user_id = str(partner.get("ownerUserId") or partner.get("owner_user_id") or "").strip()
+        partner_id = str(partner.get("id") or "").strip()
+        if not partner_id:
+            continue
+        if owner_user_id:
+            if owner_user_id == normalized_user_id:
+                partner_ids.add(partner_id)
+            continue
+
+        partner_email = str(partner.get("contactEmail") or partner.get("contact_email") or "").strip().lower()
+        partner_phone = _normalize_comparable_phone(
+            partner.get("contactPhone") or partner.get("contact_phone")
+        )
+        if (user_email and partner_email == user_email) or (user_phone and partner_phone == user_phone):
+            partner_ids.add(partner_id)
+
+    return partner_ids
+
+
+def _get_partner_project_scope(
+    connection: Any,
+    partner_user_id: str,
+    partner_ids: set[str] | None = None,
+) -> set[str]:
     """Return projects/events a partner is allowed to inspect.
 
     Partner screens can still use the shared storage reader, but the server
@@ -5083,12 +5125,11 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
                     if target_id and not target_id.startswith("program:"):
                         project_ids.add(target_id)
 
-    partner_records = get_postgres_hot_storage_collection(connection, "partners", include_images=False)
-    partner_ids = {
-        str(partner.get("id") or "").strip()
-        for partner in partner_records
-        if str(partner.get("ownerUserId") or partner.get("owner_user_id") or "").strip() == normalized_user_id
-    }
+    scoped_partner_ids = (
+        partner_ids
+        if partner_ids is not None
+        else _get_partner_organization_ids(connection, normalized_user_id)
+    )
 
     scoped_projects: list[dict[str, Any]] = []
     for key in ("projects", "programs", "events"):
@@ -5104,7 +5145,7 @@ def _get_partner_project_scope(connection: Any, partner_user_id: str) -> set[str
                 or project.get("proposed_by_id")
                 or ""
             ).strip()
-            if record_partner_id in partner_ids or record_partner_id == normalized_user_id:
+            if record_partner_id in scoped_partner_ids or record_partner_id == normalized_user_id:
                 project_id = str(project.get("id") or "").strip()
                 if project_id:
                     project_ids.add(project_id)
@@ -5176,14 +5217,15 @@ def _scope_storage_collection(
         return scoped
 
     if role == "partner":
-        project_ids = _get_partner_project_scope(connection, session_user_id)
+        partner_ids = _get_partner_organization_ids(connection, session_user_id)
+        project_ids = _get_partner_project_scope(connection, session_user_id, partner_ids)
         if key == "users":
             return [item for item in items if str(item.get("id") or "").strip() == session_user_id or str(item.get("role") or "").strip() == "admin"]
         if key == "partners":
             return [
                 item
                 for item in items
-                if str(item.get("ownerUserId") or item.get("owner_user_id") or "").strip() == session_user_id
+                if str(item.get("id") or "").strip() in partner_ids
             ]
         if key == "partnerProjectApplications":
             return [item for item in items if str(item.get("partnerUserId") or "").strip() == session_user_id]
@@ -8591,8 +8633,9 @@ def _get_partner_login_block_reason(connection: Any, user: dict[str, Any]) -> st
         partner_email = str(partner.get("contactEmail") or "").strip().lower()
         partner_phone = _normalize_comparable_phone(partner.get("contactPhone"))
 
-        if owner_user_id and user_id and owner_user_id == user_id:
-            owned_partners.append(partner)
+        if owner_user_id:
+            if user_id and owner_user_id == user_id:
+                owned_partners.append(partner)
             continue
 
         if user_email and partner_email and partner_email == user_email:
@@ -9828,17 +9871,23 @@ async def approve_user(
                 if not linked_partners:
                     linked_partners = get_postgres_hot_storage_collection(connection, "partners")
                 for partner in linked_partners:
+                    owner_user_id = str(partner.get("ownerUserId") or "").strip()
                     if (
-                        str(partner.get("ownerUserId") or "") == user_id
+                        owner_user_id == user_id
                         or (
+                            not owner_user_id
+                            and
                             normalized_user_email
                             and str(partner.get("contactEmail") or "").strip().lower() == normalized_user_email
                         )
                         or (
+                            not owner_user_id
+                            and
                             normalized_user_phone
                             and _normalize_comparable_phone(partner.get("contactPhone")) == normalized_user_phone
                         )
                     ):
+                        partner["ownerUserId"] = user_id
                         partner["status"] = "Approved"
                         partner["validatedBy"] = admin_id
                         partner["validatedAt"] = approved_at
@@ -10679,14 +10728,14 @@ async def set_volunteer_attendance_check(
             partner_user_id = str(session.get("sub") or "").strip()
             if checked_by_user_id and checked_by_user_id != partner_user_id:
                 raise HTTPException(status_code=403, detail="You cannot mark attendance for another account.")
-            if not _partner_can_manage_approved_event(
+            if not _partner_can_manage_scoped_event(
                 connection,
                 partner_user_id,
                 str(log.get("projectId") or "").strip(),
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Only the partner who owns this approved proposal can mark its attendance.",
+                    detail="Only a partner with access to the parent project can mark its attendance.",
                 )
             checked_by_user_id = partner_user_id
         elif session_role != "admin":
@@ -11744,51 +11793,7 @@ async def review_volunteer_match(
     return {"match": updated_match}
 
 
-def _partner_has_approved_proposal_for_project(
-    connection: Any,
-    partner_user_id: str,
-    project_id: str,
-) -> bool:
-    """Check that a project was approved from this partner's proposal."""
-    normalized_user_id = str(partner_user_id or "").strip()
-    normalized_project_id = str(project_id or "").strip()
-    if not normalized_user_id or not normalized_project_id:
-        return False
-
-    proposal_fields = (
-        "proposedTitle",
-        "proposedDescription",
-        "proposedStartDate",
-        "proposedEndDate",
-        "proposedLocation",
-        "communityNeed",
-        "expectedDeliverables",
-    )
-    applications = _postgres_get_hot_items_by_field(
-        connection,
-        "partnerProjectApplications",
-        "partnerUserId",
-        normalized_user_id,
-        include_media=False,
-    )
-    for application in applications:
-        if str(application.get("status") or "").strip() != "Approved":
-            continue
-        details = application.get("proposalDetails")
-        details = details if isinstance(details, dict) else {}
-        application_project_id = str(application.get("projectId") or "").strip()
-        is_proposal = application_project_id.startswith("project-proposal-") or any(
-            str(details.get(field) or "").strip() for field in proposal_fields
-        )
-        if not is_proposal:
-            continue
-        approved_project_id = str(details.get("approvedProjectId") or "").strip()
-        if normalized_project_id in {application_project_id, approved_project_id}:
-            return True
-    return False
-
-
-def _partner_can_manage_approved_event(
+def _partner_can_manage_scoped_event(
     connection: Any,
     partner_user_id: str,
     event_id: str,
@@ -11814,7 +11819,7 @@ def _partner_can_manage_approved_event(
     return bool(
         parent_project
         and not bool(parent_project.get("isEvent"))
-        and _partner_has_approved_proposal_for_project(connection, partner_user_id, parent_project_id)
+        and parent_project_id in _get_partner_project_scope(connection, partner_user_id)
     )
 
 
@@ -11824,7 +11829,7 @@ async def save_partner_event(
     event_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Create an event or update its tasks under the partner's approved proposal."""
+    """Create an event or update its tasks under a project in the partner's workspace."""
     session = _get_session_user(request)
     if _normalize_role(session) != "partner":
         raise HTTPException(status_code=403, detail="Only partner accounts can use this event workflow.")
@@ -11841,7 +11846,7 @@ async def save_partner_event(
 
     parent_project_id = str(event.get("parentProjectId") or "").strip()
     if not parent_project_id:
-        raise HTTPException(status_code=400, detail="Choose an approved proposal project for this event.")
+        raise HTTPException(status_code=400, detail="Choose a project from your partner workspace for this event.")
 
     event["id"] = normalized_event_id
     event["isEvent"] = True
@@ -11871,11 +11876,11 @@ async def save_partner_event(
                 include_media=False,
             )
             if parent_project is None or bool(parent_project.get("isEvent")):
-                raise HTTPException(status_code=404, detail="Approved parent project was not found.")
-            if not _partner_has_approved_proposal_for_project(connection, partner_user_id, parent_project_id):
+                raise HTTPException(status_code=404, detail="Parent project was not found.")
+            if parent_project_id not in _get_partner_project_scope(connection, partner_user_id):
                 raise HTTPException(
                     status_code=403,
-                    detail="Events can only be created under a project approved from your partner proposal.",
+                    detail="Events can only be created under a project in your partner workspace.",
                 )
 
             if existing_event is not None:
@@ -11883,14 +11888,14 @@ async def save_partner_event(
                 if (
                     not bool(existing_event.get("isEvent"))
                     or existing_parent_id != parent_project_id
-                    or not _partner_can_manage_approved_event(
+                    or not _partner_can_manage_scoped_event(
                         connection,
                         partner_user_id,
                         normalized_event_id,
                         event_record=existing_event,
                     )
                 ):
-                    raise HTTPException(status_code=403, detail="You can only manage events under your approved proposals.")
+                    raise HTTPException(status_code=403, detail="You can only manage events under projects in your partner workspace.")
                 # Partner updates through this route are task-board changes only.
                 # Preserve event details, attendance, membership and other
                 # operational fields from the canonical server record.
@@ -12108,7 +12113,7 @@ async def update_event_task_assignments(
 
         role = _normalize_role(session)
         if role == "partner":
-            if not _partner_can_manage_approved_event(
+            if not _partner_can_manage_scoped_event(
                 connection,
                 str(session.get("sub") or "").strip(),
                 normalized_event_id,
@@ -12116,7 +12121,7 @@ async def update_event_task_assignments(
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Only the partner who owns this approved proposal can manage its event tasks.",
+                    detail="Only a partner with access to the parent project can manage its event tasks.",
                 )
         elif role != "admin":
             if role != "volunteer" or not _user_is_field_officer_for_event(

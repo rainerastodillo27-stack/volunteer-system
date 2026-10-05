@@ -136,6 +136,13 @@ function getProposalImageSource(application?: PartnerProjectApplication) {
   return imageUri ? { uri: imageUri } : undefined;
 }
 
+function isPartnerProjectsNetworkError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : String((error as { message?: unknown } | null)?.message || error || '');
+  return /network request failed|failed to fetch|fetch failed|unknownhostexception|unable to resolve host|timed out|connection (?:refused|reset)/i.test(message);
+}
+
 export default function PartnerProjectsScreen({ route }: any) {
   const { user } = useAuth();
   const navigation = useNavigation<any>();
@@ -202,10 +209,17 @@ export default function PartnerProjectsScreen({ route }: any) {
         });
     } catch (error) {
       if (requestGeneration !== loadGenerationRef.current) return;
-      setLoadError({
-        title: getRequestErrorTitle(error, 'Unable to load projects'),
-        message: getRequestErrorMessage(error, 'Failed to load your tracked partner projects.'),
-      });
+      setLoadError(
+        isPartnerProjectsNetworkError(error)
+          ? {
+              title: 'Network error',
+              message: 'Unable to connect right now. Check your connection and try again.',
+            }
+          : {
+              title: getRequestErrorTitle(error, 'Unable to load projects'),
+              message: getRequestErrorMessage(error, 'Failed to load your tracked partner projects.'),
+            }
+      );
     } finally {
       if (requestGeneration === loadGenerationRef.current) {
         setLoading(false);
@@ -407,10 +421,18 @@ export default function PartnerProjectsScreen({ route }: any) {
         <View style={styles.errorCard}>
           <Text style={styles.errorTitle}>{loadError.title}</Text>
           <Text style={styles.errorText}>{loadError.message}</Text>
+          <TouchableOpacity
+            accessibilityRole="button"
+            disabled={refreshing}
+            onPress={handleRefresh}
+            style={[styles.retryButton, refreshing && styles.retryButtonDisabled]}
+          >
+            <Text style={styles.retryButtonText}>{refreshing ? 'Retrying...' : 'Retry'}</Text>
+          </TouchableOpacity>
         </View>
       ) : null}
 
-      {projectMetrics.length === 0 ? (
+      {!loadError && projectMetrics.length === 0 ? (
         <View style={styles.emptyCard}>
           <MaterialIcons name="assignment" size={26} color="#64748b" />
           <Text style={styles.emptyTitle}>No approved projects yet</Text>
@@ -819,6 +841,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: '#7f1d1d',
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    borderRadius: 10,
+    backgroundColor: '#991b1b',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  retryButtonDisabled: {
+    opacity: 0.65,
+  },
+  retryButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '800',
   },
   emptyCard: {
     alignItems: 'center',

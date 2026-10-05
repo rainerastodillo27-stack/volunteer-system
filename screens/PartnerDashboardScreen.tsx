@@ -527,9 +527,20 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
       }
 
+      const normalizePhone = (value?: string) => {
+        const digits = String(value || '').replace(/\D/g, '');
+        return /^0\d{9,11}$/.test(digits) ? `63${digits.slice(1)}` : digits;
+      };
 
-
-      return partner.contactEmail?.toLowerCase() === user.email?.toLowerCase();
+      const emailMatches = Boolean(
+        partner.contactEmail?.trim() &&
+        partner.contactEmail.trim().toLowerCase() === user.email?.trim().toLowerCase()
+      );
+      const phoneMatches = Boolean(
+        normalizePhone(partner.contactPhone) &&
+        normalizePhone(partner.contactPhone) === normalizePhone(user.phone)
+      );
+      return emailMatches || phoneMatches;
 
     },
 
