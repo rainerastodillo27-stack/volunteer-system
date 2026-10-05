@@ -5,6 +5,7 @@ import {
   View,
   Text,
   StyleSheet,
+  Image,
   ScrollView,
   TouchableOpacity,
   Alert,
@@ -863,6 +864,10 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
     const pillarsOfInterest = selectedUser?.pillarsOfInterest || [];
     const userType: UserType | undefined = selectedUser?.userType;
     const profileName = (selectedUser?.name || selectedVolunteer.name || '').trim() || 'Unnamed volunteer';
+    const legacyVolunteerPhoto = (selectedVolunteer as Volunteer & { profilePhoto?: string }).profilePhoto;
+    const profilePhotoUri = [selectedUser?.profilePhoto, legacyVolunteerPhoto]
+      .find(photo => typeof photo === 'string' && photo.trim())
+      ?.trim();
     const profileEmail = (selectedUser?.email || selectedVolunteer.email || '').trim().toLowerCase();
     const profilePhone = (selectedUser?.phone || selectedVolunteer.phone || '').trim();
     const profileSocialMedia = mergeSocialMediaInfo(
@@ -919,7 +924,15 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               <View style={styles.applicationCardTopRow}>
                 <View style={[styles.applicationAvatarRow, { marginBottom: 0, flex: 1 }]}>
                   <View style={styles.applicationAvatar}>
-                    <Text style={styles.applicationAvatarText}>{profileName.charAt(0)}</Text>
+                    {profilePhotoUri && isImageMediaUri(profilePhotoUri) ? (
+                      <Image
+                        source={{ uri: profilePhotoUri }}
+                        style={styles.applicationAvatarImage}
+                        accessibilityLabel={`${profileName} profile photo`}
+                      />
+                    ) : (
+                      <Text style={styles.applicationAvatarText}>{profileName.charAt(0).toUpperCase()}</Text>
+                    )}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.applicationName}>{profileName}</Text>
@@ -1176,7 +1189,15 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
               <View style={styles.applicationCardTopRow}>
                 <View style={[styles.applicationAvatarRow, { marginBottom: 0, flex: 1 }]}>
                   <View style={styles.applicationAvatar}>
-                    <Text style={styles.applicationAvatarText}>{profileName.charAt(0)}</Text>
+                    {profilePhotoUri && isImageMediaUri(profilePhotoUri) ? (
+                      <Image
+                        source={{ uri: profilePhotoUri }}
+                        style={styles.applicationAvatarImage}
+                        accessibilityLabel={`${profileName} profile photo`}
+                      />
+                    ) : (
+                      <Text style={styles.applicationAvatarText}>{profileName.charAt(0).toUpperCase()}</Text>
+                    )}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.applicationName}>{profileName}</Text>
@@ -2800,6 +2821,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#8b5cf6',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  applicationAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 29,
   },
   applicationAvatarText: {
     color: '#fff',
