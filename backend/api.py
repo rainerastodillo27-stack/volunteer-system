@@ -4220,9 +4220,10 @@ def _event_duplicate_date(value: Any) -> str:
         return match.group(1) if match else _normalize_event_duplicate_text(text)
 
 
-def _event_duplicate_signature(item: dict[str, Any]) -> tuple[str, str, str] | None:
+def _event_duplicate_signature(item: dict[str, Any]) -> tuple[str, str, str, str] | None:
     title = _normalize_event_duplicate_text(item.get("title"))
     start_date = _event_duplicate_date(item.get("startDate"))
+    end_date = _event_duplicate_date(item.get("endDate") or item.get("startDate"))
     location_value = item.get("location")
     if isinstance(location_value, dict):
         location_value = (
@@ -4233,12 +4234,16 @@ def _event_duplicate_signature(item: dict[str, Any]) -> tuple[str, str, str] | N
     location = _normalize_event_duplicate_text(location_value)
     if not title or not start_date or not location:
         return None
-    return title, start_date, location
+    return title, start_date, end_date, location
 
 
 def _raise_duplicate_event_error(item: dict[str, Any], existing: dict[str, Any]) -> None:
     title = str(item.get("title") or existing.get("title") or "Untitled event").strip()
-    date = _event_duplicate_date(item.get("startDate")) or "the same date"
+    start_date = _event_duplicate_date(item.get("startDate"))
+    end_date = _event_duplicate_date(item.get("endDate") or item.get("startDate"))
+    date = start_date or "the same date"
+    if end_date and end_date != start_date:
+        date = f"{start_date} to {end_date}"
     location_value = item.get("location")
     if isinstance(location_value, dict):
         location_value = location_value.get("address") or location_value.get("venue")
@@ -4290,7 +4295,7 @@ def _normalize_named_duplicate_text(value: Any) -> str:
 def _named_duplicate_signature(
     key: str,
     item: dict[str, Any],
-) -> tuple[str, str] | None:
+) -> tuple[str, ...] | None:
     """Return the duplicate-check scope and normalized title for a record."""
     title = _normalize_named_duplicate_text(item.get("title"))
     if not title:
@@ -4304,12 +4309,15 @@ def _named_duplicate_signature(
         return "program", title
 
     if key == "projects":
-        # A project name is unique within its parent program. An empty parent
-        # is one shared top-level scope for projects without a program.
+        # Allow a project title to recur within one program when its schedule
+        # differs. An empty parent is one shared top-level scope for projects
+        # without a program.
         if item.get("isEvent"):
             return None
         parent_id = _normalize_named_duplicate_text(item.get("parentProjectId"))
-        return f"project:{parent_id}", title
+        start_date = _event_duplicate_date(item.get("startDate"))
+        end_date = _event_duplicate_date(item.get("endDate") or item.get("startDate"))
+        return f"project:{parent_id}", title, start_date, end_date
 
     return None
 
@@ -4329,11 +4337,17 @@ def _raise_duplicate_named_item_error(
             ),
         )
 
+    start_date = _event_duplicate_date(item.get("startDate"))
+    end_date = _event_duplicate_date(item.get("endDate") or item.get("startDate"))
+    schedule = start_date or end_date or "the same unscheduled dates"
+    if start_date and end_date and end_date != start_date:
+        schedule = f"{start_date} to {end_date}"
+
     raise HTTPException(
         status_code=409,
         detail=(
-            f'A project named "{title}" already exists in this program. '
-            "Choose a different project name or edit the existing project."
+            f'A project named "{title}" already exists in this program for {schedule}. '
+            "Choose different dates or edit the existing project."
         ),
     )
 
@@ -4355,7 +4369,7 @@ def _reject_duplicate_named_writes(
         for item in incoming_records
         if str(item.get("id") or "").strip()
     }
-    existing_by_signature: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    existing_by_signature: dict[tuple[str, ...], list[dict[str, Any]]] = {}
     for existing in get_postgres_hot_storage_collection(connection, key):
         if not isinstance(existing, dict):
             continue
@@ -4368,7 +4382,7 @@ def _reject_duplicate_named_writes(
         if signature:
             existing_by_signature.setdefault(signature, []).append(existing)
 
-    incoming_by_signature: dict[tuple[str, str], dict[str, Any]] = {}
+    incoming_by_signature: dict[tuple[str, ...], dict[str, Any]] = {}
     for item in incoming_records:
         signature = _named_duplicate_signature(key, item)
         if not signature:
@@ -11046,6 +11060,7 @@ async def review_partner_project_application(
                 "statusUpdates": [],
                 "internalTasks": [],
             }
+            _reject_duplicate_named_writes(connection, "projects", [generated_project])
             _postgres_upsert_hot_item(connection, "projects", generated_project)
             next_project_id = created_project_id
             broadcast_keys.append("projects")
