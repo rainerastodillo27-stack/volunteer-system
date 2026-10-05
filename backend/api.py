@@ -1014,6 +1014,58 @@ def _event_join_closed_message(project: dict[str, Any]) -> str | None:
     return None
 
 
+def _cancel_pending_requests_for_closed_events(connection: Any) -> int:
+    """Cancel pending volunteer requests for events that have ended or closed."""
+    events_by_id: dict[str, dict[str, Any]] = {}
+    for storage_key in ("events", "projects"):
+        for event in get_postgres_hot_storage_collection(connection, storage_key, include_images=False):
+            if not isinstance(event, dict) or not bool(event.get("isEvent")):
+                continue
+            event_id = str(event.get("id") or "").strip()
+            if event_id:
+                events_by_id.setdefault(event_id, event)
+
+    if not events_by_id:
+        return 0
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    changed_count = 0
+    for match in get_postgres_hot_storage_collection(connection, "volunteerMatches", include_images=False):
+        if not isinstance(match, dict) or str(match.get("status") or "").strip() != "Requested":
+            continue
+        event = events_by_id.get(str(match.get("projectId") or "").strip())
+        if event is None or _get_project_display_status(event) not in {"Completed", "Cancelled"}:
+            continue
+
+        _postgres_upsert_hot_item(
+            connection,
+            "volunteerMatches",
+            {
+                **match,
+                "status": "Cancelled",
+                "reviewedAt": now_iso,
+                "reviewedBy": "system",
+            },
+        )
+        changed_count += 1
+
+    if changed_count:
+        connection.commit()
+        _invalidate_collection_cache(["volunteerMatches"])
+        loop = _realtime_event_loop
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                connection_manager.broadcast_storage_event(["volunteerMatches"]),
+                loop,
+            )
+        print(
+            f"[EVENTS] Automatically cancelled {changed_count} pending request(s) for closed events.",
+            flush=True,
+        )
+
+    return changed_count
+
+
 def _event_occurrence_is_scheduled_today(project: dict[str, Any], now: datetime | None = None) -> bool:
     """Return whether attendance is valid for today's event occurrence.
 
@@ -1894,6 +1946,11 @@ def _event_reminder_scheduler_loop() -> None:
                 print(f"[REMINDER] Delivered {result['sent']} event reminder(s).")
         except Exception as error:
             print(f"[REMINDER] Reminder check skipped: {error}")
+        try:
+            with get_connection() as connection:
+                _cancel_pending_requests_for_closed_events(connection)
+        except Exception as error:
+            print(f"[EVENTS] Pending-request cleanup skipped: {type(error).__name__}", flush=True)
         time.sleep(REMINDER_CHECK_INTERVAL_SECONDS)
 
 
@@ -7659,6 +7716,12 @@ def startup() -> None:
         except Exception as error:
             print(f"[WARN] Event volunteer reconciliation skipped: {error}")
 
+        try:
+            with get_connection() as connection:
+                _cancel_pending_requests_for_closed_events(connection)
+        except Exception as error:
+            print(f"[WARN] Closed-event request cleanup skipped: {type(error).__name__}", flush=True)
+
         # Ensure core programs exist
         try:
             _ensure_core_programs_exist()
@@ -11438,6 +11501,7 @@ async def review_volunteer_match(
 
     broadcast_keys = ["volunteerMatches"]
     with get_connection() as connection:
+        _cancel_pending_requests_for_closed_events(connection)
         match = _postgres_get_hot_item_by_id(connection, "volunteerMatches", match_id)
         if match is None:
             raise HTTPException(status_code=404, detail="Volunteer request not found.")
