@@ -60,19 +60,22 @@ from .auth import (
     verify_session_token,
 )
 from .db import (
+    DatabaseBusyError,
+    close_postgres_pool,
     get_configured_db_mode,
     get_db_mode,
-    get_postgres_connection,
     get_connection,
     get_postgres_status,
     init_postgres_pool,
     _is_retryable_connection_error,
+    _get_pool_max_size,
 )
 from .field_rules import is_valid_email, normalize_comparable_phone, normalize_ph_mobile_phone
 from .image_compression import compress_base64_image, get_image_size_kb
 from .password_utils import hash_password, is_bcrypt_hash, verify_password
 from .realtime_bus import publish as publish_realtime_event
 from .realtime_bus import start as start_realtime_bus
+from .realtime_bus import stop as stop_realtime_bus
 from .relational_mirror import (
     TABLE_SPECS,
     LIGHTWEIGHT_MEDIA_COLUMNS,
@@ -122,6 +125,12 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+@app.exception_handler(DatabaseBusyError)
+async def database_busy_response(request: FastAPIRequest, error: DatabaseBusyError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(error)}, headers={"Retry-After": "2"})
+
 
 PUBLIC_API_PATHS = {
     "/health",
@@ -7969,6 +7978,12 @@ def _start_google_calendar_scheduler() -> None:
     threading.Thread(target=_google_calendar_scheduler_loop, daemon=True).start()
 
 
+@app.on_event("shutdown")
+def shutdown() -> None:
+    stop_realtime_bus()
+    close_postgres_pool()
+
+
 @app.on_event("startup")
 # Prepares storage tables when the FastAPI app starts.
 def startup() -> None:
@@ -8256,7 +8271,8 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
     username_alias = _get_email_username_alias(identifier)
     comparable_phone = normalize_comparable_phone(identifier)
     raw_digits = "".join(character for character in str(identifier or "") if character.isdigit())
-    _require_postgres()
+    if connection is None:
+        _require_postgres()
 
     def query_user(active_connection: Any) -> dict[str, Any] | None:
         with active_connection.cursor() as cursor:
@@ -8300,7 +8316,6 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
 
 # Retrieves a user by their ID.
 def _get_user_by_id(user_id: str, connection: Any) -> dict[str, Any] | None:
-    _require_postgres()
     return _postgres_get_hot_item_by_id(connection, "users", user_id)
 
 
@@ -8583,13 +8598,11 @@ def _reconcile_partner_proposal_submission_cards(
 
 # Retrieves all users from storage.
 def _get_all_users_from_storage(connection: Any) -> list[dict[str, Any]]:
-    _require_postgres()
     return get_postgres_hot_storage_collection(connection, "users")
 
 
 # Saves a user to storage.
 def _save_user_to_storage(user: dict[str, Any], connection: Any) -> None:
-    _require_postgres()
     _postgres_upsert_hot_item(connection, "users", user)
     connection.commit()
 
@@ -11109,6 +11122,7 @@ async def request_partner_project_join(
         else requested_project_id
     )
 
+    application: dict[str, Any] | None = None
     with get_connection() as connection:
         target_project: dict[str, Any] | None = None
         target_project_id = str((payload.proposalDetails or {}).get("targetProjectId") or "").strip()
@@ -11166,41 +11180,24 @@ async def request_partner_project_join(
                         "reviewedBy": None,
                         "reviewNotes": None,
                     }
-                    # Keep the response and the background proposal card on the
-                    # same compressed attachment payload stored in the database.
-                    refreshed_application = _postgres_upsert_hot_item(
-                        connection,
-                        "partnerProjectApplications",
-                        refreshed_application,
-                    )
-                    connection.commit()
-                    _invalidate_collection_cache(["partnerProjectApplications"])
-                    _projects_snapshot_cache.clear()
-                    asyncio.create_task(connection_manager.broadcast_storage_event(["partnerProjectApplications"]))
-                    submission_message = await _create_proposal_submission_message(
-                        refreshed_application,
-                        payload.partnerUserId,
-                    )
-                    response: dict[str, Any] = {"application": refreshed_application}
-                    if submission_message is not None:
-                        response["message"] = submission_message
-                    return response
+                    application = refreshed_application
 
-        application = {
-            "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{secrets.token_hex(4)}",
-            "projectId": proposal_project_id,
-            "partnerUserId": payload.partnerUserId,
-            "partnerName": payload.partnerName,
-            "partnerEmail": payload.partnerEmail,
-            "proposalDetails": _normalize_partner_proposal_details(
-                payload.proposalDetails,
-                requested_program_module,
-                target_project,
-            ),
-            "status": "Pending",
-            "requestedAt": datetime.now(timezone.utc).isoformat(),
-            "revisionNumber": 0,
-        }
+        if application is None:
+            application = {
+                "id": f"partner-application-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{secrets.token_hex(4)}",
+                "projectId": proposal_project_id,
+                "partnerUserId": payload.partnerUserId,
+                "partnerName": payload.partnerName,
+                "partnerEmail": payload.partnerEmail,
+                "proposalDetails": _normalize_partner_proposal_details(
+                    payload.proposalDetails,
+                    requested_program_module,
+                    target_project,
+                ),
+                "status": "Pending",
+                "requestedAt": datetime.now(timezone.utc).isoformat(),
+                "revisionNumber": 0,
+            }
         # Use the normalized stored record below.  Previously the async card
         # writer received the original photo data and duplicated large images
         # into the messages table.
@@ -14121,10 +14118,9 @@ def get_storage_items_batch(
             return key, value
 
         # Use ThreadPoolExecutor to parallelize database queries
-        # Limit to number of keys to avoid excessive connections
-        # Keep one batch within the pool while allowing the second wave of
-        # collections to start quickly on a cold cache.
-        max_workers = min(len(keys), 8)
+        # Leave one pooled connection for approvals, messages, and attendance
+        # while a large screen loads its collections.
+        max_workers = min(len(keys), max(1, _get_pool_max_size() - 1))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_fetch_collection, key): key for key in keys}
             for future in as_completed(futures):
@@ -14206,9 +14202,8 @@ def get_admin_dashboard_snapshot(request: FastAPIRequest) -> dict[str, Any]:
                         include_images=False,
                     )
 
-            # Keep headroom in the ten-connection pool for user actions while
-            # still parallelizing the cold dashboard build.
-            max_workers = min(len(_ADMIN_DASHBOARD_KEYS), 4)
+            # Respect the actual per-worker pool and leave room for user actions.
+            max_workers = min(len(_ADMIN_DASHBOARD_KEYS), max(1, _get_pool_max_size() - 1))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(_fetch_admin_key, key): key for key in _ADMIN_DASHBOARD_KEYS}
                 for future in as_completed(futures):

@@ -1,6 +1,7 @@
 import os
 import time
 import contextlib
+import threading
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -12,9 +13,11 @@ except ImportError:  # pragma: no cover - dependency is required for runtime
     psycopg = None
 
 try:
-    from psycopg_pool import ConnectionPool
+    from psycopg_pool import ConnectionPool, PoolTimeout, TooManyRequests
 except ImportError:  # pragma: no cover - optional for connection pooling
     ConnectionPool = None
+    PoolTimeout = None
+    TooManyRequests = None
 
 
 POSTGRES_PROBE_CACHE_TTL_SECONDS = 60
@@ -26,12 +29,16 @@ _POSTGRES_PROBE_CACHE: dict[str, Any] = {
 _POSTGRES_LAST_SUCCESSFUL_URL: str | None = None
 _POSTGRES_CANDIDATE_FAILURES: dict[str, dict[str, Any]] = {}
 _POSTGRES_CONNECTION_POOL: Any = None
+_POSTGRES_POOL_INIT_LOCK = threading.Lock()
+
+
+class DatabaseBusyError(RuntimeError):
+    """A bounded database pool cannot accept another request right now."""
 
 
 def _get_pool_min_size() -> int:
-    # The VPS runs multiple API workers against a Supabase session pool.
-    # Keep the default footprint small enough that workers cannot exhaust the
-    # provider's shared connection limit before DB_POOL_MAX_SIZE is configured.
+    # Each API worker has a bounded pool of transaction-mode clients. Realtime
+    # LISTEN uses its own single session, outside this pool.
     raw_value = os.getenv("DB_POOL_MIN_SIZE", "1").strip()
     try:
         return max(1, int(raw_value))
@@ -177,17 +184,21 @@ def _get_database_url_candidates() -> list[str]:
             candidates.append(normalized_value)
 
     if primary_url:
-        # The transaction pooler (6543) is useful for short stateless bursts,
-        # but this backend keeps a connection pool and performs several quick
-        # reads per request. Prefer the session pooler when Supabase exposes
-        # the equivalent 5432 endpoint, then retain the configured URL as a
-        # safe fallback.
-        session_url = _to_session_pooler_database_url(primary_url)
-        if session_url:
-            add_candidate(session_url)
+        # Honor the configured transaction endpoint. Rewriting it to session
+        # mode reserves one scarce server session for every idle pool client.
         add_candidate(primary_url)
 
     return candidates
+
+
+def _get_session_database_url_candidates() -> list[str]:
+    """Return a session endpoint for LISTEN, never a transaction fallback."""
+    load_environment()
+    database_url = os.getenv("SUPABASE_DB_SESSION_URL", "").strip() or _get_raw_database_url()
+    if not database_url:
+        return []
+    session_url = _to_session_pooler_database_url(database_url)
+    return [_normalize_database_url(session_url or database_url)]
 
 
 # Returns whether one candidate should stay in cooldown before another retry.
@@ -435,6 +446,13 @@ def get_postgres_connection():
 
 # Initializes the connection pool when the app starts
 def init_postgres_pool() -> None:
+    # Startup, background jobs, and early HTTP requests may arrive together.
+    # Only one caller may create this worker's pool.
+    with _POSTGRES_POOL_INIT_LOCK:
+        _initialize_postgres_pool()
+
+
+def _initialize_postgres_pool() -> None:
     global _POSTGRES_CONNECTION_POOL
     if _POSTGRES_CONNECTION_POOL is not None:
         return  # Pool already initialized
@@ -447,22 +465,9 @@ def init_postgres_pool() -> None:
         return
 
     connect_timeout = _get_connect_timeout()
-    candidate_timeout = _get_candidate_connect_timeout()
-
-    # Find the first reachable candidate URL before committing the pool to it.
-    database_url = None
-    for url in candidates:
-        try:
-            with psycopg.connect(url, connect_timeout=candidate_timeout) as probe:
-                probe.execute("select 1")
-            database_url = url
-            break
-        except Exception as exc:
-            print(f"[WARN] Pool candidate unreachable ({urlsplit(url).hostname}): {exc}")
-
-    if database_url is None:
-        print("[WARN] All DB candidates unreachable; connection pool not initialized")
-        return
+    # The pool opens/checks connections in its own background workers. Avoid
+    # an extra direct probe and let early requests wait on this same pool.
+    database_url = candidates[0]
 
     try:
         pool_min_size = _get_pool_min_size()
@@ -472,6 +477,8 @@ def init_postgres_pool() -> None:
             database_url,
             min_size=pool_min_size,
             max_size=pool_max_size,
+            max_waiting=64,
+            open=True,
             timeout=connect_timeout * 2,  # Timeout waiting for available connection
             max_idle=60.0,  # Close idle connections after 60s to prevent stale server-side drops
             max_lifetime=300.0,  # Recycle connections after 5m
@@ -487,47 +494,39 @@ def init_postgres_pool() -> None:
                 "keepalives_count": 5,
             }
         )
-        print(f"[OK] Postgres connection pool initialized (min={pool_min_size}, max={pool_max_size}) using {urlsplit(database_url).hostname}")
+        endpoint = urlsplit(database_url)
+        print(f"[OK] Postgres connection pool initialized (min={pool_min_size}, max={pool_max_size}) using {endpoint.hostname}:{endpoint.port or 5432}")
     except Exception as exc:
         print(f"[WARN] Failed to initialize Postgres connection pool: {exc}")
         _POSTGRES_CONNECTION_POOL = None
 
 
 
-# Returns a connection from the pool if available, otherwise creates a direct connection
+# Returns a bounded pooled connection for API and background work.
 @contextlib.contextmanager
 def get_pooled_postgres_connection():
-    """Get a database connection from the pool if available, otherwise create a direct connection."""
+    """Queue behind the worker's pool instead of bypassing its size limit."""
     global _POSTGRES_CONNECTION_POOL
-    if _POSTGRES_CONNECTION_POOL is not None:
-        yielded_connection = False
-        try:
-            with _POSTGRES_CONNECTION_POOL.connection() as conn:
-                # Once the connection has been yielded, exceptions belong to the
-                # caller's transaction.  Falling through to a second ``yield``
-                # from this except block violates contextlib's generator contract
-                # and raises ``RuntimeError: generator didn't stop after throw()``.
-                yielded_connection = True
-                yield conn
-                return
-        except Exception as exc:
-            if yielded_connection:
-                raise
-            if _is_retryable_connection_error(exc) or "pool" in str(exc).lower():
-                print(f"[WARN] Pool connection error: {exc}. Retrying with direct connection.")
-            else:
-                raise
-
-    conn = get_postgres_connection()
+    if ConnectionPool is None:
+        raise RuntimeError("Database connection pooling is unavailable. Install the backend dependencies.")
+    if _POSTGRES_CONNECTION_POOL is None:
+        init_postgres_pool()
+        if _POSTGRES_CONNECTION_POOL is None:
+            raise RuntimeError("The database connection pool could not be initialized.")
     try:
-        # Use connection as context manager for transaction handling
-        with conn:
+        with _POSTGRES_CONNECTION_POOL.connection() as conn:
             yield conn
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    except Exception as exc:
+        capacity_errors = tuple(error for error in (PoolTimeout, TooManyRequests) if error is not None)
+        if isinstance(exc, capacity_errors):
+            raise DatabaseBusyError("The database is busy. Please wait a moment and try again.") from exc
+        raise
+
+
+def close_postgres_pool() -> None:
+    """Release this worker's pooled connections during graceful shutdown."""
+    if _POSTGRES_CONNECTION_POOL is not None:
+        _POSTGRES_CONNECTION_POOL.close(timeout=5)
 
 
 # Returns the default backend database connection.

@@ -2397,11 +2397,9 @@ def ensure_relational_mirror_tables(connection: Any) -> None:
 
         try:
             with connection.cursor() as cursor:
-                try:
-                    cursor.execute("SET statement_timeout = '60s'")
-                except Exception:
-                    pass
-
+                # DDL runs one autocommit statement at a time. A session SET
+                # here would leak to another borrower of the transaction
+                # pooler; keep the database's default timeout instead.
                 for idx, statement in enumerate(RELATIONAL_TABLE_DDL):
                     _t0 = _time.perf_counter()
                     _trace(f"[TRACE] ensure_relational_mirror_tables: executing DDL #{idx}")
@@ -2555,7 +2553,7 @@ def get_relational_collection(
     with connection.cursor(row_factory=dict_row) as cursor:
         # Set a shorter per-query timeout since we're doing targeted queries
         try:
-            cursor.execute("SET statement_timeout = '30s'")
+            cursor.execute("SET LOCAL statement_timeout = '30s'")
         except Exception:
             pass  # If timeout setting fails, continue with default
         query = f"select {', '.join(select_expressions)} from {spec['table']}"

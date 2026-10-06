@@ -3590,7 +3590,7 @@ export default function CommunicationHubScreen({ navigation, route }: any) {
       // the canonical record so an old pending card cannot remain actionable.
       void loadData(true).catch(() => null);
 
-      Alert.alert('Error', 'Failed to complete review.');
+      Alert.alert('Unable to Review Proposal', getRequestErrorMessage(e, 'Failed to complete review. Please try again.'));
 
     } finally {
 

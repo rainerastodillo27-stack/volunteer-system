@@ -8,14 +8,12 @@ changing the client protocol.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import threading
-import time
 from collections.abc import Callable
 from typing import Any
 
-from .db import _get_connect_timeout, _get_database_url_candidates
+from .db import _get_connect_timeout, _get_session_database_url_candidates, get_connection
 
 try:
     import psycopg
@@ -28,8 +26,8 @@ MAX_NOTIFY_BYTES = 7_500
 _ORIGIN = secrets.token_urlsafe(12)
 _state_lock = threading.Lock()
 _publisher_lock = threading.Lock()
-_publisher_connection: Any = None
 _listener_thread: threading.Thread | None = None
+_listener_connection: Any = None
 _listener_callback: Callable[[dict[str, Any]], None] | None = None
 _stop_event = threading.Event()
 
@@ -39,7 +37,9 @@ def _open_connection() -> Any:
         return None
 
     last_error: Exception | None = None
-    for database_url in _get_database_url_candidates():
+    # LISTEN subscriptions belong to a session and cannot use a transaction
+    # pooler. Only the listener needs its own long-lived database connection.
+    for database_url in _get_session_database_url_candidates():
         try:
             return psycopg.connect(
                 database_url,
@@ -60,21 +60,8 @@ def _open_connection() -> Any:
     return None
 
 
-def _close_publisher_connection() -> None:
-    global _publisher_connection
-    connection = _publisher_connection
-    _publisher_connection = None
-    if connection is not None:
-        try:
-            connection.close()
-        except Exception:
-            pass
-
-
 def publish(event: dict[str, Any]) -> bool:
     """Publish one compact event without blocking the API request path."""
-    global _publisher_connection
-
     envelope = {"origin": _ORIGIN, "event": event}
     payload = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
     if len(payload.encode("utf-8")) > MAX_NOTIFY_BYTES:
@@ -82,22 +69,22 @@ def publish(event: dict[str, Any]) -> bool:
 
     with _publisher_lock:
         try:
-            if _publisher_connection is None or _publisher_connection.closed:
-                _publisher_connection = _open_connection()
-            if _publisher_connection is None:
-                return False
-            _publisher_connection.execute(
-                "select pg_notify('volcre_realtime', %s)",
-                (payload,),
-            )
+            # NOTIFY is delivered when the transaction commits. Borrow the
+            # bounded API pool so every worker does not pin a second dedicated
+            # session solely for publication.
+            with get_connection() as connection:
+                connection.execute(
+                    "select pg_notify('volcre_realtime', %s)",
+                    (payload,),
+                )
             return True
         except Exception as error:  # pragma: no cover - depends on deployment DB
             print(f"[WARN] Realtime publish skipped: {type(error).__name__}: {error}", flush=True)
-            _close_publisher_connection()
             return False
 
 
 def _listen_forever() -> None:
+    global _listener_connection
     while not _stop_event.is_set():
         connection = None
         try:
@@ -105,6 +92,12 @@ def _listen_forever() -> None:
             if connection is None:
                 _stop_event.wait(5)
                 continue
+
+            with _state_lock:
+                if _stop_event.is_set():
+                    connection.close()
+                    return
+                _listener_connection = connection
 
             with connection.cursor() as cursor:
                 cursor.execute(f"listen {REALTIME_CHANNEL}")
@@ -132,9 +125,13 @@ def _listen_forever() -> None:
                     except Exception as error:
                         print(f"[WARN] Invalid realtime event ignored: {type(error).__name__}", flush=True)
         except Exception as error:  # pragma: no cover - depends on deployment DB
-            print(f"[WARN] Cross-worker realtime listener reconnecting: {type(error).__name__}: {error}", flush=True)
-            _stop_event.wait(2)
+            if not _stop_event.is_set():
+                print(f"[WARN] Cross-worker realtime listener reconnecting: {type(error).__name__}: {error}", flush=True)
+                _stop_event.wait(2)
         finally:
+            with _state_lock:
+                if _listener_connection is connection:
+                    _listener_connection = None
             if connection is not None:
                 try:
                     connection.close()
@@ -160,6 +157,20 @@ def start(callback: Callable[[dict[str, Any]], None]) -> None:
 
 def stop() -> None:
     """Best-effort cleanup for tests and graceful process shutdown."""
+    global _listener_thread
     _stop_event.set()
-    with _publisher_lock:
-        _close_publisher_connection()
+    with _state_lock:
+        connection = _listener_connection
+        listener_thread = _listener_thread
+    if connection is not None:
+        try:
+            connection.close()
+        except Exception:
+            pass
+    if listener_thread is not None and listener_thread is not threading.current_thread():
+        listener_thread.join(timeout=5)
+    with _state_lock:
+        if _listener_thread is listener_thread and (
+            listener_thread is None or not listener_thread.is_alive()
+        ):
+            _listener_thread = None
