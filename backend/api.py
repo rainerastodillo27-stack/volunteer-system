@@ -447,6 +447,7 @@ class TTLCache:
 
 
 # Cache for projects snapshot.
+_postgres_bootstrap_complete = threading.Event()
 _projects_snapshot_cache = TTLCache(ttl_seconds=300)
 _projects_snapshot_locks: dict[str, threading.Lock] = {}
 _projects_snapshot_locks_guard = threading.Lock()
@@ -478,6 +479,8 @@ _message_query_locks: dict[str, threading.Lock] = {}
 _message_query_locks_guard = threading.Lock()
 _message_storage_ready = False
 _message_storage_lock = threading.Lock()
+_project_group_message_storage_ready = False
+_project_group_message_storage_lock = threading.Lock()
 _notification_reads_ready = False
 _notification_reads_lock = threading.Lock()
 _admin_dashboard_build_lock = threading.Lock()
@@ -1949,6 +1952,7 @@ def run_event_reminder_check() -> dict[str, Any]:
 
 
 def _event_reminder_scheduler_loop() -> None:
+    _postgres_bootstrap_complete.wait()
     while True:
         try:
             result = run_event_reminder_check()
@@ -2580,6 +2584,19 @@ def ensure_message_storage_once() -> None:
 
 # Ensures the project group message table exists before group chat APIs are used.
 def ensure_project_group_message_storage() -> None:
+    global _project_group_message_storage_ready
+    if _project_group_message_storage_ready:
+        return
+    # Take the schema lock before borrowing a connection so callers waiting
+    # for the same cold schema cannot fill the pool while its owner waits.
+    with _project_group_message_storage_lock:
+        if _project_group_message_storage_ready:
+            return
+        _prepare_project_group_message_storage()
+        _project_group_message_storage_ready = True
+
+
+def _prepare_project_group_message_storage() -> None:
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -2811,6 +2828,15 @@ SPECIAL_STORAGE_KEYS = {"messages", "projectGroupMessages", "programTracks"}
 COLLECTION_KEYS = set(HOT_STORAGE_TABLES.keys()) | SPECIAL_STORAGE_KEYS
 
 
+def _ensure_special_storage_ready(keys: list[str] | set[str]) -> None:
+    """Prepare message schemas before a storage request borrows connections."""
+    requested_keys = set(keys)
+    if "messages" in requested_keys:
+        ensure_message_storage_once()
+    if "projectGroupMessages" in requested_keys:
+        ensure_project_group_message_storage()
+
+
 def _validate_storage_items(key: str, value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise HTTPException(status_code=400, detail=f"Storage key '{key}' expects a list payload.")
@@ -2852,8 +2878,6 @@ def _get_special_storage_collection(
                 })
         return tracks
 
-    ensure_message_storage_once()
-    ensure_project_group_message_storage()
     from psycopg.rows import dict_row
 
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -2894,8 +2918,6 @@ def _get_special_storage_collection(
 
 def _replace_special_storage_collection(connection: Any, key: str, value: Any) -> None:
     items = _validate_storage_items(key, value)
-    ensure_message_storage_once()
-    ensure_project_group_message_storage()
 
     with connection.cursor() as cursor:
         if key == "messages":
@@ -2963,8 +2985,6 @@ def _replace_special_storage_collection(connection: Any, key: str, value: Any) -
 
 
 def _clear_special_storage_collection(connection: Any, key: str) -> None:
-    ensure_message_storage_once()
-    ensure_project_group_message_storage()
     with connection.cursor() as cursor:
         if key == "messages":
             cursor.execute("DELETE FROM public.messages")
@@ -7956,6 +7976,7 @@ def _drain_google_calendar_event_cleanup() -> int:
 
 
 def _google_calendar_scheduler_loop() -> None:
+    _postgres_bootstrap_complete.wait()
     last_cleanup_at = time.monotonic()
     while True:
         time.sleep(_GOOGLE_CALENDAR_SCHEDULER_INTERVAL_SECONDS)
@@ -8049,7 +8070,16 @@ def startup() -> None:
         except Exception as error:
             print(f"[WARN] Core programs initialization skipped: {error}")
 
-    threading.Thread(target=_initialize_postgres_background, daemon=True).start()
+    def _initialize_storage_and_release_jobs() -> None:
+        try:
+            _initialize_postgres_background()
+        finally:
+            # Background jobs must not compete with schema maintenance for
+            # the small per-worker pool. A failed maintenance step is logged
+            # above and can be retried by its normal request/job path.
+            _postgres_bootstrap_complete.set()
+
+    threading.Thread(target=_initialize_storage_and_release_jobs, daemon=True).start()
     _start_event_reminder_scheduler()
     _start_google_calendar_scheduler()
 
@@ -8088,12 +8118,9 @@ def startup() -> None:
 
     # Warm the most frequently used snapshot cache in the background so first client load is faster.
     def _warm_projects_snapshot_cache() -> None:
+        _postgres_bootstrap_complete.wait()
         try:
             with get_connection() as connection:
-                _projects_snapshot_cache.get_or_load(
-                    "snapshot:images-v4:None:None:*:1",
-                    lambda: _build_projects_snapshot(connection, None, None, None, True),
-                )
                 _projects_snapshot_cache.get_or_load(
                     "snapshot:images-v4:None:None:projects:0",
                     lambda: _build_projects_snapshot(connection, None, None, {"projects"}, False),
@@ -8117,10 +8144,8 @@ def startup() -> None:
                 )
                 print("[OK] Warmed projects snapshot cache.")
 
-            # Release the snapshot connection before dashboard jobs borrow
-            # their own connections, and reserve pool capacity for live reads.
-            from .db import _get_pool_max_size
-
+            # Warm one collection at a time so optional cache work uses at
+            # most one slot while requests and scheduled jobs are running.
             def _warm_dashboard_key(key: str) -> tuple[str, Any]:
                 with get_connection() as dashboard_connection:
                     return key, _get_admin_dashboard_collection(
@@ -8130,16 +8155,9 @@ def startup() -> None:
                     )
 
             items: dict[str, Any] = {}
-            with ThreadPoolExecutor(
-                max_workers=min(len(_ADMIN_DASHBOARD_KEYS), 4, max(1, _get_pool_max_size() - 1))
-            ) as executor:
-                futures = {
-                    executor.submit(_warm_dashboard_key, key): key
-                    for key in _ADMIN_DASHBOARD_KEYS
-                }
-                for future in as_completed(futures):
-                    key, value = future.result()
-                    items[key] = value
+            for key in _ADMIN_DASHBOARD_KEYS:
+                dashboard_key, value = _warm_dashboard_key(key)
+                items[dashboard_key] = value
             _admin_dashboard_cache.set(_ADMIN_DASHBOARD_CACHE_KEY, {"items": items})
             print("[OK] Warmed admin dashboard snapshot cache.")
         except Exception as error:
@@ -13883,6 +13901,7 @@ def get_storage_item(
     if not is_hot_storage_key(key) and key not in SPECIAL_STORAGE_KEYS:
         return {"key": key, "value": None}
     try:
+        _ensure_special_storage_ready([key])
         with get_connection() as connection:
             if key in {"projects", "events", "programs"}:
                 value = _get_cached_media_light_collection(
@@ -14095,6 +14114,8 @@ def get_storage_items_batch(
 
         if not keys:
             return {"items": items}
+
+        _ensure_special_storage_ready(keys)
 
         # Fetch keys in parallel using thread pool
         def _fetch_collection(key: str) -> tuple[str, Any]:
@@ -14849,6 +14870,7 @@ async def _put_storage_item_once(
                 asyncio.create_task(_push_partner_google_calendar_item(key, project))
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
+        _ensure_special_storage_ready([key])
         with get_connection() as connection:
             _replace_special_storage_collection(connection, key, payload.value)
             connection.commit()
@@ -15209,6 +15231,7 @@ async def delete_storage_item(request: FastAPIRequest, key: str) -> dict[str, st
         asyncio.create_task(connection_manager.broadcast_storage_event([key]))
         return {"status": "ok"}
     if key in SPECIAL_STORAGE_KEYS:
+        _ensure_special_storage_ready([key])
         with get_connection() as connection:
             _clear_special_storage_collection(connection, key)
             connection.commit()
@@ -15225,6 +15248,7 @@ async def delete_storage_item(request: FastAPIRequest, key: str) -> dict[str, st
 async def clear_storage(request: FastAPIRequest) -> dict[str, str]:
     _require_admin_session(request)
     _require_postgres()
+    _ensure_special_storage_ready({"messages", "projectGroupMessages"})
     with get_connection() as connection:
         clear_all_postgres_hot_storage(connection)
         for key in SPECIAL_STORAGE_KEYS:
