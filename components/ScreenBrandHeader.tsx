@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, View, useWindowDimensions, Modal, TouchableOpacity, ScrollView, Pressable, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { PartnerProjectApplication, User, VolunteerProjectMatch } from '../models/types';
+import { PartnerProjectApplication, ProjectGroupMessage, User, VolunteerProjectMatch } from '../models/types';
 import AppLogo from './AppLogo';
 
 type NotificationMessage = {
@@ -31,6 +31,7 @@ type ScreenBrandHeaderProps = {
   notificationCount?: number;
   pendingUsers?: User[];
   unreadMessages?: NotificationMessage[];
+  unreadGroupChatMessages?: Array<ProjectGroupMessage & { senderName?: string; projectTitle?: string }>;
   unreadReports?: NotificationReport[];
   pendingPartnerApplications?: PartnerProjectApplication[];
   pendingVolunteerRequests?: Array<VolunteerProjectMatch & { volunteerName?: string; projectTitle?: string }>;
@@ -42,7 +43,7 @@ type ScreenBrandHeaderProps = {
 
 type NotificationItemType = {
   id: string;
-  type: 'approval' | 'message' | 'report' | 'partner-application' | 'volunteer-request';
+  type: 'approval' | 'message' | 'group-message' | 'report' | 'partner-application' | 'volunteer-request';
   title: string;
   subtitle: string;
   timestamp: string;
@@ -55,6 +56,7 @@ export default function ScreenBrandHeader({
   notificationCount = 0,
   pendingUsers = [],
   unreadMessages = [],
+  unreadGroupChatMessages = [],
   unreadReports = [],
   pendingPartnerApplications = [],
   pendingVolunteerRequests = [],
@@ -110,6 +112,17 @@ export default function ScreenBrandHeader({
         type: 'message',
         title: msg.senderName || msg.senderId || 'New Message',
         subtitle: msg.content || 'New message received',
+        timestamp: formatTimestamp(msg.timestamp),
+        data: msg,
+      });
+    });
+
+    unreadGroupChatMessages.forEach((msg) => {
+      items.push({
+        id: `group-message-${msg.id}`,
+        type: 'group-message',
+        title: msg.senderName || msg.senderId || 'New group chat message',
+        subtitle: `${msg.projectTitle || 'Project group chat'}: ${msg.content || 'New message received'}`,
         timestamp: formatTimestamp(msg.timestamp),
         data: msg,
       });
@@ -173,6 +186,9 @@ export default function ScreenBrandHeader({
             conversationUserId: item.data?.senderId || item.data?.recipientId,
           });
           break;
+        case 'group-message':
+          navigation.navigate('Messages', { projectId: item.data?.projectId });
+          break;
         case 'report':
           navigation.navigate('Reports', {
             projectId: item.data?.projectId,
@@ -200,6 +216,8 @@ export default function ScreenBrandHeader({
         return 'person-add';
       case 'message':
         return 'mail';
+      case 'group-message':
+        return 'forum';
       case 'report':
         return 'insert-chart';
       case 'partner-application':
@@ -217,6 +235,8 @@ export default function ScreenBrandHeader({
         return '#166534';
       case 'message':
         return '#0369a1';
+      case 'group-message':
+        return '#166534';
       case 'report':
         return '#b45309';
       case 'partner-application':

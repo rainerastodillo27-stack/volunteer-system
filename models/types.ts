@@ -377,6 +377,7 @@ export interface ProjectGroupMessage {
   id: string;
   projectId: string;
   senderId: string;
+  senderRole?: 'admin' | 'partner' | 'volunteer';
   content: string;
   timestamp: string;
   kind?: ProjectGroupMessageKind | 'need-response';

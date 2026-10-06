@@ -5461,6 +5461,15 @@ export async function getUnreadMessagesForUser(userId: string): Promise<Message[
   return payload.messages || [];
 }
 
+// Returns unread project group-chat messages from partners and volunteers for
+// the signed-in administrator's notification panel.
+export async function getUnreadProjectGroupMessagesForAdmin(): Promise<ProjectGroupMessage[]> {
+  const payload = await requestApiJson<{ messages?: ProjectGroupMessage[] }>(
+    '/notifications/group-messages/unread?limit=100'
+  );
+  return payload.messages || [];
+}
+
 // Returns the direct-message history between two users.
 // Results are cached for CONVERSATION_CACHE_TTL_MS and invalidated on send/receive.
 export async function getConversation(userId1: string, userId2: string): Promise<Message[]> {

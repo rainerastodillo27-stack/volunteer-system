@@ -21,6 +21,7 @@ import ScreenBrandHeader from '../components/ScreenBrandHeader';
 import {
   getDashboardSnapshot,
   getUnreadMessagesForUser,
+  getUnreadProjectGroupMessagesForAdmin,
   subscribeToMessages,
   subscribeToStorageChanges,
   markMessageAsRead,
@@ -30,7 +31,7 @@ import {
   markAdminNotificationsRead,
   savePartnerReport,
 } from '../models/storage';
-import { User, PartnerProjectApplication } from '../models/types';
+import { ProjectGroupMessage, User, PartnerProjectApplication } from '../models/types';
 function lazyScreen<T extends object>(loader: () => { default: React.ComponentType<T> }) {
   return function LazyLoadedScreen(props: T) {
     const Component = loader().default;
@@ -120,7 +121,7 @@ type AdminNotificationItem = {
 
 type AdminNotificationReference = {
   id?: string;
-  type?: 'approval' | 'message' | 'report' | 'partner-application' | 'volunteer-request';
+  type?: 'approval' | 'message' | 'group-message' | 'report' | 'partner-application' | 'volunteer-request';
   data?: any;
 };
 
@@ -273,6 +274,10 @@ export default function AdminNavigator() {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
   const [unreadMessages, setUnreadMessages] = useState<any[]>([]);
+  const [unreadGroupChatMessages, setUnreadGroupChatMessages] = useState<Array<ProjectGroupMessage & {
+    senderName?: string;
+    projectTitle?: string;
+  }>>([]);
   const [unreadReports, setUnreadReports] = useState<any[]>([]);
   const [pendingPartnerApplications, setPendingPartnerApplications] = useState<PartnerProjectApplication[]>([]);
   const [pendingVolunteerRequests, setPendingVolunteerRequests] = useState<any[]>([]);
@@ -286,7 +291,7 @@ export default function AdminNavigator() {
   // subscriptions and reloading the full dashboard.
   const seenNotificationIdsRef = React.useRef<Set<string>>(new Set());
 
-  const messageUnreadCount = unreadMessages.length;
+  const messageUnreadCount = unreadMessages.length + unreadGroupChatMessages.length;
   const reportNotificationCount = unreadReports.length;
   const pendingUserApprovalCount = pendingUsers.length;
   const totalNotificationCount =
@@ -343,10 +348,9 @@ export default function AdminNavigator() {
 
     const loadAllNotifications = async () => {
       try {
-        const [
-          allMsgs,
-        ] = await Promise.all([
+        const [allMsgs, allGroupMsgs] = await Promise.all([
           getUnreadMessagesForUser(user.id).catch(() => []),
+          getUnreadProjectGroupMessagesForAdmin().catch(() => []),
         ]);
         const {
           partnerReports: reports,
@@ -355,6 +359,7 @@ export default function AdminNavigator() {
           volunteerMatches: matches,
           volunteers,
           projects,
+          events,
         } = await getDashboardSnapshot();
         const pUsers = usersList.filter(
           pendingUser => pendingUser.role !== 'admin' && pendingUser.approvalStatus === 'pending'
@@ -372,6 +377,19 @@ export default function AdminNavigator() {
           };
           });
         setUnreadMessages(enrichedMsgs);
+
+        const enrichedGroupMsgs = allGroupMsgs
+          .filter(message => !seenIds.has(`group-message-${message.id}`))
+          .map(message => {
+            const sender = usersList.find(candidate => candidate.id === message.senderId);
+            const project = [...projects, ...events].find(candidate => candidate.id === message.projectId);
+            return {
+              ...message,
+              senderName: sender?.name || message.senderId,
+              projectTitle: project?.title || 'Project group chat',
+            };
+          });
+        setUnreadGroupChatMessages(enrichedGroupMsgs);
 
         // Map unread reports and enrich with submitterName, projectTitle
         const unreadRpts = reports.filter(
@@ -420,6 +438,8 @@ export default function AdminNavigator() {
     const unsubMessages = subscribeToMessages(user.id, event => {
       if (event.type === 'typing') return;
       void loadAllNotifications();
+    }, () => {
+      void loadAllNotifications();
     });
     const unsubStorage = subscribeToStorageChanges([
       'messages',
@@ -441,20 +461,26 @@ export default function AdminNavigator() {
   ]);
 
   const handleNotificationsSeen = React.useCallback(async () => {
-    if (!user?.id || unreadMessages.length === 0) return;
+    if (!user?.id || (unreadMessages.length === 0 && unreadGroupChatMessages.length === 0)) return;
     const messagesToMark = unreadMessages;
+    const groupMessagesToMark = unreadGroupChatMessages;
     setUnreadMessages([]);
+    setUnreadGroupChatMessages([]);
     setSeenNotificationIds(current => {
       const next = new Set(current);
       messagesToMark.forEach(message => next.add(`message-${message.id}`));
+      groupMessagesToMark.forEach(message => next.add(`group-message-${message.id}`));
       seenNotificationIdsRef.current = next;
       return next;
     });
     await Promise.all([
-      markAdminNotificationsRead(messagesToMark.map(msg => `message-${msg.id}`)).catch(() => undefined),
+      markAdminNotificationsRead([
+        ...messagesToMark.map(msg => `message-${msg.id}`),
+        ...groupMessagesToMark.map(msg => `group-message-${msg.id}`),
+      ]).catch(() => undefined),
       markMessagesAsRead(messagesToMark.map(msg => msg.id)).catch(() => undefined),
     ]);
-  }, [unreadMessages, user?.id]);
+  }, [unreadGroupChatMessages, unreadMessages, user?.id]);
 
   const markReportsSeen = React.useCallback(async () => {
     if (!user?.id || unreadReports.length === 0) return;
@@ -480,7 +506,8 @@ export default function AdminNavigator() {
       const itemId = item.data?.id || item.id || '';
       const notificationType = item.type ||
         (item.id?.startsWith('approval-') ? 'approval' :
-          item.id?.startsWith('message-') ? 'message' :
+          item.id?.startsWith('group-message-') ? 'group-message' :
+            item.id?.startsWith('message-') ? 'message' :
             item.id?.startsWith('report-') ? 'report' :
               item.id?.startsWith('partner-application-') ? 'partner-application' :
                 item.id?.startsWith('volunteer-request-') ? 'volunteer-request' : undefined);
@@ -498,6 +525,11 @@ export default function AdminNavigator() {
       if (notificationType === 'message') {
         setUnreadMessages(current => current.filter(message => message.id !== itemId));
         void markMessageAsRead(itemId).catch(() => undefined);
+        return;
+      }
+
+      if (notificationType === 'group-message') {
+        setUnreadGroupChatMessages(current => current.filter(message => message.id !== itemId));
         return;
       }
 
@@ -625,6 +657,16 @@ export default function AdminNavigator() {
         params: { conversationUserId: message.senderId || message.recipientId },
         data: message,
       })),
+      ...unreadGroupChatMessages.map((message): AdminNotificationItem => ({
+        id: `group-message-${message.id}`,
+        title: message.senderName || message.senderId || 'New group chat message',
+        subtitle: `${message.projectTitle || 'Project group chat'}: ${message.content || 'New message received'}`,
+        timestamp: formatTimestamp(message.timestamp),
+        icon: 'forum',
+        route: 'Messages',
+        params: { projectId: message.projectId },
+        data: message,
+      })),
       ...unreadReports.map((report): AdminNotificationItem => ({
         id: `report-${report.id}`,
         title: report.title || report.projectTitle || 'New report',
@@ -663,6 +705,7 @@ export default function AdminNavigator() {
     pendingPartnerApplications,
     pendingUsers,
     pendingVolunteerRequests,
+    unreadGroupChatMessages,
     unreadMessages,
     unreadReports,
   ]);
@@ -742,12 +785,14 @@ export default function AdminNavigator() {
             notificationCount={
               pendingUsers.length +
               unreadMessages.length +
+              unreadGroupChatMessages.length +
               unreadReports.length +
               pendingPartnerApplications.length +
               pendingVolunteerRequests.length
             }
             pendingUsers={pendingUsers}
             unreadMessages={unreadMessages}
+            unreadGroupChatMessages={unreadGroupChatMessages}
             unreadReports={unreadReports}
             pendingPartnerApplications={pendingPartnerApplications}
             pendingVolunteerRequests={pendingVolunteerRequests}

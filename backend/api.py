@@ -2326,7 +2326,7 @@ class ConnectionManager:
         }
         await asyncio.gather(*(self.send_user_event(user_id, payload) for user_id in recipients))
 
-    # Broadcasts a project-group message to all eligible project chat participants.
+    # Broadcasts group messages to chat participants and admins for notifications.
     async def broadcast_project_group_message_event(
         self,
         project_id: str,
@@ -2335,14 +2335,22 @@ class ConnectionManager:
         publish: bool = True,
     ) -> None:
         _invalidate_collection_cache(["projectGroupMessages"])
-        payload = {"type": "project-group-message.changed", "message": message}
+        notification_message = dict(message)
         with get_connection() as connection:
             recipients = _get_project_chat_participant_user_ids(connection, project_id)
-        recipients.add(message["senderId"])
+            sender = _postgres_get_hot_item_by_id(connection, "users", str(message.get("senderId") or ""))
+            sender_role = str(sender.get("role") or "") if sender else ""
+            if sender_role:
+                notification_message["senderRole"] = sender_role
+            with connection.cursor() as cursor:
+                cursor.execute("select users_id from public.users where role = 'admin'")
+                recipients.update(str(row[0]) for row in cursor.fetchall() if row and row[0])
+        recipients.add(str(message["senderId"]))
+        payload = {"type": "project-group-message.changed", "message": notification_message}
         publish_task = (
             asyncio.create_task(self._publish_cross_worker({
                 "kind": "project-group-message.changed",
-                "message": message,
+                "message": notification_message,
                 "messageId": message.get("id"),
                 "projectId": project_id,
             }))
@@ -13801,6 +13809,7 @@ def get_admin_notification_reads(request: FastAPIRequest) -> dict[str, list[str]
                 select notification_id
                 from public.notification_reads
                 where user_id = %s
+                  and notification_id <> 'group-chat-notification-baseline'
                 order by seen_at desc
                 limit 2000
                 """,
@@ -13808,6 +13817,81 @@ def get_admin_notification_reads(request: FastAPIRequest) -> dict[str, list[str]
             )
             notification_ids = [str(row[0]) for row in cursor.fetchall() if row[0]]
     return {"notificationIds": notification_ids}
+
+
+@app.get("/notifications/group-messages/unread")
+# Returns unseen project group-chat messages from partners and volunteers.
+def get_admin_unread_group_message_notifications(
+    request: FastAPIRequest,
+    limit: int = 100,
+) -> dict[str, list[dict[str, Any]]]:
+    _require_admin_session(request)
+    _require_postgres()
+    ensure_project_group_message_storage()
+    admin_user_id = str(_get_session_user(request).get("sub") or "").strip()
+    limit_value = max(1, min(int(limit), 100))
+
+    from psycopg.rows import dict_row
+
+    with get_connection() as connection:
+        _ensure_notification_reads_table(connection)
+        with connection.cursor(row_factory=dict_row) as cursor:
+            # Group chat had no admin notification state before this feature.
+            # Use the first admin visit as its baseline so old chat history is
+            # not presented as a stack of newly unread notifications.
+            cursor.execute(
+                """
+                insert into public.notification_reads (
+                  notification_reads_id, user_id, notification_id, seen_at
+                )
+                values (%s, %s, 'group-chat-notification-baseline', now())
+                on conflict (user_id, notification_id) do nothing
+                """,
+                (secrets.token_urlsafe(24), admin_user_id),
+            )
+            cursor.execute(
+                """
+                select
+                  group_message.project_group_messages_id as id,
+                  group_message.project_id as "projectId",
+                  group_message.sender_id as "senderId",
+                  sender.role as "senderRole",
+                  left(group_message.content, 1000) as content,
+                  group_message.timestamp,
+                  coalesce(group_message.kind, 'message') as kind
+                from public.project_group_messages as group_message
+                join public.users as sender
+                  on sender.users_id = group_message.sender_id
+                join public.notification_reads as baseline
+                  on baseline.user_id = %s
+                  and baseline.notification_id = 'group-chat-notification-baseline'
+                left join public.notification_reads as notification_read
+                  on notification_read.user_id = %s
+                  and notification_read.notification_id =
+                    'group-message-' || group_message.project_group_messages_id
+                where sender.role in ('partner', 'volunteer')
+                  and group_message.timestamp > baseline.seen_at
+                  and notification_read.notification_id is null
+                order by group_message.timestamp desc,
+                         group_message.project_group_messages_id desc
+                limit %s
+                """,
+                (admin_user_id, admin_user_id, limit_value),
+            )
+            rows = cursor.fetchall()
+        connection.commit()
+
+    return {
+        "messages": [
+            {
+                **row,
+                "timestamp": row["timestamp"].isoformat()
+                if hasattr(row["timestamp"], "isoformat")
+                else row["timestamp"],
+            }
+            for row in rows
+        ]
+    }
 
 
 # Persists one notification as read for the signed-in administrator.
