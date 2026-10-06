@@ -2339,6 +2339,8 @@ interface InlineProjectFormProps {
 
   projectDraft: any;
 
+  canEditProjectStatus: boolean;
+
   handleProjectDraftChange: (key: any, value: any) => void;
 
   projectRegionCode: string;
@@ -2410,6 +2412,8 @@ const InlineProjectForm = React.memo(({
 
   projectDraft,
 
+  canEditProjectStatus,
+
   handleProjectDraftChange,
 
   projectRegionCode,
@@ -2478,6 +2482,14 @@ const InlineProjectForm = React.memo(({
   const selectedLocationRegion = PHRegions.find(r => r.code === projectRegionCode);
 
   const selectedLocationCity = projectLocationCities.find(c => c.code === projectCityCode);
+
+  const projectDraftUsesManualStatus = projectDraft.status === 'On Hold' || projectDraft.status === 'Cancelled';
+
+  const projectDraftDisplayStatus = getProjectDisplayStatus({
+    ...projectDraft,
+    statusMode: projectDraftUsesManualStatus ? 'Manual' : 'System',
+    manualStatus: projectDraftUsesManualStatus ? projectDraft.status : undefined,
+  });
 
 
 
@@ -2766,6 +2778,47 @@ const InlineProjectForm = React.memo(({
           {/* Section 1 */}
 
           {renderSectionHeader(1, '1. PROJECT INFORMATION', 'Basic information about your project.')}
+
+          {canEditProjectStatus && !projectDraft.isEvent ? (
+            <View style={{ borderWidth: 1, borderColor: '#dbe5f0', borderRadius: 14, padding: 16, backgroundColor: '#ffffff' }}>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: '#166534', letterSpacing: 0.5, marginBottom: 12 }}>
+                PROJECT STATUS
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {statuses.map(statusOption => {
+                  const isSelected = projectDraftDisplayStatus === statusOption;
+                  return (
+                    <TouchableOpacity
+                      key={statusOption}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isSelected }}
+                      onPress={() => handleProjectDraftChange('status', statusOption)}
+                      activeOpacity={0.85}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 6,
+                        borderWidth: 1,
+                        borderColor: isSelected ? '#166534' : '#cbd5e1',
+                        borderRadius: 8,
+                        paddingVertical: 8,
+                        paddingHorizontal: 12,
+                        backgroundColor: isSelected ? '#f0fdf4' : '#ffffff',
+                      }}
+                    >
+                      {isSelected ? <MaterialIcons name="check" size={14} color="#166534" /> : null}
+                      <Text style={{ fontSize: 12, fontWeight: '800', color: isSelected ? '#166534' : '#334155' }}>
+                        {statusOption}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>
+                Planning, In Progress, and Completed follow the project dates. On Hold and Cancelled are manual overrides.
+              </Text>
+            </View>
+          ) : null}
 
           <FieldRow isDesktop={isDesktop}>
 
@@ -3256,7 +3309,9 @@ const InlineProjectForm = React.memo(({
 
                   <Text style={{ fontSize: 12, color: '#64748b' }}>Status</Text>
 
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#b45309' }}>Planning</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: getProjectStatusColor(projectDraftDisplayStatus) }}>
+                    {projectDraftDisplayStatus}
+                  </Text>
 
                 </View>
 
@@ -10085,6 +10140,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       <InlineProjectForm
 
         projectDraft={projectDraft}
+
+        canEditProjectStatus={Platform.OS === 'web' && isAdmin && Boolean(editingProjectId)}
 
         handleProjectDraftChange={handleProjectDraftChange}
 
