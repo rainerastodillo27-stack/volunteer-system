@@ -5201,6 +5201,81 @@ def _get_partner_project_scope(
     return project_ids
 
 
+def _partner_can_access_project_record(
+    connection: Any,
+    partner_user_id: str,
+    project: dict[str, Any],
+) -> bool:
+    """Check access to one parent project without loading every project table."""
+    normalized_user_id = str(partner_user_id or "").strip()
+    if not normalized_user_id:
+        return False
+
+    owner_identifier = str(
+        project.get("partnerId")
+        or project.get("partner_id")
+        or project.get("partnerUserId")
+        or project.get("partner_user_id")
+        or project.get("proposedById")
+        or project.get("proposed_by_id")
+        or ""
+    ).strip()
+    if normalized_user_id == owner_identifier:
+        return True
+
+    partner_records = _postgres_get_hot_items_by_field(
+        connection,
+        "partners",
+        "ownerUserId",
+        normalized_user_id,
+        include_media=False,
+    )
+    partner_ids = {
+        str(record.get("id") or "").strip()
+        for record in partner_records
+        if str(record.get("id") or "").strip()
+    }
+    # Retain support for legacy partner rows that were linked by contact email
+    # or phone before ownerUserId was added. The common ownerUserId path above
+    # stays a single indexed lookup.
+    if not partner_ids:
+        partner_ids = _get_partner_organization_ids(connection, normalized_user_id)
+    if owner_identifier in partner_ids:
+        return True
+
+    project_id = str(project.get("id") or "").strip()
+    if not project_id:
+        return False
+
+    applications = _postgres_get_hot_items_by_field(
+        connection,
+        "partnerProjectApplications",
+        "partnerUserId",
+        normalized_user_id,
+        include_media=False,
+    )
+    for application in applications:
+        if str(application.get("status") or "").strip() != "Approved":
+            continue
+        approved_project_ids = {
+            str(application.get("projectId") or "").strip(),
+        }
+        proposal_details = application.get("proposalDetails")
+        if isinstance(proposal_details, dict):
+            approved_project_ids.update(
+                str(proposal_details.get(field) or "").strip()
+                for field in ("approvedProjectId", "targetProjectId", "targetProgramId", "programId")
+            )
+        if project_id in {
+            approved_id
+            for approved_id in approved_project_ids
+            if approved_id and not approved_id.startswith("program:")
+        }:
+            return True
+
+    return False
+
+
 def _scope_storage_collection(
     connection: Any,
     key: str,
@@ -11853,7 +11928,7 @@ def _partner_can_manage_scoped_event(
     return bool(
         parent_project
         and not bool(parent_project.get("isEvent"))
-        and parent_project_id in _get_partner_project_scope(connection, partner_user_id)
+        and _partner_can_access_project_record(connection, partner_user_id, parent_project)
     )
 
 
@@ -11898,10 +11973,11 @@ async def save_partner_event(
                 include_media=False,
                 for_update=True,
             )
-            if _postgres_get_hot_item_by_id(connection, "projects", normalized_event_id, include_media=False):
-                raise HTTPException(status_code=409, detail="An event with this id conflicts with an existing project.")
-            if _postgres_get_hot_item_by_id(connection, "programs", normalized_event_id, include_media=False):
-                raise HTTPException(status_code=409, detail="An event with this id conflicts with an existing program.")
+            if existing_event is None:
+                if _postgres_get_hot_item_by_id(connection, "projects", normalized_event_id, include_media=False):
+                    raise HTTPException(status_code=409, detail="An event with this id conflicts with an existing project.")
+                if _postgres_get_hot_item_by_id(connection, "programs", normalized_event_id, include_media=False):
+                    raise HTTPException(status_code=409, detail="An event with this id conflicts with an existing program.")
 
             parent_project = _postgres_get_hot_item_by_id(
                 connection,
@@ -11911,7 +11987,7 @@ async def save_partner_event(
             )
             if parent_project is None or bool(parent_project.get("isEvent")):
                 raise HTTPException(status_code=404, detail="Parent project was not found.")
-            if parent_project_id not in _get_partner_project_scope(connection, partner_user_id):
+            if not _partner_can_access_project_record(connection, partner_user_id, parent_project):
                 raise HTTPException(
                     status_code=403,
                     detail="Events can only be created under a project in your partner workspace.",
@@ -11922,12 +11998,6 @@ async def save_partner_event(
                 if (
                     not bool(existing_event.get("isEvent"))
                     or existing_parent_id != parent_project_id
-                    or not _partner_can_manage_scoped_event(
-                        connection,
-                        partner_user_id,
-                        normalized_event_id,
-                        event_record=existing_event,
-                    )
                 ):
                     raise HTTPException(status_code=403, detail="You can only manage events under projects in your partner workspace.")
                 # Partner updates through this route are task-board changes only.
@@ -12074,7 +12144,12 @@ async def save_partner_event(
                             detail="Only volunteers who joined this event can be assigned to its tasks.",
                         )
 
-            _reject_duplicate_event_writes(connection, [event])
+            # Event edits through this partner route preserve the canonical
+            # title, date, and venue. Duplicate scans are only needed when a
+            # new event is created; running them for each task edit would read
+            # every project and event table on a high-frequency save path.
+            if existing_event is None:
+                _reject_duplicate_event_writes(connection, [event])
             saved_event = _postgres_upsert_hot_item(connection, "events", event)
             schedule_changed = (
                 existing_event is None

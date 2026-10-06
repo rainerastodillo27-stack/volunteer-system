@@ -248,6 +248,9 @@ const ATTENDANCE_START_TIMEOUT_MS = 60000;
 // evidence before the response is returned. Keep the APK from reporting a
 // false timeout while that authoritative write is still finishing.
 const REGISTRATION_REQUEST_TIMEOUT_MS = 60000;
+// Partner event writes are validated against the approved parent project and
+// can update a task board with several volunteer assignments.
+const PARTNER_EVENT_SAVE_TIMEOUT_MS = 60000;
 const API_HEALTH_TIMEOUT_MS = 5000;
 
 // Detect mobile at runtime (not module load time) to avoid errors
@@ -4665,6 +4668,7 @@ export async function savePartnerEvent(event: Project): Promise<void> {
       },
       body: JSON.stringify(normalizedEvent),
     },
+    PARTNER_EVENT_SAVE_TIMEOUT_MS,
   );
   const savedEvent = normalizeEventRecord(response.event || normalizedEvent);
   upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, savedEvent);

@@ -4107,6 +4107,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   useEffect(() => () => { projectLocationLookupGenerationRef.current += 1; }, []);
 
   const [taskDraft, setTaskDraft] = useState<ProjectTaskDraft>(createEmptyProjectTaskDraft());
+  const pendingTaskCreateIdRef = React.useRef<string | null>(null);
 
   const [customTaskSkill, setCustomTaskSkill] = useState('');
 
@@ -6920,6 +6921,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const openCreateTaskModal = () => {
 
     setEditingTaskId(null);
+    pendingTaskCreateIdRef.current = null;
 
     setTaskDraft(createEmptyProjectTaskDraft());
 
@@ -6940,6 +6942,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const openEditTaskModal = (task: ProjectInternalTask) => {
 
     setEditingTaskId(task.id);
+    pendingTaskCreateIdRef.current = null;
 
     setTaskDraft({
 
@@ -6982,6 +6985,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const closeTaskModal = () => {
 
     setShowTaskModal(false);
+    pendingTaskCreateIdRef.current = null;
 
     setIsTaskSaveSuccess(false);
 
@@ -9327,9 +9331,14 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
+    const nextTaskId = editingTaskId || pendingTaskCreateIdRef.current || `${currentSelectedProject.id}-task-${Date.now()}`;
+    if (!editingTaskId) {
+      pendingTaskCreateIdRef.current = nextTaskId;
+    }
+
     const nextTask: ProjectInternalTask = {
 
-      id: editingTaskId || `${currentSelectedProject.id}-task-${Date.now()}`,
+      id: nextTaskId,
 
       title: taskDraft.title.trim(),
 
