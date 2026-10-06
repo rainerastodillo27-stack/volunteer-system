@@ -12288,7 +12288,7 @@ async def update_event_task_assignments(
         target_task = next((task for task in tasks if str(task.get("id") or "").strip() == task_id), None)
         if target_task is None:
             raise HTTPException(status_code=404, detail="Event task not found.")
-        if bool(target_task.get("isFieldOfficer")):
+        if bool(target_task.get("isFieldOfficer")) and role != "admin":
             raise HTTPException(status_code=403, detail="The field officer task can only be managed by an administrator.")
 
         event_member_identifiers = {
