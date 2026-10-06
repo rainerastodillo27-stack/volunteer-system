@@ -78,6 +78,7 @@ from .relational_mirror import (
     LIGHTWEIGHT_MEDIA_COLUMNS,
     ensure_volunteer_time_logs_table_shape,
     get_relational_item_by_id,
+    get_relational_items_by_ids,
     get_relational_items_by_field,
     _sync_task_rows_from_project_event_items,
     upsert_relational_item,
@@ -5904,12 +5905,14 @@ def _build_projects_snapshot(
     role: str | None,
     requested_fields: set[str] | None = None,
     include_images: bool = False,
+    include_project_images: bool | None = None,
 ) -> dict[str, Any]:
     import time as _time
     t0 = _time.perf_counter()
     _trace(f"[TRACE] _build_projects_snapshot: starting optimized hot storage reads at {_time.perf_counter():.3f}")
 
     includes = requested_fields if requested_fields is not None else _DEFAULT_SNAPSHOT_FIELDS
+    load_project_images = include_images if include_project_images is None else include_project_images
     include_projects = "projects" in includes
     include_programs = "programs" in includes
     include_status_updates = "statusUpdates" in includes
@@ -5930,7 +5933,7 @@ def _build_projects_snapshot(
     if include_projects or include_join_records:
         try:
             raw_projects = _get_cached_media_light_collection(
-                connection, "projects", include_images=include_images
+                connection, "projects", include_images=load_project_images
             )
         except Exception as e:
             print(f"[ERROR] Failed to fetch projects: {type(e).__name__}: {e}", flush=True)
@@ -5938,7 +5941,7 @@ def _build_projects_snapshot(
         
         try:
             raw_events = _get_cached_media_light_collection(
-                connection, "events", include_images=include_images
+                connection, "events", include_images=load_project_images
             )
         except Exception as e:
             print(f"[ERROR] Failed to fetch events: {type(e).__name__}: {e}", flush=True)
@@ -5955,7 +5958,7 @@ def _build_projects_snapshot(
     if include_projects or include_programs or include_program_tracks:
         try:
             raw_programs_table = _get_cached_media_light_collection(
-                connection, "programs", include_images=include_images
+                connection, "programs", include_images=load_project_images
             ) or []
         except Exception as e:
             print(f"[ERROR] Failed to fetch programs: {type(e).__name__}: {e}", flush=True)
@@ -10424,7 +10427,18 @@ def get_projects_snapshot(
 
         # Build a stable cache key from the request parameters
         fields_key = ",".join(sorted(requested_fields)) if requested_fields else "*"
+        # The volunteer reports photo request only needs time-log photos. Its
+        # image-bearing snapshot also includes projects, but downloading all
+        # event/program cover photos adds unrelated database and network work.
+        report_time_log_media_snapshot = (
+            session_role == "volunteer"
+            and include_images
+            and requested_fields == {"projects", "timeLogs", "volunteerJoinRecords"}
+        )
+        include_project_images = include_images and not report_time_log_media_snapshot
         cache_key = f"snapshot:images-v4:{user_id}:{role}:{fields_key}:{1 if include_images else 0}"
+        if include_project_images != include_images:
+            cache_key += f":project-images:{1 if include_project_images else 0}"
 
         # Check the snapshot cache first (avoids DB round-trips on warm requests)
         cached_snapshot = _projects_snapshot_cache.get(cache_key)
@@ -10443,6 +10457,7 @@ def get_projects_snapshot(
                             role,
                             requested_fields,
                             include_images,
+                            include_project_images,
                         )
                 snapshot = _projects_snapshot_cache.get_or_load(cache_key, load_snapshot)
 
@@ -10581,19 +10596,24 @@ def get_partner_report_media(
 
     _require_postgres()
     with get_connection() as connection:
-        reports: list[dict[str, Any]] = []
-        for report_id in requested_report_ids:
-            report = _postgres_get_hot_item_by_id(
-                connection,
-                "partnerReports",
-                report_id,
-                include_media=include_images,
-            )
-            if report is None:
-                continue
-            if not _scope_storage_collection(connection, "partnerReports", [report], session):
-                continue
-            reports.append(report)
+        loaded_reports = get_relational_items_by_ids(
+            connection,
+            "partnerReports",
+            requested_report_ids,
+            include_media=include_images,
+        )
+        scoped_reports = _scope_storage_collection(
+            connection,
+            "partnerReports",
+            loaded_reports,
+            session,
+        )
+        reports_by_id = {
+            str(report.get("id") or "").strip(): report
+            for report in scoped_reports
+            if isinstance(report, dict) and str(report.get("id") or "").strip()
+        }
+        reports = [reports_by_id[report_id] for report_id in requested_report_ids if report_id in reports_by_id]
 
     return {"reports": reports}
 
@@ -10633,6 +10653,12 @@ def get_partner_volunteer_time_log_media(
         from psycopg.rows import dict_row
 
         pk_column = _primary_key_column("volunteerTimeLogs")
+        media_only_filter = "" if not include_images else """
+                    and (
+                        coalesce(btrim(attendance_photo), '') <> ''
+                        or coalesce(btrim(completion_photo), '') <> ''
+                    )
+                """
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 f"""
@@ -10646,6 +10672,7 @@ def get_partner_volunteer_time_log_media(
                        completion_report
                 from volunteer_time_logs
                 where project_id = any(%s)
+                      {media_only_filter}
                 order by time_in desc
                 """,
                 [list(allowed_project_ids)],

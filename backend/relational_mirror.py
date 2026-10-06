@@ -2709,6 +2709,76 @@ def get_relational_item_by_id(
     return None if row is None else _row_to_item(key, row, include_password=include_password)
 
 
+def get_relational_items_by_ids(
+    connection: Any,
+    key: str,
+    item_ids: list[str],
+    *,
+    include_media: bool = True,
+) -> list[dict[str, Any]]:
+    """Read a set of records with one query instead of one query per id."""
+    spec = TABLE_SPECS.get(key)
+    if not spec:
+        raise KeyError(f"Unsupported relational mirror key: {key}")
+
+    normalized_ids = list(dict.fromkeys(str(item_id or "").strip() for item_id in item_ids))
+    normalized_ids = [item_id for item_id in normalized_ids if item_id]
+    if not normalized_ids:
+        return []
+
+    from psycopg.rows import dict_row
+    from psycopg.errors import UndefinedColumn, UndefinedTable
+
+    column_names = [column_name for column_name, _ in spec["columns"]]
+    media_columns = LIGHTWEIGHT_MEDIA_COLUMNS.get(key, set())
+    select_columns = [
+        f"null::text as {column_name}"
+        if not include_media and column_name in media_columns
+        else column_name
+        for column_name in column_names
+    ]
+    pk_column = _primary_key_column(key)
+    filter_clause = _row_filter_clause(key)
+
+    def build_query(selected_columns: list[str], selected_pk: str) -> str:
+        query = f"select {', '.join(selected_columns)} from {spec['table']} where {selected_pk} = any(%s)"
+        if filter_clause:
+            query += f" and {filter_clause}"
+        return query
+
+    query = build_query(select_columns, pk_column)
+    with connection.cursor(row_factory=dict_row) as cursor:
+        try:
+            cursor.execute(query, (normalized_ids,))
+        except (UndefinedColumn, UndefinedTable):
+            try:
+                connection.rollback()
+            except Exception:
+                pass
+            ensure_relational_mirror_tables(connection)
+            connection.commit()
+            try:
+                cursor.execute(query, (normalized_ids,))
+            except (UndefinedColumn, UndefinedTable):
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                alt_pk = "id"
+                alt_columns = list(select_columns)
+                alt_columns[0] = alt_pk
+                alt_query = build_query(alt_columns, alt_pk)
+                _trace(f"[TRACE] get_relational_items_by_ids: attempting fallback query on {spec['table']}")
+                cursor.execute(alt_query, (normalized_ids,))
+                rows = cursor.fetchall()
+                for row in rows:
+                    if isinstance(row, dict) and alt_pk in row:
+                        row[pk_column] = row.pop(alt_pk)
+                return [_row_to_item(key, row) for row in rows]
+        rows = cursor.fetchall()
+    return [_row_to_item(key, row) for row in rows]
+
+
 def get_relational_items_by_field(
     connection: Any,
     key: str,
