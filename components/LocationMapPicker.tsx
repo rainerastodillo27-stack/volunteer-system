@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { loadGoogleMaps } from '../utils/webGoogleMaps';
 import { resolveLocationCoordinates, type LocationSelection } from '../utils/locationGeocoding';
+import { inferCoordinatesFromPlace } from '../utils/projectMap';
 
 export interface LocationMapPickerProps {
   latitude?: string | number;
@@ -46,7 +47,26 @@ function getWebGoogleMapsApiKey(): string {
   );
 }
 
-// Default center: Negros Oriental / Central Visayas area (approx. Bais / Dumaguete), or Philippines center
+function normalizeSearchText(value: string): string {
+  return value.normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/^(?:barangay|brgy\.?|bgy\.?)\s+/i, '')
+    .replace(/\s+(?:city|municipality|province)$/i, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function buildLocationSearchQuery(address: string, selection: LocationSelection): string {
+  const query = address.trim();
+  const normalizedQuery = normalizeSearchText(query);
+  const missingLocationParts = [selection.barangay, selection.city, selection.province]
+    .map(value => value?.trim() || '')
+    .filter(value => value && !normalizedQuery.includes(normalizeSearchText(value)));
+  return [...missingLocationParts, query].filter(Boolean).join(', ');
+}
+
+// Last-resort center for forms without a known locality.
 const DEFAULT_LAT = 9.5910;
 const DEFAULT_LNG = 123.1219;
 
@@ -73,7 +93,7 @@ export default function LocationMapPicker({
   const mapListenersRef = useRef<any[]>([]);
   onLocationChangeRef.current = onLocationChange;
 
-  const [searchQuery, setSearchQuery] = useState(address || '');
+  const [searchQuery, setSearchQuery] = useState(() => buildLocationSearchQuery(address, locationSelection));
   const [isSearching, setIsSearching] = useState(false);
   const [isMapLoaded, setIsMapLoaded] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
@@ -84,6 +104,20 @@ export default function LocationMapPicker({
   const hasValidCoords = Number.isFinite(parsedLat) && Number.isFinite(parsedLng) &&
     Math.abs(parsedLat) <= 90 && Math.abs(parsedLng) <= 180 &&
     !(parsedLat === 0 && parsedLng === 0);
+  const fallbackCenter = useMemo(() => {
+    const cityCenter = locationSelection.city
+      ? inferCoordinatesFromPlace(locationSelection.city, [], false)
+      : null;
+    if (cityCenter) {
+      return { ...cityCenter, label: locationSelection.city, zoom: 13, delta: 0.08 };
+    }
+    const provinceCenter = locationSelection.province
+      ? inferCoordinatesFromPlace(locationSelection.province, [], true)
+      : null;
+    return provinceCenter
+      ? { ...provinceCenter, label: locationSelection.province, zoom: 10, delta: 0.8 }
+      : null;
+  }, [locationSelection.city, locationSelection.province]);
   const latestPointRef = useRef<{ latitude: number; longitude: number } | null>(null);
   latestPointRef.current = hasValidCoords ? { latitude: parsedLat, longitude: parsedLng } : null;
   const locationContext = JSON.stringify([
@@ -95,19 +129,19 @@ export default function LocationMapPicker({
   const locationContextRef = useRef(locationContext);
   locationContextRef.current = locationContext;
 
-  const currentLat = hasValidCoords ? parsedLat : DEFAULT_LAT;
-  const currentLng = hasValidCoords ? parsedLng : DEFAULT_LNG;
+  const currentLat = hasValidCoords ? parsedLat : fallbackCenter?.latitude ?? DEFAULT_LAT;
+  const currentLng = hasValidCoords ? parsedLng : fallbackCenter?.longitude ?? DEFAULT_LNG;
   const nativeRegion = {
     latitude: currentLat,
     longitude: currentLng,
-    latitudeDelta: hasValidCoords ? 0.04 : 0.3,
-    longitudeDelta: hasValidCoords ? 0.04 : 0.3,
+    latitudeDelta: hasValidCoords ? 0.04 : fallbackCenter?.delta ?? 0.3,
+    longitudeDelta: hasValidCoords ? 0.04 : fallbackCenter?.delta ?? 0.3,
   };
 
   // A changed selection invalidates searches and reverse lookups from the previous place.
   useEffect(() => {
     requestGenerationRef.current += 1;
-    setSearchQuery(address);
+    setSearchQuery(buildLocationSearchQuery(address, locationSelection));
     setIsSearching(false);
     setSearchError(null);
   }, [locationContext]);
@@ -211,7 +245,7 @@ export default function LocationMapPicker({
         if (!mapInstanceRef.current) {
           const map = new googleMaps.maps.Map(mapElementRef.current, {
             center: centerPos,
-            zoom: hasValidCoords ? 15 : 10,
+            zoom: hasValidCoords ? 15 : fallbackCenter?.zoom ?? 10,
             mapTypeControl: false,
             streetViewControl: false,
             fullscreenControl: false,
@@ -244,9 +278,14 @@ export default function LocationMapPicker({
           setIsMapLoaded(true);
           setMapError(null);
         } else {
-          // An unresolved selection has a map center, but no saved pin.
+          // Center unresolved selections on their known locality without
+          // presenting the city or province center as an exact event pin.
           markerRef.current?.setMap?.(hasValidCoords ? mapInstanceRef.current : null);
-          if (!hasValidCoords) return;
+          if (!hasValidCoords) {
+            mapInstanceRef.current.setCenter(centerPos);
+            mapInstanceRef.current.setZoom(fallbackCenter?.zoom ?? 10);
+            return;
+          }
           const currentMarkerPos = (markerRef.current as any)?.getPosition?.();
           if (currentMarkerPos) {
             const latDiff = Math.abs(currentMarkerPos.lat() - currentLat);
@@ -272,12 +311,12 @@ export default function LocationMapPicker({
     return () => {
       cancelled = true;
     };
-  }, [currentLat, currentLng, hasValidCoords, locationContext]);
+  }, [currentLat, currentLng, hasValidCoords, fallbackCenter, locationContext]);
 
   useEffect(() => {
-    if (Platform.OS === 'web' || !hasValidCoords) return;
+    if (Platform.OS === 'web') return;
     nativeMapRef.current?.animateToRegion?.(nativeRegion, 300);
-  }, [currentLat, currentLng, hasValidCoords]);
+  }, [currentLat, currentLng, hasValidCoords, locationContext]);
 
   const handleSearch = async () => {
     const query = searchQuery.trim();
@@ -456,7 +495,9 @@ export default function LocationMapPicker({
             {isLocating ? 'Locating selected area...'
               : hasValidCoords
               ? `Pin: ${parsedLat.toFixed(5)}, ${parsedLng.toFixed(5)}`
-              : 'No pin selected. Click the map to choose a location.'}
+              : fallbackCenter
+                ? `No pin. Map centered on ${fallbackCenter.label}; tap the exact location.`
+                : 'No pin selected. Click the map to choose a location.'}
           </Text>
         </View>
         {searchQuery ? (

@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isAbortLikeError } from '../utils/requestErrors';
 import { getActiveProjectJoinCount } from '../utils/projectVolunteers';
 import { getEventRepeatRule } from '../utils/attendanceSchedule';
+import { ensureFieldOfficerTaskForEvent } from '../utils/eventTasks';
 
 // Safe Platform accessor for web environments
 function getPlatformOS(): string {
@@ -3540,52 +3541,6 @@ function normalizeEventRecord(event: Project): Project {
   };
 
   return ensureFieldOfficerTaskForEvent(eventWithFlag);
-}
-
-function isCurrentOrFutureEvent(project: Project): boolean {
-  if (!project?.isEvent) {
-    return false;
-  }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const eventEndDate = new Date(project.endDate);
-  if (!Number.isNaN(eventEndDate.getTime())) {
-    return eventEndDate >= today;
-  }
-
-  const eventStartDate = new Date(project.startDate);
-  return !Number.isNaN(eventStartDate.getTime()) && eventStartDate >= today;
-}
-
-function ensureFieldOfficerTaskForEvent(event: Project): Project {
-  if (!isCurrentOrFutureEvent(event)) {
-    return event;
-  }
-  if ((event.internalTasks || []).some(task => task.isFieldOfficer)) {
-    return event;
-  }
-
-  const now = new Date().toISOString();
-  return {
-    ...event,
-    internalTasks: [
-      ...(event.internalTasks || []),
-      {
-        id: `${event.id}-field-officer-${Date.now()}`,
-        title: 'Field Officer',
-        description: 'Manage attendance tracking and volunteer coordination for this event.',
-        category: 'Field Coordination',
-        priority: 'High',
-        status: 'Assigned',
-        isFieldOfficer: true,
-        skillsNeeded: ['Leadership', 'Communication'],
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-  };
 }
 
 function isVolunteerJoinableEvent(project: Project | null | undefined): project is Project {

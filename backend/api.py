@@ -4770,9 +4770,43 @@ def _scan_storage_item_media(key: str, item: dict[str, Any]) -> None:
         _security_scan_data_uri(media_value, label)
 
 
+def _ensure_event_field_officer_task(event: dict[str, Any]) -> dict[str, Any]:
+    """Persist a default officer task with each event, preserving existing officers."""
+    tasks = event.get("internalTasks")
+    if not isinstance(tasks, list):
+        tasks = []
+    if any(isinstance(task, dict) and bool(task.get("isFieldOfficer")) for task in tasks):
+        return event
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    return {
+        **event,
+        "internalTasks": [
+            *tasks,
+            {
+                "id": f"{str(event.get('id') or '').strip()}-field-officer",
+                "title": "Field Officer",
+                "description": "Manage attendance tracking and volunteer coordination for this event.",
+                "category": "Field Coordination",
+                "priority": "High",
+                "status": "Unassigned",
+                "isFieldOfficer": True,
+                "volunteersNeeded": 1,
+                "assignedVolunteerId": None,
+                "assignedVolunteerIds": [],
+                "skillsNeeded": ["Leadership", "Communication"],
+                "createdAt": timestamp,
+                "updatedAt": timestamp,
+            },
+        ],
+    }
+
+
 # Inserts or updates one hot-storage item row.
 def _postgres_upsert_hot_item(connection: Any, key: str, item: dict[str, Any]) -> dict[str, Any]:
     try:
+        if key == "events":
+            item = _ensure_event_field_officer_task(item)
         _require_terminal_admin_provisioning(connection, key, item)
         _scan_storage_item_media(key, item)
 
@@ -11918,20 +11952,17 @@ async def save_partner_event(
                 for task in existing_field_officer_tasks
                 if str(task.get("id") or "").strip()
             }
+            # The server creates the officer task. Ignore client placeholders
+            # and preserve only canonical officers already saved for the event.
             submitted_tasks = [
                 dict(task)
                 for task in (event.get("internalTasks") or [])
                 if isinstance(task, dict)
                 and str(task.get("id") or "").strip() not in field_officer_task_ids
+                and not bool(task.get("isFieldOfficer"))
             ]
-            has_field_officer_task = False
             for task in submitted_tasks:
-                # Partners manage operational tasks; only an administrator can
-                # designate or reassign the event's field officer task.
-                if existing_event is not None or not bool(task.get("isFieldOfficer")) or has_field_officer_task:
-                    task["isFieldOfficer"] = False
-                else:
-                    has_field_officer_task = True
+                task["isFieldOfficer"] = False
             event["internalTasks"] = [*submitted_tasks, *existing_field_officer_tasks]
 
             start_date_text = str(event.get("startDate") or "").strip()
@@ -11989,6 +12020,7 @@ async def save_partner_event(
                     }
                     for task in event["internalTasks"]
                 ]
+            event = _ensure_event_field_officer_task(event)
             try:
                 _normalize_internal_task_assignment_ids(connection, [event])
                 _validate_internal_task_assignment_limits([event])
@@ -14564,6 +14596,11 @@ async def _put_storage_item_once(
         google_outbound_items: list[dict[str, Any]] = []
         with get_connection() as connection:
             try:
+                if key == "events":
+                    payload.value = [
+                        _ensure_event_field_officer_task(item) if isinstance(item, dict) else item
+                        for item in payload.value
+                    ]
                 if key in {"projects", "events"}:
                     _normalize_internal_task_assignment_ids(connection, payload.value)
                     _validate_internal_task_assignment_limits(payload.value)

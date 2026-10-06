@@ -41,6 +41,7 @@ import { Picker } from '@react-native-picker/picker';
 
 import LocationMapPicker from '../components/LocationMapPicker';
 import { resolveLocationCoordinates, LocationSelection } from '../utils/locationGeocoding';
+import { ensureFieldOfficerTaskForEvent } from '../utils/eventTasks';
 
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -7859,85 +7860,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
 
-    const shouldAutoCreateFieldOfficerTask = (project: Project): boolean => {
-
-      if (!project.isEvent) {
-
-        return false;
-
-      }
-
-
-
-      const today = new Date();
-
-      today.setHours(0, 0, 0, 0);
-
-
-
-      const eventEndDate = new Date(project.endDate);
-
-      if (!Number.isNaN(eventEndDate.getTime())) {
-
-        return eventEndDate >= today;
-
-      }
-
-
-
-      const eventStartDate = new Date(project.startDate);
-
-      return !Number.isNaN(eventStartDate.getTime()) && eventStartDate >= today;
-
-    };
-
-
-
-    const projectToSave: Project =
-
-      shouldAutoCreateFieldOfficerTask(savedProject) &&
-
-        !(savedProject.internalTasks || []).some(task => task.isFieldOfficer)
-
-        ? {
-
-          ...savedProject,
-
-          internalTasks: [
-
-            ...(savedProject.internalTasks || []),
-
-            {
-
-              id: `${savedProject.id}-field-officer-${Date.now()}`,
-
-              title: 'Field Officer',
-
-              description: 'Manage attendance tracking and volunteer coordination for this event.',
-
-              category: 'Field Coordination',
-
-              priority: 'High',
-
-              status: 'Assigned',
-
-              isFieldOfficer: true,
-
-              skillsNeeded: ['Leadership', 'Communication'],
-
-              createdAt: now,
-
-              updatedAt: now,
-
-            } as ProjectInternalTask,
-
-          ],
-
-          updatedAt: now,
-
-        }
-
-        : savedProject;
+    const projectToSave: Project = ensureFieldOfficerTaskForEvent(savedProject, now);
 
 
 

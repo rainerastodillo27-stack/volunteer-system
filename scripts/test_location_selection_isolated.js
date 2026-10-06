@@ -193,6 +193,34 @@ test('barangay change passes the new selection despite stale React closure', asy
   assert.equal(h.state.error, null);
 });
 
+test('admin event barangay change searches Batangan with inherited Bindoy province and its venue', async () => {
+  const h = harness();
+  h.context.projectRegionCode = 'region-nir';
+  h.context.projectCityCode = 'city-bindoy';
+  h.context.projectLocationCities = [{
+    code: 'city-bindoy', name: 'Bindoy', displayName: 'Bindoy', provinceName: 'Negros Oriental',
+  }];
+  h.context.projectLocationBarangays = [{ code: 'barangay-batangan', name: 'Batangan' }];
+  h.context.PHRegions.push({ code: 'region-nir', name: 'Negros Island Region (NIR)' });
+  h.context.projectPlaceVenue = 'barangayhall';
+  // The callback explicitly supplies this new selection; the previous
+  // rendered map selection in the harness remains Bacolod/Alijis.
+  h.handleProjectBarangayChange('barangay-batangan');
+  assert.equal(h.state.barangayCode, 'barangay-batangan');
+  assert.equal(h.lookups.length, 1);
+  assert.deepEqual(h.lookups[0].selection, {
+    city: 'Bindoy', province: 'Negros Oriental', barangay: 'Batangan',
+  });
+  assert.equal(h.lookups[0].address, 'Batangan, Bindoy, Negros Island Region (NIR), barangayhall');
+  assert.equal(h.lookups[0].options.allowCityFallback, false);
+  assertCoordinates(h.state, '', '');
+  h.lookups[0].resolve({ latitude: 9.7315827, longitude: 123.1308031 });
+  await settle();
+  assertCoordinates(h.state, 9.7315827, 123.1308031);
+  assert.equal(h.state.resolving, false);
+  assert.equal(h.state.error, null);
+});
+
 test('city change passes the new city and discards the old barangay context', async () => {
   const h = harness();
   h.handleProjectCityChange('city-bago');

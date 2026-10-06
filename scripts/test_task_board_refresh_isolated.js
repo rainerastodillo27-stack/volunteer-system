@@ -135,6 +135,7 @@ function createHarness(initial = event()) {
     Map, Set, URL, URLSearchParams,
     user: { id: 'memory-admin', role: 'admin' },
     isAdmin: true,
+    isPartnerUser: false,
     projects: [clone(initial)],
     selectedProject: clone(initial),
     volunteers: [volunteer],
@@ -188,7 +189,7 @@ function createHarness(initial = event()) {
       writes.push(clone(record));
     };
   }
-  const names = ['getTaskAssignedVolunteerIds', 'parseTaskVolunteerLimit', 'saveProjectLikeRecord', 'loadProjects', 'handleSelectProject', 'getCurrentSelectedProject', '_executeSaveInternalTask'];
+  const names = ['getTaskAssignedVolunteerIds', 'getTaskVolunteerLimit', 'parseTaskVolunteerLimit', 'canCreateEventForProject', 'canManagePartnerEvent', 'canManageProjectTasks', 'saveProjectLikeRecord', 'loadProjects', 'handleSelectProject', 'getCurrentSelectedProject', '_executeSaveInternalTask'];
   const context = vm.createContext(c);
   vm.runInContext(compile(names.map(name => extracted('web', name)).join('\n') + `\nglobalThis.subject = { ${names.join(', ')} };`), context, { filename: sourcePaths.web, timeout: 1000 });
   return {

@@ -74,6 +74,25 @@ function matchesSelection(names: string[], selection: LocationSelection): boolea
     .every(value => normalizedNames.has(normalizePlaceName(value)));
 }
 
+function matchesExactBarangayWithMissingCity(
+  names: string[],
+  selection: LocationSelection,
+  reportedCityNames: Array<string | undefined>,
+): boolean {
+  const normalizedNames = new Set(names.map(normalizePlaceName).filter(Boolean));
+  const barangay = normalizePlaceName(selection.barangay);
+  const city = normalizePlaceName(selection.city);
+  const province = normalizePlaceName(selection.province);
+  return Boolean(barangay && city && province) &&
+    normalizedNames.has(barangay) &&
+    !normalizedNames.has(city) &&
+    normalizedNames.has(province) &&
+    !reportedCityNames.some(value => {
+      const reportedName = normalizePlaceName(value);
+      return reportedName && reportedName !== barangay && reportedName !== province;
+    });
+}
+
 function hasValidCoordinates(latitude: number, longitude: number): boolean {
   return Number.isFinite(latitude) && Number.isFinite(longitude) &&
     latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 &&
@@ -84,6 +103,7 @@ function readGoogleResult(
   result: GoogleGeocodingResult,
   selection: LocationSelection,
   address: string,
+  allowExactBarangayWithoutCity = false,
 ): GeocodedLocation | null {
   if (result.partial_match) return null;
   const components = result.address_components || [];
@@ -102,7 +122,28 @@ function readGoogleResult(
   const segments = (result.formatted_address || '').split(',')
     .map(segment => segment.trim())
     .filter(segment => !nonPoliticalNames.has(normalizePlaceName(segment)));
-  if (!matchesSelection([...politicalNames, ...segments], selection)) return null;
+  const matchedNames = [...politicalNames, ...segments];
+  const exactBarangayComponent = Boolean(selection.barangay) && components.some(component =>
+    component.types?.some(type => POLITICAL_COMPONENT_TYPES.test(type)) &&
+    [component.long_name, component.short_name]
+      .some(name => normalizePlaceName(name) === normalizePlaceName(selection.barangay))
+  );
+  const cityComponents = components.filter(component => component.types?.some(type =>
+    ['locality', 'postal_town', 'administrative_area_level_3'].includes(type)));
+  const reportedCityNames = cityComponents.flatMap(component => [component.long_name, component.short_name]);
+  const selectedCityName = normalizePlaceName(selection.city);
+  const acceptedCityNames = new Set([
+    selection.city, selection.barangay, selection.province,
+  ].map(normalizePlaceName).filter(Boolean));
+  // Some barangays are returned as localities. Keep those results, but an
+  // explicit different municipality cannot be overridden by display text.
+  if (selectedCityName && cityComponents.some(component => {
+    const names = [component.long_name, component.short_name].map(normalizePlaceName).filter(Boolean);
+    return names.length > 0 && !names.some(name => acceptedCityNames.has(name));
+  })) return null;
+  const exactBarangayFallback = allowExactBarangayWithoutCity && exactBarangayComponent &&
+    matchesExactBarangayWithMissingCity(matchedNames, selection, reportedCityNames);
+  if (!matchesSelection(matchedNames, selection) && !exactBarangayFallback) return null;
   const barangayName = normalizePlaceName(selection.barangay);
   if (barangayName && barangayName === normalizePlaceName(selection.city)) {
     // One locality component's long and short names must not count twice when
@@ -123,13 +164,17 @@ function readGoogleResult(
   const latitude = typeof location.lat === 'function' ? location.lat() : location.lat;
   const longitude = typeof location.lng === 'function' ? location.lng() : location.lng;
   if (!hasValidCoordinates(latitude, longitude)) return null;
-  return { latitude, longitude, address: result.formatted_address || address };
+  const resolvedAddress = exactBarangayFallback
+    ? [selection.barangay, selection.city, selection.province, 'Philippines'].filter(Boolean).join(', ')
+    : result.formatted_address || address;
+  return { latitude, longitude, address: resolvedAddress };
 }
 
 function readNominatimResult(
   result: NominatimResult,
   selection: LocationSelection,
   address: string,
+  allowExactBarangayWithoutCity = false,
 ): GeocodedLocation | null {
   const details = result.address || {};
   if (details.country_code?.toLowerCase() !== 'ph') return null;
@@ -153,7 +198,13 @@ function readNominatimResult(
     .map(segment => segment.trim())
     .filter(segment => !nonPoliticalNames.has(normalizePlaceName(segment)));
   const names = [...politicalNames, ...segments, ...(nameIsPolitical && result.name ? [result.name] : [])];
-  if (!matchesSelection(names, selection)) return null;
+  const exactBarangayPlace = nameIsPolitical && Boolean(selection.barangay) &&
+    normalizePlaceName(result.name) === normalizePlaceName(selection.barangay);
+  const reportedCityNames = ['city', 'town', 'municipality', 'county']
+    .map(field => details[field]);
+  const exactBarangayFallback = allowExactBarangayWithoutCity && exactBarangayPlace &&
+    matchesExactBarangayWithMissingCity(names, selection, reportedCityNames);
+  if (!matchesSelection(names, selection) && !exactBarangayFallback) return null;
   const barangayName = normalizePlaceName(selection.barangay);
   if (barangayName && barangayName === normalizePlaceName(selection.city) &&
       !['barangay', 'village', 'suburb', 'quarter', 'neighbourhood', 'neighborhood',
@@ -165,13 +216,17 @@ function readNominatimResult(
   const longitude = typeof result.lon === 'number' ? result.lon :
     typeof result.lon === 'string' && result.lon.trim() ? Number(result.lon) : Number.NaN;
   if (!hasValidCoordinates(latitude, longitude)) return null;
-  return { latitude, longitude, address: result.display_name || address };
+  const resolvedAddress = exactBarangayFallback
+    ? [selection.barangay, selection.city, selection.province, 'Philippines'].filter(Boolean).join(', ')
+    : result.display_name || address;
+  return { latitude, longitude, address: resolvedAddress };
 }
 
 function readPhotonResult(
   feature: PhotonFeature,
   selection: LocationSelection,
   address: string,
+  allowExactBarangayWithoutCity = false,
 ): GeocodedLocation | null {
   const properties = feature.properties || {};
   const [longitude, latitude] = feature.geometry?.coordinates || [];
@@ -204,7 +259,7 @@ function readPhotonResult(
         : undefined,
     },
   };
-  return readNominatimResult(result, selection, address);
+  return readNominatimResult(result, selection, address, allowExactBarangayWithoutCity);
 }
 
 function cleanAddress(value: string): string {
@@ -265,7 +320,30 @@ export async function resolveLocationCoordinates(
     ] : []),
   ]));
 
-  const googleMaps = typeof window !== 'undefined' ? (window as any).google?.maps : undefined;
+  let googleMaps = typeof window !== 'undefined' ? (window as any).google?.maps : undefined;
+  const googleMapsAssetsPromise = typeof window !== 'undefined'
+    ? (window as any).__googleMapsAssetsPromise
+    : undefined;
+  // The map and automatic barangay lookup start together. Wait for a map
+  // script already loading so the first search can use its Google geocoder.
+  if (!googleMaps?.Geocoder && googleMapsAssetsPromise) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        googleMapsAssetsPromise,
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Google Maps initialization timed out')), REQUEST_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      // An unavailable map script does not prevent the Photon fallback.
+    } finally {
+      clearTimeout(timeout);
+    }
+    googleMaps = (window as any).google?.maps;
+  }
+  const exactBarangayQueryContext = [selection.barangay, selection.city, selection.province]
+    .filter((value): value is string => Boolean(value?.trim()));
   if (googleMaps?.Geocoder) {
     const geocoder = new googleMaps.Geocoder();
     for (const query of queries) {
@@ -280,7 +358,15 @@ export async function resolveLocationCoordinates(
             });
         });
         for (const result of results) {
-          const location = readGoogleResult(result, selection, cleanedAddress);
+          const queryNames = normalizePlaceName(query);
+          const includesSelectedBarangayContext = exactBarangayQueryContext.length === 3 &&
+            exactBarangayQueryContext.every(value => queryNames.includes(normalizePlaceName(value)));
+          const location = readGoogleResult(
+            result,
+            selection,
+            cleanedAddress,
+            includesSelectedBarangayContext,
+          );
           if (location) return location;
         }
       } catch (error) {
@@ -310,7 +396,15 @@ export async function resolveLocationCoordinates(
         : [];
       for (const feature of features) {
         if (!feature || typeof feature !== 'object') continue;
-        const location = readPhotonResult(feature as PhotonFeature, selection, cleanedAddress);
+        const queryNames = normalizePlaceName(query);
+        const includesSelectedBarangayContext = exactBarangayQueryContext.length === 3 &&
+          exactBarangayQueryContext.every(value => queryNames.includes(normalizePlaceName(value)));
+        const location = readPhotonResult(
+          feature as PhotonFeature,
+          selection,
+          cleanedAddress,
+          includesSelectedBarangayContext,
+        );
         if (location) return location;
       }
     } catch {

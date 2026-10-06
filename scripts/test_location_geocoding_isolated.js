@@ -32,19 +32,25 @@ function googleResult(overrides = {}) {
   };
 }
 
-function nominatimResult(overrides = {}) {
+function photonResult({ properties = {}, geometry, ...overrides } = {}) {
   return {
-    name: 'Banquerohan',
-    display_name: 'Banquerohan, Cadiz, Negros Occidental, Philippines',
-    class: 'boundary',
-    type: 'administrative',
-    address: { village: 'Banquerohan', city: 'Cadiz', state: 'Negros Occidental', country_code: 'ph' },
-    lat: String(barangayCoordinates.latitude), lon: String(barangayCoordinates.longitude),
+    type: 'Feature',
+    geometry: geometry || { type: 'Point', coordinates: [barangayCoordinates.longitude, barangayCoordinates.latitude] },
+    properties: {
+      name: 'Banquerohan',
+      osm_key: 'place',
+      osm_value: 'village',
+      city: 'Cadiz',
+      state: 'Negros Occidental',
+      country: 'Philippines',
+      countrycode: 'PH',
+      ...properties,
+    },
     ...overrides,
   };
 }
 
-function fixture({ google = null, nominatim = [] } = {}) {
+function fixture({ google = null, photon = [] } = {}) {
   const requests = [];
   const module = { exports: {} };
   const context = {
@@ -61,20 +67,27 @@ function fixture({ google = null, nominatim = [] } = {}) {
       }
     } } } },
     fetch: async url => {
-      requests.push({ provider: 'nominatim', url });
-      return { ok: true, json: async () => nominatim };
+      requests.push({ provider: 'photon', url });
+      return { ok: true, json: async () => ({ type: 'FeatureCollection', features: photon }) };
     },
     setTimeout, clearTimeout, AbortController,
   };
   vm.runInNewContext(compiled, context);
-  return { resolve: module.exports.resolveLocationCoordinates, requests };
+  return { resolve: module.exports.resolveLocationCoordinates, requests, context };
 }
 
 let passed = 0;
+let failed = 0;
 async function check(name, fn) {
-  await fn();
-  passed += 1;
-  console.log(`PASS ${name}`);
+  try {
+    await fn();
+    passed += 1;
+    console.log(`PASS ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.error(`FAIL ${name}`);
+    console.error(error);
+  }
 }
 
 (async () => {
@@ -165,59 +178,70 @@ async function check(name, fn) {
     const { resolve } = fixture({ google: [result] });
     assert.ok(await resolve('San Jose, San Jose City, Nueva Ecija', matching));
   });
-  await check('Nominatim searches several country-restricted candidates', async () => {
-    const wrong = nominatimResult({ name: 'Cabahug', display_name: 'Cabahug, Cadiz, Negros Occidental, Philippines',
-      address: { village: 'Cabahug', city: 'Cadiz', state: 'Negros Occidental', country_code: 'ph' } });
-    const { resolve, requests } = fixture({ nominatim: [wrong, nominatimResult()] });
+  await check('Photon considers several GeoJSON candidates and sends the selected locality query', async () => {
+    const wrong = photonResult({ properties: { name: 'Cabahug' } });
+    const { resolve, requests } = fixture({ photon: [wrong, photonResult()] });
     assert.ok(await resolve(selectedAddress, selection));
-    const params = new URL(requests[0].url).searchParams;
-    assert.equal(params.get('countrycodes'), 'ph');
-    assert.equal(params.get('addressdetails'), '1');
+    const url = new URL(requests[0].url);
+    assert.equal(url.origin, 'https://photon.komoot.io');
+    assert.equal(url.pathname, '/api/');
+    const params = url.searchParams;
+    assert.equal(params.get('q'), 'Banquerohan, Cadiz, Negros Occidental, Philippines');
+    assert.equal(params.get('lang'), 'en');
     assert.equal(params.get('limit'), '5');
   });
-  await check('A Nominatim road with the same name cannot stand in for the barangay', async () => {
-    const result = nominatimResult({ class: 'highway', type: 'residential',
-      address: { road: 'Banquerohan', city: 'Cadiz', state: 'Negros Occidental', country_code: 'ph' } });
-    const { resolve } = fixture({ nominatim: [result] });
+  await check('A Photon city result cannot stand in for the selected barangay', async () => {
+    const result = photonResult({ properties: { name: 'Cadiz', osm_value: 'city' } });
+    const { resolve } = fixture({ photon: [result] });
+    assert.equal(await resolve(selectedAddress, selection, { allowCityFallback: true }), null);
+  });
+  await check('A Photon road with the same name cannot stand in for the barangay', async () => {
+    const result = photonResult({ properties: { osm_key: 'highway', osm_value: 'residential', street: 'Banquerohan' } });
+    const { resolve } = fixture({ photon: [result] });
     assert.equal(await resolve(selectedAddress, selection), null);
   });
-  await check('A Nominatim POI named after the barangay cannot override its actual barangay', async () => {
-    const result = nominatimResult({ class: 'amenity', type: 'community_centre', addresstype: 'amenity',
-      display_name: 'Banquerohan, Cabahug, Cadiz, Negros Occidental, Philippines',
-      address: { amenity: 'Banquerohan', village: 'Cabahug', city: 'Cadiz', state: 'Negros Occidental', country_code: 'ph' } });
-    const { resolve } = fixture({ nominatim: [result] });
+  await check('A Photon POI named after the barangay cannot override its actual barangay', async () => {
+    const result = photonResult({ properties: { osm_key: 'amenity', osm_value: 'community_centre',
+      type: 'amenity', district: 'Cabahug' } });
+    const { resolve } = fixture({ photon: [result] });
     assert.equal(await resolve(selectedAddress, selection), null);
   });
-  await check('A same-name Nominatim city cannot satisfy both city and barangay', async () => {
+  await check('A same-name Photon city cannot satisfy both city and barangay', async () => {
     const matching = { barangay: 'San Jose', city: 'San Jose City', province: 'Nueva Ecija' };
-    const result = nominatimResult({ name: 'San Jose', class: 'place', type: 'city',
-      display_name: 'San Jose City, Nueva Ecija, Philippines',
-      address: { city: 'San Jose City', state: 'Nueva Ecija', country_code: 'ph' } });
-    const { resolve } = fixture({ nominatim: [result] });
+    const result = photonResult({ properties: { name: 'San Jose', osm_value: 'city',
+      city: 'San Jose City', state: 'Nueva Ecija' } });
+    const { resolve } = fixture({ photon: [result] });
     assert.equal(await resolve('San Jose, San Jose City, Nueva Ecija', matching), null);
   });
-  await check('Nominatim requires a distinct barangay field for a city with the same name', async () => {
+  await check('Photon accepts a distinct barangay field for a city with the same name', async () => {
     const matching = { barangay: 'San Jose', city: 'San Jose City', province: 'Nueva Ecija' };
-    const result = nominatimResult({ name: 'San Jose', class: 'place', type: 'village',
-      display_name: 'San Jose, San Jose City, Nueva Ecija, Philippines',
-      address: { village: 'San Jose', city: 'San Jose City', state: 'Nueva Ecija', country_code: 'ph' } });
-    const { resolve } = fixture({ nominatim: [result] });
+    const result = photonResult({ properties: { name: 'San Jose', district: 'San Jose',
+      city: 'San Jose City', state: 'Nueva Ecija' } });
+    const { resolve } = fixture({ photon: [result] });
     assert.ok(await resolve('San Jose, San Jose City, Nueva Ecija', matching));
   });
-  await check('Nominatim rejects a same-name locality in a different province', async () => {
-    const result = nominatimResult({ display_name: 'Banquerohan, Cadiz, Albay, Philippines',
-      address: { village: 'Banquerohan', city: 'Cadiz', state: 'Albay', country_code: 'ph' } });
-    const { resolve } = fixture({ nominatim: [result] });
+  await check('Photon rejects a same-name locality in a different province', async () => {
+    const result = photonResult({ properties: { state: 'Albay' } });
+    const { resolve } = fixture({ photon: [result] });
     assert.equal(await resolve(selectedAddress, selection), null);
   });
-  await check('Nominatim requires a Philippine country code', async () => {
-    const result = nominatimResult({ address: { village: 'Banquerohan', city: 'Cadiz', state: 'Negros Occidental' } });
-    const { resolve } = fixture({ nominatim: [result] });
-    assert.equal(await resolve(selectedAddress, selection), null);
+  await check('Photon requires a Philippine country code', async () => {
+    for (const countrycode of [undefined, 'US']) {
+      const result = photonResult({ properties: { countrycode } });
+      const { resolve } = fixture({ photon: [result] });
+      assert.equal(await resolve(selectedAddress, selection), null);
+    }
   });
-  await check('Nominatim rejects blank and invalid coordinates', async () => {
-    for (const lat of ['', null, 'NaN', '91']) {
-      const { resolve } = fixture({ nominatim: [nominatimResult({ lat })] });
+  await check('Photon reads GeoJSON longitude before latitude', async () => {
+    const { resolve } = fixture({ photon: [photonResult()] });
+    const result = await resolve(selectedAddress, selection);
+    assert.equal(result.latitude, barangayCoordinates.latitude);
+    assert.equal(result.longitude, barangayCoordinates.longitude);
+  });
+  await check('Photon rejects blank and invalid coordinates', async () => {
+    for (const latitude of ['', null, 'NaN', NaN, Infinity, 91]) {
+      const result = photonResult({ geometry: { type: 'Point', coordinates: [123, latitude] } });
+      const { resolve } = fixture({ photon: [result] });
       assert.equal(await resolve(selectedAddress, selection), null);
     }
   });
@@ -247,21 +271,172 @@ async function check(name, fn) {
     assert.equal(googleQueries[1], 'Banquerohan, Cadiz, Negros Occidental, Philippines');
     assert.ok(googleQueries.every(query => ['Banquerohan', 'Cadiz', 'Negros Occidental'].every(name => query.includes(name))));
   });
-  await check('Nominatim keeps a typed venue in its country-restricted query', async () => {
-    const { resolve, requests } = fixture({ nominatim: [nominatimResult()] });
+  await check('Photon keeps a typed venue and locality context in its query', async () => {
+    const { resolve, requests } = fixture({ photon: [photonResult()] });
     assert.ok(await resolve('Community Hall, Brgy. Banquerohan, Cadiz City, Negros Occidental, Western Visayas, Philippines', selection));
     assert.equal(new URL(requests[0].url).searchParams.get('q'), 'Community Hall, Banquerohan, Cadiz, Negros Occidental, Philippines');
   });
   await check('Geocoder queries strip administrative decoration and retain the selected province', async () => {
     const decorated = { ...selection, province: 'Province of Negros Occidental' };
-    const { resolve, requests } = fixture({ nominatim: [nominatimResult()] });
+    const { resolve, requests } = fixture({ photon: [photonResult()] });
     assert.ok(await resolve('Banquerohan, Cadiz City, Negros Island Region (NIR)', decorated));
     assert.equal(new URL(requests[0].url).searchParams.get('q'), 'Banquerohan, Cadiz, Negros Occidental, Philippines');
+  });
+  await check('Photon query variants retain barangay, city, province, and country after lookup failure', async () => {
+    const { resolve, requests } = fixture();
+    assert.equal(await resolve(`${selectedAddress}, Community Hall`, selection), null);
+    const queries = requests.filter(request => request.provider === 'photon')
+      .map(request => new URL(request.url).searchParams.get('q'));
+    assert.deepEqual(queries, [
+      'Community Hall, Banquerohan, Cadiz, Negros Occidental, Philippines',
+      'Banquerohan, Cadiz, Negros Occidental, Philippines',
+      'Barangay Banquerohan, Cadiz, Negros Occidental, Philippines',
+    ]);
+  });
+  const missingCitySelection = { barangay: 'Nagcasunog', city: 'Bindoy', province: 'Negros Oriental' };
+  const missingCityAddress = 'Nagcasunog, Bindoy, Negros Oriental';
+  const missingCityGoogle = () => googleResult({
+    formatted_address: 'Nagcasunog, Negros Oriental, Philippines',
+    address_components: [
+      { long_name: 'Nagcasunog', types: ['sublocality', 'political'] },
+      { long_name: 'Negros Oriental', types: ['administrative_area_level_2', 'political'] },
+      { long_name: 'Philippines', short_name: 'PH', types: ['country', 'political'] },
+    ],
+  });
+  const missingCityPhoton = () => photonResult({ properties: {
+    name: 'Nagcasunog', city: undefined, state: 'Negros Oriental',
+  } });
+  await check('Google accepts an exact barangay with correct province when city metadata is absent', async () => {
+    const { resolve, requests } = fixture({ google: [missingCityGoogle()] });
+    const result = await resolve(missingCityAddress, missingCitySelection);
+    assert.ok(result);
+    assert.equal(result.address, `${missingCityAddress}, Philippines`);
+    assert.equal(requests[0].options.address, `${missingCityAddress}, Philippines`);
+  });
+  await check('Photon accepts an exact barangay with correct province when city metadata is absent', async () => {
+    const { resolve, requests } = fixture({ photon: [missingCityPhoton()] });
+    const result = await resolve(missingCityAddress, missingCitySelection);
+    assert.ok(result);
+    assert.equal(result.address, `${missingCityAddress}, Philippines`);
+    assert.equal(new URL(requests[0].url).searchParams.get('q'), `${missingCityAddress}, Philippines`);
+  });
+  await check('Google rejects an exact barangay in a known different city', async () => {
+    for (const type of ['locality', 'postal_town', 'administrative_area_level_3']) {
+      const result = missingCityGoogle();
+      result.formatted_address = 'Nagcasunog, Tanjay, Negros Oriental, Philippines';
+      result.address_components.splice(1, 0, { long_name: 'Tanjay', types: [type, 'political'] });
+      const { resolve } = fixture({ google: [result] });
+      assert.equal(await resolve(missingCityAddress, missingCitySelection), null);
+    }
+  });
+  await check('Google rejects a conflicting municipality even when formatted text names the selected city', async () => {
+    for (const type of ['locality', 'postal_town', 'administrative_area_level_3']) {
+      const result = missingCityGoogle();
+      result.formatted_address = `${missingCityAddress}, Philippines`;
+      result.address_components.splice(1, 0, { long_name: 'Tanjay', types: [type, 'political'] });
+      const { resolve } = fixture({ google: [result] });
+      assert.equal(await resolve(missingCityAddress, missingCitySelection), null);
+    }
+  });
+  await check('Google accepts a matching municipality alias alongside an abbreviated short name', async () => {
+    const result = missingCityGoogle();
+    result.formatted_address = `${missingCityAddress}, Philippines`;
+    result.address_components.splice(1, 0, {
+      long_name: 'Municipality of Bindoy', short_name: 'BDY', types: ['locality', 'political'],
+    });
+    const { resolve } = fixture({ google: [result] });
+    assert.ok(await resolve(missingCityAddress, missingCitySelection));
+  });
+  await check('Google can classify an exact barangay as a locality when municipality metadata is absent', async () => {
+    const result = missingCityGoogle();
+    result.address_components[0].types = ['locality', 'political'];
+    const { resolve } = fixture({ google: [result] });
+    assert.ok(await resolve(missingCityAddress, missingCitySelection));
+  });
+  await check('Photon rejects an exact barangay in a known different city', async () => {
+    for (const field of ['city', 'town', 'municipality', 'county']) {
+      const result = missingCityPhoton();
+      result.properties[field] = 'Tanjay';
+      const { resolve } = fixture({ photon: [result] });
+      assert.equal(await resolve(missingCityAddress, missingCitySelection), null);
+    }
+  });
+  await check('Google missing-city exception still requires the selected province', async () => {
+    const result = missingCityGoogle();
+    result.formatted_address = 'Nagcasunog, Negros Occidental, Philippines';
+    result.address_components[1].long_name = 'Negros Occidental';
+    const { resolve } = fixture({ google: [result] });
+    assert.equal(await resolve(missingCityAddress, missingCitySelection), null);
+  });
+  await check('Photon missing-city exception still requires the selected province', async () => {
+    const result = missingCityPhoton();
+    result.properties.state = 'Negros Occidental';
+    const { resolve } = fixture({ photon: [result] });
+    assert.equal(await resolve(missingCityAddress, missingCitySelection), null);
+  });
+  await check('Missing-city exception is disabled without a selected province', async () => {
+    const incompleteSelection = { barangay: 'Nagcasunog', city: 'Bindoy' };
+    for (const provider of ['google', 'photon']) {
+      const { resolve } = fixture(provider === 'google'
+        ? { google: [missingCityGoogle()] }
+        : { photon: [missingCityPhoton()] });
+      assert.equal(await resolve(missingCityAddress, incompleteSelection), null);
+    }
+  });
+  await check('Admin Batangan venue search resolves the Photon barangay shape without city metadata', async () => {
+    const adminSelection = { barangay: 'Batangan', city: 'Bindoy', province: 'Negros Oriental' };
+    // Shape from the public Photon Batangan result: village and province are
+    // present, while the municipality property is absent.
+    const batangan = photonResult({
+      geometry: { type: 'Point', coordinates: [123.1308031, 9.7315827] },
+      properties: { name: 'Batangan', city: undefined, state: 'Negros Oriental' },
+    });
+    const { resolve, requests } = fixture({ photon: [batangan] });
+    const result = await resolve('Batangan, Bindoy, Negros Island Region (NIR), barangayhall', adminSelection);
+    assert.equal(result.latitude, 9.7315827);
+    assert.equal(result.longitude, 123.1308031);
+    assert.equal(result.address, 'Batangan, Bindoy, Negros Oriental, Philippines');
+    assert.equal(new URL(requests[0].url).searchParams.get('q'),
+      'barangayhall, Batangan, Bindoy, Negros Oriental, Philippines');
+  });
+  await check('A barangay search waits for the existing Google Maps startup promise', async () => {
+    const { resolve, requests, context } = fixture({ google: [missingCityGoogle()] });
+    const loadedGoogle = context.window.google;
+    delete context.window.google;
+    let finishLoading;
+    context.window.__googleMapsAssetsPromise = new Promise(done => { finishLoading = done; });
+    const pending = resolve(missingCityAddress, missingCitySelection);
+    await Promise.resolve();
+    assert.equal(requests.length, 0, 'The lookup must not skip the Google script already loading');
+    context.window.google = loadedGoogle;
+    finishLoading(loadedGoogle);
+    assert.ok(await pending);
+    assert.equal(requests[0].provider, 'google');
+    assert.equal(requests.filter(request => request.provider === 'photon').length, 0);
+  });
+  await check('A failed Google Maps startup still resolves through Photon', async () => {
+    const { resolve, requests, context } = fixture({ photon: [missingCityPhoton()] });
+    context.window.__googleMapsAssetsPromise = Promise.reject(new Error('Synthetic script load failure'));
+    assert.ok(await resolve(missingCityAddress, missingCitySelection));
+    assert.equal(requests[0].provider, 'photon');
+  });
+  await check('A Google Maps startup promise cannot block the barangay search indefinitely', async () => {
+    const { resolve, requests, context } = fixture({ photon: [missingCityPhoton()] });
+    context.window.__googleMapsAssetsPromise = new Promise(() => {});
+    const timeoutDelays = [];
+    context.setTimeout = (callback, delay) => {
+      timeoutDelays.push(delay);
+      return setTimeout(callback, 0);
+    };
+    assert.ok(await resolve(missingCityAddress, missingCitySelection));
+    assert.equal(timeoutDelays[0], 8000);
+    assert.equal(requests[0].provider, 'photon');
   });
   await check('Empty addresses skip every provider', async () => {
     const { resolve, requests } = fixture();
     assert.equal(await resolve('', selection), null);
     assert.equal(requests.length, 0);
   });
-  console.log(`${passed} location geocoding checks passed.`);
+  console.log(`${passed} location geocoding checks passed${failed ? `; ${failed} failed` : ''}.`);
+  if (failed) process.exitCode = 1;
 })().catch(error => { console.error(error); process.exitCode = 1; });
