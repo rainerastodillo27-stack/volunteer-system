@@ -12349,6 +12349,71 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     const selectedVolunteerName = selectedMatch ? getVolunteerDisplayNameForMatch(selectedMatch) : 'Volunteer';
 
+    const selectedVolunteerIdentifiers = new Set([
+      ...getVolunteerIdentityIdentifiers(selectedVolunteer),
+      ...getVolunteerIdentityIdentifiers(selectedMatch?.volunteerId),
+    ]);
+    const eventProjectsById = new Map<string, Project>(
+      projects.filter(project => project.isEvent).map(project => [project.id, project] as const)
+    );
+    if (activeSelectedProject?.isEvent) {
+      eventProjectsById.set(activeSelectedProject.id, activeSelectedProject);
+    }
+
+    const volunteerEventHistoryByProjectId = new Map<string, {
+      project: Project;
+      joinedAt?: string;
+      participationStatus: VolunteerProjectJoinRecord['participationStatus'];
+    }>();
+    volunteerJoinRecords.forEach(record => {
+      if (
+        !selectedVolunteerIdentifiers.has(normalizeVolunteerIdentifier(record.volunteerId)) &&
+        !selectedVolunteerIdentifiers.has(normalizeVolunteerIdentifier(record.volunteerUserId))
+      ) {
+        return;
+      }
+      const eventProject = eventProjectsById.get(record.projectId);
+      if (!eventProject) return;
+
+      const existing = volunteerEventHistoryByProjectId.get(record.projectId);
+      volunteerEventHistoryByProjectId.set(record.projectId, {
+        project: eventProject,
+        joinedAt: record.joinedAt || existing?.joinedAt,
+        participationStatus: record.participationStatus || existing?.participationStatus || 'Active',
+      });
+    });
+
+    [...allVolunteerMatches, ...(selectedMatch ? [selectedMatch] : [])].forEach(match => {
+      if (
+        !selectedVolunteerIdentifiers.has(normalizeVolunteerIdentifier(match.volunteerId)) ||
+        (match.status !== 'Matched' && match.status !== 'Completed')
+      ) {
+        return;
+      }
+      const eventProject = eventProjectsById.get(match.projectId);
+      if (!eventProject) return;
+
+      const existing = volunteerEventHistoryByProjectId.get(match.projectId);
+      volunteerEventHistoryByProjectId.set(match.projectId, {
+        project: eventProject,
+        joinedAt: existing?.joinedAt || match.matchedAt || match.requestedAt,
+        participationStatus: match.status === 'Completed'
+          ? 'Completed'
+          : existing?.participationStatus || 'Active',
+      });
+    });
+
+    const volunteerEventHistory = Array.from(volunteerEventHistoryByProjectId.values())
+      .sort((left, right) => new Date(right.joinedAt || 0).getTime() - new Date(left.joinedAt || 0).getTime());
+    const completedEventCount = volunteerEventHistory.filter(
+      entry => entry.participationStatus === 'Completed'
+    ).length;
+    const formatVolunteerEventJoinedDate = (value?: string) => {
+      if (!value) return 'Date unavailable';
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? 'Date unavailable' : format(parsed, 'MMM d, yyyy');
+    };
+
 
 
     const renderRequirementsChecklist = (volunteer: Volunteer) => {
@@ -13023,7 +13088,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                             <Text style={{ fontSize: 12, color: '#64748b', marginTop: 1 }}>{skillCategory}</Text>
 
-                            <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>Approved {match.matchedAt ? format(new Date(match.matchedAt), 'MMM d, yyyy') : ''}</Text>
+                            <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                              Joined {formatVolunteerEventJoinedDate(joinRecord?.joinedAt || match.matchedAt)}
+                            </Text>
 
                           </View>
 
@@ -13419,6 +13486,54 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   </View>
 
 
+
+                  {/* Volunteer Event History */}
+                  <View style={{ marginBottom: 24 }} {...({} as any)}>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#475569', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Event History
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+                      {[
+                        { label: 'Events Joined', value: volunteerEventHistory.length, color: '#166534', backgroundColor: '#f0fdf4' },
+                        { label: 'Completed Events', value: completedEventCount, color: '#7c3aed', backgroundColor: '#f5f3ff' },
+                      ].map(stat => (
+                        <View key={stat.label} style={{ flex: 1, padding: 12, borderRadius: 8, backgroundColor: stat.backgroundColor, borderWidth: 1, borderColor: '#e2e8f0' }}>
+                          <Text style={{ fontSize: 20, fontWeight: '800', color: stat.color }}>{stat.value}</Text>
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', marginTop: 2 }}>{stat.label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    {volunteerEventHistory.length > 0 ? (
+                      <View style={{ gap: 8 }}>
+                        {volunteerEventHistory.map(entry => {
+                          const isCompleted = entry.participationStatus === 'Completed';
+                          const isSuspended = entry.participationStatus === 'Suspended';
+                          const statusColor = isCompleted ? '#7c3aed' : isSuspended ? '#b91c1c' : '#166534';
+                          const statusBackground = isCompleted ? '#f5f3ff' : isSuspended ? '#fef2f2' : '#f0fdf4';
+
+                          return (
+                            <View key={entry.project.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#ffffff' }}>
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: '#0f172a' }} numberOfLines={2}>
+                                  {entry.project.title}
+                                </Text>
+                                <Text style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                                  Joined {formatVolunteerEventJoinedDate(entry.joinedAt)}
+                                </Text>
+                              </View>
+                              <View style={{ paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, backgroundColor: statusBackground }}>
+                                <Text style={{ fontSize: 9, fontWeight: '800', color: statusColor }}>
+                                  {isCompleted ? 'COMPLETED' : isSuspended ? 'SUSPENDED' : 'JOINED'}
+                                </Text>
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <Text style={{ fontSize: 12, color: '#64748b' }}>No event participation history found.</Text>
+                    )}
+                  </View>
 
                   {/* Review Section */}
                   {selectedMatch.status === 'Requested' ? (
