@@ -24909,6 +24909,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                   showSelectedDayEventsInSidebar
 
+                  maxDayEventsPerCell={4}
+
                   onOpenProject={projectId => {
 
                     const proj = projects.find(p => p.id === projectId);

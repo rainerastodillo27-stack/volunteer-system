@@ -40,6 +40,7 @@ type ProjectTimelineCalendarCardProps = {
   includeUnlinkedPlanningItems?: boolean;
   showProjectManagementActions?: boolean;
   showSelectedDayEventsInSidebar?: boolean;
+  maxDayEventsPerCell?: number;
   onAddEvent?: (date: Date) => void;
   onOpenProject?: (projectId: string) => void;
   onEditProject?: (projectId: string) => void;
@@ -150,6 +151,7 @@ export default function ProjectTimelineCalendarCard({
   includeUnlinkedPlanningItems = true,
   showProjectManagementActions = true,
   showSelectedDayEventsInSidebar = false,
+  maxDayEventsPerCell = 2,
   onAddEvent,
   onOpenProject,
   onEditProject,
@@ -477,7 +479,7 @@ export default function ProjectTimelineCalendarCard({
         </View>
 
         <View style={styles.bigDayEventsContainer}>
-          {dayEvents.slice(0, 2).map((event, eventIdx) => (
+          {dayEvents.slice(0, maxDayEventsPerCell).map((event, eventIdx) => (
             <TouchableOpacity
               key={eventIdx}
               style={[styles.bigEventChip, { backgroundColor: event.color }]}
@@ -499,9 +501,9 @@ export default function ProjectTimelineCalendarCard({
               </Text>
             </TouchableOpacity>
           ))}
-          {dayEvents.length > 2 && (
+          {dayEvents.length > maxDayEventsPerCell && (
             <Text style={styles.bigMoreEventsText}>
-              +{dayEvents.length - 2} more
+              +{dayEvents.length - maxDayEventsPerCell} more
             </Text>
           )}
         </View>
