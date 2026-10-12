@@ -1001,6 +1001,7 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
       ) : selectedProject ? (
         <>
           <View style={styles.sectionHeader}>
+            <Text style={[styles.cardLabel, { color: '#166534', marginBottom: 6 }]}>Project</Text>
             <Text style={styles.screenTitle}>{selectedProject.title}</Text>
             <Text style={styles.screenSubtitle}>Choose an event and request to join. Admin will review pending requests.</Text>
           </View>

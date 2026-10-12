@@ -599,6 +599,7 @@ export default function VolunteerDashboardScreen() {
         id: item.id,
         startDate: item.startDate,
         title: item.title,
+        itemType: undefined,
         htmlLink: undefined,
       }));
 
@@ -608,6 +609,7 @@ export default function VolunteerDashboardScreen() {
             id: `${event.id}-${dateKey}`,
             startDate: `${dateKey}T12:00:00`,
             title: event.title,
+            itemType: 'Event' as const,
             htmlLink: undefined,
           }))
         )
@@ -617,6 +619,7 @@ export default function VolunteerDashboardScreen() {
             id: p.id,
             startDate: p.startDate,
             title: p.title,
+            itemType: p.isEvent ? 'Event' as const : 'Project' as const,
             htmlLink: undefined,
           }));
 
@@ -624,6 +627,7 @@ export default function VolunteerDashboardScreen() {
       id: `google-${event.id}`,
       startDate: event.start?.dateTime || event.start?.date || '',
       title: event.summary || 'Google Calendar Event',
+      itemType: 'Event' as const,
       htmlLink: event.htmlLink,
     }));
 
@@ -938,9 +942,24 @@ export default function VolunteerDashboardScreen() {
                     </View>
                     <View style={styles.timelineContent}>
                       <Text style={styles.timelineDate}>{formatTimelineDate(item.startDate)}</Text>
-                      <Text style={[styles.timelineTitle, item.htmlLink && { color: '#047857' }]}>
-                        {item.title} {item.htmlLink && '(Google Cal)'}
-                      </Text>
+                      <View style={styles.timelineTitleLine}>
+                        <Text style={[styles.timelineTitle, item.htmlLink && { color: '#047857' }]}>
+                          {item.title} {item.htmlLink && '(Google Cal)'}
+                        </Text>
+                        {item.itemType ? (
+                          <View style={[
+                            styles.timelineTypeBadge,
+                            item.itemType === 'Event' ? styles.timelineEventBadge : styles.timelineProjectBadge,
+                          ]}>
+                            <Text style={[
+                              styles.timelineTypeBadgeText,
+                              item.itemType === 'Event' ? styles.timelineEventBadgeText : styles.timelineProjectBadgeText,
+                            ]}>
+                              {item.itemType}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
                   </View>
                 );
@@ -1058,6 +1077,9 @@ export default function VolunteerDashboardScreen() {
                     {getProjectIcon(project.category)}
                   </View>
                   <View style={styles.projectInfo}>
+                    <View style={styles.projectTypeBadge}>
+                      <Text style={styles.projectTypeBadgeText}>EVENT</Text>
+                    </View>
                     <Text style={styles.projectTitleText}>{project.title}</Text>
                     {skillMatch.hasMatch && (
                       <View style={styles.skillMatchBadge}>
@@ -1514,6 +1536,34 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#22201B',
     marginTop: 2,
+    flex: 1,
+  },
+  timelineTitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  timelineTypeBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  timelineEventBadge: {
+    backgroundColor: '#dcfce7',
+  },
+  timelineProjectBadge: {
+    backgroundColor: '#e0f2fe',
+  },
+  timelineTypeBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  timelineEventBadgeText: {
+    color: '#166534',
+  },
+  timelineProjectBadgeText: {
+    color: '#0369a1',
   },
   programsContainer: {
     paddingRight: 20,
@@ -1568,6 +1618,20 @@ const styles = StyleSheet.create({
   },
   projectInfo: {
     flex: 1,
+  },
+  projectTypeBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#dcfce7',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginBottom: 4,
+  },
+  projectTypeBadgeText: {
+    color: '#166534',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
   projectTitleText: {
     fontSize: 13,

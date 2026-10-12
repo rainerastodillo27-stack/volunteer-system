@@ -268,8 +268,8 @@ type ProjectsSortKey = 'recentlyUpdated' | 'projectName' | 'newestSchedule' | 'o
 const PROJECTS_SORT_OPTIONS: Array<{ key: ProjectsSortKey; label: string }> = [
   { key: 'recentlyUpdated', label: 'Recently Updated' },
   { key: 'projectName', label: 'Project Name' },
-  { key: 'newestSchedule', label: 'Newest Schedule' },
-  { key: 'oldestSchedule', label: 'Oldest Schedule' },
+  { key: 'newestSchedule', label: 'Date (Newest First)' },
+  { key: 'oldestSchedule', label: 'Date (Oldest First)' },
 ];
 
 

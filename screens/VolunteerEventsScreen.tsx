@@ -36,7 +36,7 @@ import {
 } from '../utils/projectMap';
 import { format } from 'date-fns';
 
-type SortOption = 'date' | 'priority' | 'title';
+type SortOption = 'soonest' | 'latest' | 'priority' | 'title';
 type FilterCategory = 'All' | 'Nutrition' | 'Education' | 'Livelihood' | 'Disaster';
 
 const convertPlanningItemToProjectEvent = (
@@ -157,7 +157,7 @@ export default function VolunteerEventsScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   
   // Sort / Filter states
-  const [sortBy, setSortBy] = useState<SortOption>('date');
+  const [sortBy, setSortBy] = useState<SortOption>('soonest');
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('All');
   const [showSortModal, setShowSortModal] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
@@ -481,8 +481,15 @@ export default function VolunteerEventsScreen() {
 
     // Sorting
     result.sort((a, b) => {
-      if (sortBy === 'date') {
-        return new Date(a.startDate).getTime() - new Date(b.startDate).getTime();
+      if (sortBy === 'soonest' || sortBy === 'latest') {
+        const startA = new Date(a.startDate || '').getTime();
+        const startB = new Date(b.startDate || '').getTime();
+        const validA = Number.isFinite(startA);
+        const validB = Number.isFinite(startB);
+        if (validA !== validB) return validA ? -1 : 1;
+        if (!validA && !validB) return a.title.localeCompare(b.title);
+        const dateOrder = sortBy === 'soonest' ? startA - startB : startB - startA;
+        return dateOrder || a.title.localeCompare(b.title);
       }
       if (sortBy === 'title') {
         return a.title.localeCompare(b.title);
@@ -823,7 +830,9 @@ export default function VolunteerEventsScreen() {
           activeOpacity={0.8}
         >
           <MaterialIcons name="sort" size={16} color="#3c4043" />
-          <Text style={styles.dropdownBtnText}>Sort: {sortBy === 'date' ? 'Date' : sortBy === 'title' ? 'Title' : 'Priority'}</Text>
+          <Text style={styles.dropdownBtnText}>
+            Sort: {sortBy === 'soonest' ? 'Date (Soonest)' : sortBy === 'latest' ? 'Date (Latest)' : sortBy === 'title' ? 'Title' : 'Priority'}
+          </Text>
           <MaterialIcons name="keyboard-arrow-down" size={16} color="#3c4043" />
         </TouchableOpacity>
       </View>
@@ -878,7 +887,8 @@ export default function VolunteerEventsScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Sort Events By</Text>
             {[
-              { label: 'Date (Soonest)', value: 'date' },
+              { label: 'Date (Soonest First)', value: 'soonest' },
+              { label: 'Date (Latest First)', value: 'latest' },
               { label: 'Priority (High first)', value: 'priority' },
               { label: 'Alphabetical', value: 'title' },
             ].map(opt => (
