@@ -811,7 +811,7 @@ type VolunteerTimeLogMutationResult = {
 };
 
 export type VolunteerRecognitionStatus = {
-  joinedProgramCount: number;
+  joinedEventCount: number;
   isTopVolunteer: boolean;
 };
 
@@ -4960,16 +4960,23 @@ export async function getVolunteerByUserId(userId: string): Promise<Volunteer | 
   return null;
 }
 
-// Computes recognition metrics such as joined programs and top-volunteer status.
+// Computes event-based recognition metrics and top-volunteer status.
 export async function getVolunteerRecognitionStatus(
   volunteerId: string
 ): Promise<VolunteerRecognitionStatus> {
-  const payload = await requestApiJson<{ recognition?: Partial<VolunteerRecognitionStatus> | null }>(
+  const payload = await requestApiJson<{
+    recognition?: {
+      joinedEventCount?: number | null;
+      joinedProgramCount?: number | null;
+      isTopVolunteer?: boolean | null;
+    } | null;
+  }>(
     `/volunteers/${encodeURIComponent(volunteerId)}/recognition`
   );
 
   return {
-    joinedProgramCount: payload.recognition?.joinedProgramCount || 0,
+    joinedEventCount:
+      payload.recognition?.joinedEventCount ?? payload.recognition?.joinedProgramCount ?? 0,
     isTopVolunteer: Boolean(payload.recognition?.isTopVolunteer),
   };
 }

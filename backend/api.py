@@ -586,6 +586,7 @@ def _stable_short_join_record_id(project_id: str, volunteer_id: str) -> str:
 
     return f"voljoin-{project_id[:18]}-{volunteer_id[:18]}-{format(hash_value, 'x')}"
 
+# Top Volunteer recognition is based on joined events only.
 TOP_VOLUNTEER_THRESHOLD = 5
 
 
@@ -5694,7 +5695,7 @@ def _user_is_field_officer_for_event(
     )
 
 
-# Computes joined-program count and top-volunteer recognition state.
+# Computes joined-event count and top-volunteer recognition state.
 def _postgres_get_volunteer_recognition_status(
     connection: Any,
     volunteer_id: str,
@@ -5706,35 +5707,47 @@ def _postgres_get_volunteer_recognition_status(
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            with joined_projects as (
-                select distinct project_id
-                from volunteer_event_joins
-                where volunteer_id = %s
-                  and project_id is not null
-                  and project_id <> ''
+            with event_ids as (
+                select id as event_id
+                from projects
+                where is_event = true
+                union
+                select id as event_id
+                from events
+                where is_event = true
             ),
-            past_projects as (
+            joined_events as (
+                select distinct vej.project_id as event_id
+                from volunteer_event_joins vej
+                join event_ids on event_ids.event_id = vej.project_id
+                where vej.volunteer_id = %s
+            ),
+            past_events as (
                 select distinct unnest(
                     coalesce(past_projects, '{}'::text[])
-                ) as project_id
+                ) as event_id
                 from volunteers
                 where volunteers_id = %s
             )
-            select count(distinct project_id)
+            select count(distinct event_id)
             from (
-                select project_id from joined_projects
+                select event_id from joined_events
                 union
-                select project_id from past_projects
-            ) all_projects
+                select past_events.event_id
+                from past_events
+                join event_ids on event_ids.event_id = past_events.event_id
+            ) all_events
             """,
             (volunteer_id, volunteer_id),
         )
         row = cursor.fetchone()
 
-    joined_program_count = int(row[0] or 0) if row is not None else 0
+    joined_event_count = int(row[0] or 0) if row is not None else 0
     return {
-        "joinedProgramCount": joined_program_count,
-        "isTopVolunteer": joined_program_count >= TOP_VOLUNTEER_THRESHOLD,
+        # Keep the legacy field for already-installed app versions.
+        "joinedEventCount": joined_event_count,
+        "joinedProgramCount": joined_event_count,
+        "isTopVolunteer": joined_event_count >= TOP_VOLUNTEER_THRESHOLD,
     }
 
 

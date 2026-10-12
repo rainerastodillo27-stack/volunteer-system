@@ -37,7 +37,7 @@ import {
   REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
 } from '../models/storage';
-import { VolunteerRecognitionStatus } from '../models/storage';
+import type { VolunteerRecognitionStatus } from '../models/storage';
 import { NVCSector, Partner, Project, User, UserType, Volunteer, VolunteerProjectJoinRecord, VolunteerTimeLog, VolunteerAffiliation, PartnerSectorType, AdvocacyFocus, SocialMediaInfo } from '../models/types';
 import { getAttachmentLabel, isImageMediaUri, pickImageFromDevice } from '../utils/media';
 import { getRequestErrorMessage, getRequestErrorTitle, isAbortLikeError } from '../utils/requestErrors';
@@ -226,7 +226,7 @@ export default function ProfileScreen() {
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [recognitionStatus, setRecognitionStatus] = useState<VolunteerRecognitionStatus>({
-    joinedProgramCount: 0,
+    joinedEventCount: 0,
     isTopVolunteer: false,
   });
   const [projects, setProjects] = useState<Project[]>([]);
@@ -271,16 +271,13 @@ export default function ProfileScreen() {
   const membershipValidIdPhoto = user?.volunteerMembershipSheet?.validIdPhoto?.trim() || '';
   const membershipCertificate = user?.volunteerMembershipSheet?.certificationsOrTrainings?.trim() || '';
 
-  // Loads the volunteer profile plus recognition details for volunteer accounts.
+  // Loads the volunteer profile, event participation, and recognition details.
   const loadVolunteerProfile = useCallback(async () => {
     if (user?.role !== 'volunteer' || !user.id) {
       setVolunteerProfile(null);
       setVolunteerJoinRecords([]);
       setVolunteerTimeLogs([]);
-      setRecognitionStatus({
-        joinedProgramCount: 0,
-        isTopVolunteer: false,
-      });
+      setRecognitionStatus({ joinedEventCount: 0, isTopVolunteer: false });
       return;
     }
 
@@ -335,8 +332,7 @@ export default function ProfileScreen() {
               record.volunteerUserId === user.id
           )
         );
-        setRecognitionStatus({ joinedProgramCount: 0, isTopVolunteer: false });
-        // defer heavier recognition check
+        setRecognitionStatus({ joinedEventCount: 0, isTopVolunteer: false });
         setTimeout(async () => {
           try {
             const recognition = await getVolunteerRecognitionStatus(synchronizedProfile.id);
@@ -346,10 +342,7 @@ export default function ProfileScreen() {
       } else {
         setVolunteerJoinRecords([]);
         setVolunteerTimeLogs([]);
-        setRecognitionStatus({
-          joinedProgramCount: 0,
-          isTopVolunteer: false,
-        });
+        setRecognitionStatus({ joinedEventCount: 0, isTopVolunteer: false });
       }
       setLoadError(null);
     } catch (error) {
@@ -1015,7 +1008,7 @@ export default function ProfileScreen() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
-  const joinedProgramCount = recognitionStatus.joinedProgramCount;
+  const joinedEventCount = recognitionStatus.joinedEventCount;
   const isTopVolunteer = recognitionStatus.isTopVolunteer;
   const primaryPartnerProfile = partnerProfiles[0] || null;
   const profilePhotoUri = isImageMediaUri(user?.profilePhoto) ? user?.profilePhoto : null;
@@ -1155,7 +1148,7 @@ export default function ProfileScreen() {
           <View style={styles.topVolunteerTextWrap}>
             <Text style={styles.topVolunteerTitle}>Top Volunteer</Text>
             <Text style={styles.topVolunteerSubtitle}>
-              Reached {joinedProgramCount} joined programs
+              Reached {joinedEventCount} joined events
             </Text>
           </View>
         </View>
