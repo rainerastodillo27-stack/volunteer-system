@@ -24605,7 +24605,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                                           <View style={styles.projectsTableGroupRow}>
 
-                                            <Text style={styles.projectsTableGroupText}>
+                                            <Text style={[
+                                              styles.projectsTableGroupText,
+                                              project.isEvent && styles.projectsTableGroupTextEvent,
+                                            ]}>
 
                                               {project.isEvent ? `Events (${eventCount})` : `Projects (${projectCount})`}
 
@@ -28391,7 +28394,7 @@ const styles = StyleSheet.create({
 
     borderBottomColor: '#e2e8f0',
 
-    paddingVertical: 8,
+    paddingVertical: 10,
 
     paddingHorizontal: 12
 
@@ -28399,13 +28402,19 @@ const styles = StyleSheet.create({
 
   projectsTableGroupText: {
 
-    fontSize: 11,
+    fontSize: 15,
 
     fontWeight: '900',
 
     color: '#166534',
 
     textTransform: 'uppercase'
+
+  },
+
+  projectsTableGroupTextEvent: {
+
+    color: '#7c3aed',
 
   },
 
