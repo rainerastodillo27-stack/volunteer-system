@@ -831,6 +831,16 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
       matches: volunteerMatches,
       timeLogs: selectedVolunteerTimeLogs,
     });
+    const selectedVolunteerIdentifiers = new Set(
+      [selectedVolunteer.id, selectedVolunteer.userId]
+        .map(identifier => String(identifier || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const activeViolationFlagCount = volunteerJoinRecords.filter(record =>
+      record.participationStatus === 'Suspended' &&
+      (selectedVolunteerIdentifiers.has(String(record.volunteerId || '').trim().toLowerCase()) ||
+        selectedVolunteerIdentifiers.has(String(record.volunteerUserId || '').trim().toLowerCase()))
+    ).length;
     const availableProjects = participation.availableEvents;
     const eventsJoinedCount = participation.joinedEvents.length;
     const photoReportsCount = selectedVolunteerTimeLogs.filter(log =>
@@ -1164,6 +1174,11 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                     <Text style={styles.applicationStatValue}>{completedEventsCount}</Text>
                     <Text style={styles.applicationStatLabel}>Completed Events</Text>
                   </View>
+                  <View style={[styles.applicationStatCard, activeViolationFlagCount > 0 && { borderColor: '#fecaca', backgroundColor: '#fff7f7' }]}>
+                    <MaterialIcons name="flag" size={20} color={activeViolationFlagCount > 0 ? '#b91c1c' : '#64748b'} />
+                    <Text style={[styles.applicationStatValue, activeViolationFlagCount > 0 && { color: '#b91c1c' }]}>{activeViolationFlagCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Active Flags</Text>
+                  </View>
                 </View>
 
                 <View style={styles.applicationPanel}>
@@ -1423,6 +1438,12 @@ export default function VolunteerManagementScreen({ navigation, route }: any) {
                     <Text style={styles.applicationStatValue}>{completedEventsCount}</Text>
                     <Text style={styles.applicationStatLabel}>Completed Events</Text>
                     <Text style={[styles.applicationStatLabel, { color: '#94a3b8' }]}>Total records</Text>
+                  </View>
+                  <View style={[styles.applicationStatCard, activeViolationFlagCount > 0 && { borderColor: '#fecaca', backgroundColor: '#fff7f7' }]}>
+                    <MaterialIcons name="flag" size={20} color={activeViolationFlagCount > 0 ? '#b91c1c' : '#64748b'} />
+                    <Text style={[styles.applicationStatValue, activeViolationFlagCount > 0 && { color: '#b91c1c' }]}>{activeViolationFlagCount}</Text>
+                    <Text style={styles.applicationStatLabel}>Active Flags</Text>
+                    <Text style={[styles.applicationStatLabel, { color: '#94a3b8' }]}>Suspended events</Text>
                   </View>
                 </View>
 

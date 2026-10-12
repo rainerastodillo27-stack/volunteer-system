@@ -12135,9 +12135,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     showConfirm({
       title: action === 'suspend' ? 'Suspend volunteer from event?' : 'Reinstate volunteer?',
       message: action === 'suspend'
-        ? `${volunteerName} will remain a member of "${event.title}" and keep their assignments, but they will not be able to check in or submit event reports. Reason: ${reason}`
-        : `Restore ${volunteerName}'s attendance and reporting access for "${event.title}"? Their event assignments will remain.`,
-      confirmText: action === 'suspend' ? 'Suspend' : 'Reinstate',
+        ? `${volunteerName} will remain a member of "${event.title}" and keep their assignments, but they will not be able to check in or submit event reports. This also adds an active violation flag to their profile. Reason: ${reason}`
+        : `Restore ${volunteerName}'s attendance and reporting access for "${event.title}"? Their event assignments will remain, and this event's active flag will be cleared.`,
+      confirmText: action === 'suspend' ? 'Flag & suspend' : 'Clear flag & reinstate',
       cancelText: 'Cancel',
       confirmColor: action === 'suspend' ? '#DC2626' : '#166534',
       icon: action === 'suspend' ? 'person-off' : 'person-add-alt-1',
@@ -12164,8 +12164,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
           Alert.alert(
             action === 'suspend' ? 'Volunteer suspended' : 'Volunteer reinstated',
             action === 'suspend'
-              ? `${volunteerName} is suspended from this event.`
-              : `${volunteerName} can participate in this event again.`,
+              ? `${volunteerName} is suspended from this event and has an active violation flag.`
+              : `${volunteerName} can participate in this event again. The event flag was cleared.`,
           );
         } catch (error) {
           Alert.alert(
@@ -12364,6 +12364,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       project: Project;
       joinedAt?: string;
       participationStatus: VolunteerProjectJoinRecord['participationStatus'];
+      suspensionReason?: string;
     }>();
     volunteerJoinRecords.forEach(record => {
       if (
@@ -12380,6 +12381,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
         project: eventProject,
         joinedAt: record.joinedAt || existing?.joinedAt,
         participationStatus: record.participationStatus || existing?.participationStatus || 'Active',
+        suspensionReason: record.participationStatus === 'Suspended'
+          ? record.suspensionReason || existing?.suspensionReason
+          : existing?.suspensionReason,
       });
     });
 
@@ -12397,9 +12401,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       volunteerEventHistoryByProjectId.set(match.projectId, {
         project: eventProject,
         joinedAt: existing?.joinedAt || match.matchedAt || match.requestedAt,
-        participationStatus: match.status === 'Completed'
-          ? 'Completed'
-          : existing?.participationStatus || 'Active',
+        participationStatus: existing?.participationStatus === 'Suspended'
+          ? 'Suspended'
+          : match.status === 'Completed'
+            ? 'Completed'
+            : existing?.participationStatus || 'Active',
+        suspensionReason: existing?.suspensionReason,
       });
     });
 
@@ -12407,6 +12414,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       .sort((left, right) => new Date(right.joinedAt || 0).getTime() - new Date(left.joinedAt || 0).getTime());
     const completedEventCount = volunteerEventHistory.filter(
       entry => entry.participationStatus === 'Completed'
+    ).length;
+    const activeViolationFlagCount = volunteerEventHistory.filter(
+      entry => entry.participationStatus === 'Suspended'
     ).length;
     const formatVolunteerEventJoinedDate = (value?: string) => {
       if (!value) return 'Date unavailable';
@@ -13496,6 +13506,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       {[
                         { label: 'Events Joined', value: volunteerEventHistory.length, color: '#166534', backgroundColor: '#f0fdf4' },
                         { label: 'Completed Events', value: completedEventCount, color: '#7c3aed', backgroundColor: '#f5f3ff' },
+                        { label: 'Active Flags', value: activeViolationFlagCount, color: '#b91c1c', backgroundColor: '#fef2f2' },
                       ].map(stat => (
                         <View key={stat.label} style={{ flex: 1, padding: 12, borderRadius: 8, backgroundColor: stat.backgroundColor, borderWidth: 1, borderColor: '#e2e8f0' }}>
                           <Text style={{ fontSize: 20, fontWeight: '800', color: stat.color }}>{stat.value}</Text>
@@ -13520,10 +13531,15 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 <Text style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
                                   Joined {formatVolunteerEventJoinedDate(entry.joinedAt)}
                                 </Text>
+                                {isSuspended ? (
+                                  <Text style={{ fontSize: 11, color: '#b91c1c', marginTop: 3 }}>
+                                    Active flag: {entry.suspensionReason || 'No reason recorded'}
+                                  </Text>
+                                ) : null}
                               </View>
                               <View style={{ paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, backgroundColor: statusBackground }}>
                                 <Text style={{ fontSize: 9, fontWeight: '800', color: statusColor }}>
-                                  {isCompleted ? 'COMPLETED' : isSuspended ? 'SUSPENDED' : 'JOINED'}
+                                  {isCompleted ? 'COMPLETED' : isSuspended ? 'FLAGGED' : 'JOINED'}
                                 </Text>
                               </View>
                             </View>
@@ -13631,11 +13647,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         />
                         <View style={{ flex: 1 }}>
                           <Text style={{ fontSize: 14, fontWeight: '700', color: selectedMatchIsSuspended ? '#b91c1c' : '#166534' }}>
-                            {selectedMatchIsSuspended ? 'Volunteer Suspended' : 'Application Approved'}
+                            {selectedMatchIsSuspended ? 'Volunteer Suspended · Active Flag' : 'Application Approved'}
                           </Text>
                           <Text style={{ fontSize: 12, color: selectedMatchIsSuspended ? '#b91c1c' : '#15803d', marginTop: 2 }}>
                             {selectedMatchIsSuspended
-                              ? `This volunteer remains in the event and keeps their assignments, but cannot check in or submit event reports. Reason: ${selectedMatchJoinRecord?.suspensionReason || 'No reason recorded.'}`
+                              ? `This volunteer remains in the event and keeps their assignments, but cannot check in or submit event reports. This suspension is counted as an active profile flag. Reason: ${selectedMatchJoinRecord?.suspensionReason || 'No reason recorded.'}`
                               : 'This volunteer has been confirmed and joined to the event.'}
                           </Text>
                         </View>
@@ -13649,7 +13665,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           {reviewActionLoadingId === `reinstate-${selectedMatch.id}` ? (
                             <ActivityIndicator size="small" color="#fff" />
                           ) : (
-                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Reinstate for this event</Text>
+                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Clear flag &amp; reinstate for this event</Text>
                           )}
                         </TouchableOpacity>
                       ) : (
@@ -13682,7 +13698,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             {reviewActionLoadingId === `suspend-${selectedMatch.id}` ? (
                               <ActivityIndicator size="small" color="#fff" />
                             ) : (
-                              <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Suspend from this event</Text>
+                              <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Flag &amp; suspend from this event</Text>
                             )}
                           </TouchableOpacity>
                         </View>
