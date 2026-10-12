@@ -1244,7 +1244,7 @@ export default function DashboardScreen({ navigation }: any) {
                         </Text>
                         {dayEventChips.length > 0 ? (
                           <View style={styles.calDayEventList}>
-                            {dayEventChips.slice(0, 2).map(event => (
+                            {dayEventChips.slice(0, 4).map(event => (
                               <TouchableOpacity
                                 key={event.key}
                                 style={[styles.calDayEventChip, { backgroundColor: event.color }]}
@@ -1265,9 +1265,9 @@ export default function DashboardScreen({ navigation }: any) {
                                 </Text>
                               </TouchableOpacity>
                             ))}
-                            {dayEventChips.length > 2 ? (
+                            {dayEventChips.length > 4 ? (
                               <Text style={styles.calDayMoreEventsText}>
-                                +{dayEventChips.length - 2} more
+                                +{dayEventChips.length - 4} more
                               </Text>
                             ) : null}
                           </View>
