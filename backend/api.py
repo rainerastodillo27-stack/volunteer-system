@@ -12531,6 +12531,54 @@ async def update_event_volunteer_suspension(
     _invalidate_collection_cache(changed_keys)
     _projects_snapshot_cache.clear()
     asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+
+    # Send the affected volunteer a direct message so the suspension or
+    # reinstatement also appears in their in-app notification center.
+    if volunteer_user_id:
+        event_title = str(event.get("title") or "this event").strip()
+        if action == "suspend":
+            message_content = (
+                f'You have been suspended from "{event_title}".\n\n'
+                f"Reason: {reason}\n\n"
+                "You will remain in the event and keep your assigned tasks, but "
+                "you cannot check in, record attendance, or submit event reports "
+                "while this suspension is active. Contact the event administrator "
+                "if you have questions."
+            )
+        else:
+            message_content = (
+                f'Your suspension from "{event_title}" has been lifted. You can '
+                "check in, record attendance, and submit event reports for this "
+                "event again. Your task assignments remain unchanged."
+            )
+
+        try:
+            await create_message(
+                request,
+                MessagePayload(
+                    id=f"msg-event-suspension-{uuid.uuid4().hex}",
+                    senderId=admin_id,
+                    recipientId=volunteer_user_id,
+                    projectId=normalized_event_id,
+                    content=message_content,
+                    timestamp=now_iso,
+                    read=False,
+                    attachments=[],
+                ),
+            )
+        except Exception as error:
+            # Do not roll back the participation update if messaging is
+            # temporarily unavailable; the suspension remains authoritative.
+            print(
+                f"[WARN] Event suspension message could not be sent: {type(error).__name__}",
+                flush=True,
+            )
+    else:
+        print(
+            "[WARN] Event suspension updated without a volunteer account id; no direct message was sent.",
+            flush=True,
+        )
+
     return {
         "joinRecord": updated_join_record,
         "event": updated_event,
