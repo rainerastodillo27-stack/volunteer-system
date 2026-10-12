@@ -6090,6 +6090,47 @@ export async function deleteVolunteerProjectJoinRecord(
   return payload;
 }
 
+// Suspends or reinstates a volunteer's participation in one event while
+// preserving the membership record and its suspension history.
+export async function setVolunteerEventSuspension(
+  eventId: string,
+  volunteerId: string,
+  action: 'suspend' | 'reinstate',
+  reason?: string,
+): Promise<{ joinRecord: VolunteerProjectJoinRecord; event: Project }> {
+  const payload = await requestApiJson<{
+    joinRecord?: VolunteerProjectJoinRecord;
+    event?: Project;
+  }>(
+    `/events/${encodeURIComponent(eventId)}/volunteers/${encodeURIComponent(volunteerId)}/suspension`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, reason }),
+    },
+  );
+
+  if (!payload.joinRecord || !payload.event) {
+    throw new Error('The volunteer event status could not be updated.');
+  }
+
+  const changedKeys = [
+    STORAGE_KEYS.EVENTS,
+    STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS,
+    STORAGE_KEYS.VOLUNTEER_MATCHES,
+    STORAGE_KEYS.VOLUNTEER_TIME_LOGS,
+    STORAGE_KEYS.VOLUNTEERS,
+    STORAGE_KEYS.PARTNER_REPORTS,
+    STORAGE_KEYS.PROJECT_GROUP_MESSAGES,
+  ];
+  invalidateSharedStorageCache(changedKeys);
+  upsertCachedStorageRecord(STORAGE_KEYS.EVENTS, normalizeEventRecord(payload.event));
+  upsertCachedStorageRecord(STORAGE_KEYS.VOLUNTEER_PROJECT_JOINS, payload.joinRecord);
+  notifyStorageChanged(changedKeys);
+
+  return { joinRecord: payload.joinRecord, event: payload.event };
+}
+
 export async function reconcileApprovedVolunteerEventMemberships(): Promise<void> {
   const [matches, volunteers, projects, existingRecords] = await Promise.all([
     getAllVolunteerProjectMatches(),

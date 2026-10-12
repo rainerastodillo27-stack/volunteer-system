@@ -131,6 +131,7 @@ import {
 
   getVolunteerProjectJoinRecords,
   deleteVolunteerProjectJoinRecord,
+  setVolunteerEventSuspension,
 
   saveVolunteerProjectMatch,
 
@@ -9172,7 +9173,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
     return getProjectVolunteerEntries(project)
 
-      .filter(entry => entry.participationStatus === 'Active')
+      .filter(entry => entry.participationStatus === 'Active' || entry.participationStatus === 'Suspended')
 
       .map(entry => ({
 
@@ -12111,6 +12112,73 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
     setSelectedMatch(match);
   };
 
+  const getVolunteerEventJoinRecord = (match: VolunteerProjectMatch) =>
+    volunteerJoinRecords.find(record =>
+      record.projectId === match.projectId &&
+      (record.volunteerId === match.volunteerId || record.volunteerUserId === match.volunteerId)
+    );
+
+  const handleSetVolunteerEventSuspension = (
+    match: VolunteerProjectMatch,
+    action: 'suspend' | 'reinstate',
+  ) => {
+    const event = activeSelectedProject;
+    if (!isAdmin || !event?.isEvent) return;
+
+    const volunteerName = getVolunteerDisplayNameForMatch(match);
+    const reason = action === 'suspend' ? reviewerNotes.trim() : undefined;
+    if (action === 'suspend' && !reason) {
+      Alert.alert('Reason required', 'Enter the reason for suspending this volunteer in the reason field.');
+      return;
+    }
+
+    showConfirm({
+      title: action === 'suspend' ? 'Suspend volunteer from event?' : 'Reinstate volunteer?',
+      message: action === 'suspend'
+        ? `${volunteerName} will remain a member of "${event.title}" and keep their assignments, but they will not be able to check in or submit event reports. Reason: ${reason}`
+        : `Restore ${volunteerName}'s attendance and reporting access for "${event.title}"? Their event assignments will remain.`,
+      confirmText: action === 'suspend' ? 'Suspend' : 'Reinstate',
+      cancelText: 'Cancel',
+      confirmColor: action === 'suspend' ? '#DC2626' : '#166534',
+      icon: action === 'suspend' ? 'person-off' : 'person-add-alt-1',
+      iconColor: action === 'suspend' ? '#DC2626' : '#166534',
+      loadingText: action === 'suspend' ? 'Suspending...' : 'Reinstating...',
+      onConfirm: async () => {
+        const loadingKey = `${action}-${match.id}`;
+        setReviewActionLoadingId(loadingKey);
+        try {
+          const result = await setVolunteerEventSuspension(event.id, match.volunteerId, action, reason);
+          setVolunteerJoinRecords(current => [
+            ...current.filter(record => record.id !== result.joinRecord.id),
+            result.joinRecord,
+          ]);
+          setProjects(current => current.map(project =>
+            project.id === result.event.id ? result.event : project
+          ));
+          setSelectedProject(current =>
+            current?.id === result.event.id ? result.event : current
+          );
+          setReviewerNotes('');
+          void loadVolunteerTimeLogs();
+          void loadVolunteerJoinsForProject(event.id);
+          Alert.alert(
+            action === 'suspend' ? 'Volunteer suspended' : 'Volunteer reinstated',
+            action === 'suspend'
+              ? `${volunteerName} is suspended from this event.`
+              : `${volunteerName} can participate in this event again.`,
+          );
+        } catch (error) {
+          Alert.alert(
+            action === 'suspend' ? 'Unable to suspend volunteer' : 'Unable to reinstate volunteer',
+            getRequestErrorMessage(error, 'The event participation status could not be updated.'),
+          );
+        } finally {
+          setReviewActionLoadingId(current => current === loadingKey ? null : current);
+        }
+      },
+    });
+  };
+
   const handleRemoveVolunteerFromEvent = (match: VolunteerProjectMatch) => {
     const event = activeSelectedProject;
     if (!isAdmin || !event?.isEvent) {
@@ -12189,6 +12257,11 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
   const renderVolunteerApplicationsModal = () => {
 
     // 1. Calculate statistics
+
+    const selectedMatchJoinRecord = selectedMatch
+      ? getVolunteerEventJoinRecord(selectedMatch)
+      : undefined;
+    const selectedMatchIsSuspended = selectedMatchJoinRecord?.participationStatus === 'Suspended';
 
     const totalSlots = activeSelectedProject?.volunteersNeeded || 0;
 
@@ -12887,6 +12960,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                     const name = getVolunteerDisplayNameForMatch(match);
 
+                    const joinRecord = getVolunteerEventJoinRecord(match);
+
+                    const isSuspended = joinRecord?.participationStatus === 'Suspended';
+
                     const skillCategory = 'Joined Volunteer';
 
 
@@ -12957,9 +13034,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                         <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
 
-                          <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#e6f4ea' }} {...({} as any)}>
+                          <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: isSuspended ? '#fef2f2' : '#e6f4ea' }} {...({} as any)}>
 
-                            <Text style={{ fontSize: 10, fontWeight: '800', color: '#137333' }}>APPROVED</Text>
+                            <Text style={{ fontSize: 10, fontWeight: '800', color: isSuspended ? '#b91c1c' : '#137333' }}>{isSuspended ? 'SUSPENDED' : 'APPROVED'}</Text>
 
                           </View>
 
@@ -13420,22 +13497,81 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       </View>
                     </View>
                   ) : selectedMatch.status === 'Matched' ? (
-                    <View style={{
-                      backgroundColor: '#f0fdf4',
-                      borderWidth: 1,
-                      borderColor: '#bbf7d0',
-                      borderRadius: 8,
-                      padding: 14,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 10,
-                      marginBottom: 24,
-                    }} {...({} as any)}>
-                      <MaterialIcons name="check-circle" size={22} color="#166534" />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: '#166534' }}>Application Approved</Text>
-                        <Text style={{ fontSize: 12, color: '#15803d', marginTop: 2 }}>This volunteer has been confirmed and joined to the event.</Text>
+                    <View style={{ marginBottom: 24 }} {...({} as any)}>
+                      <View style={{
+                        backgroundColor: selectedMatchIsSuspended ? '#fef2f2' : '#f0fdf4',
+                        borderWidth: 1,
+                        borderColor: selectedMatchIsSuspended ? '#fecaca' : '#bbf7d0',
+                        borderRadius: 8,
+                        padding: 14,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        marginBottom: isAdmin ? 14 : 0,
+                      }} {...({} as any)}>
+                        <MaterialIcons
+                          name={selectedMatchIsSuspended ? 'person-off' : 'check-circle'}
+                          size={22}
+                          color={selectedMatchIsSuspended ? '#b91c1c' : '#166534'}
+                        />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: selectedMatchIsSuspended ? '#b91c1c' : '#166534' }}>
+                            {selectedMatchIsSuspended ? 'Volunteer Suspended' : 'Application Approved'}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: selectedMatchIsSuspended ? '#b91c1c' : '#15803d', marginTop: 2 }}>
+                            {selectedMatchIsSuspended
+                              ? `This volunteer remains in the event and keeps their assignments, but cannot check in or submit event reports. Reason: ${selectedMatchJoinRecord?.suspensionReason || 'No reason recorded.'}`
+                              : 'This volunteer has been confirmed and joined to the event.'}
+                          </Text>
+                        </View>
                       </View>
+                      {isAdmin ? selectedMatchIsSuspended ? (
+                        <TouchableOpacity
+                          onPress={() => handleSetVolunteerEventSuspension(selectedMatch, 'reinstate')}
+                          style={{ paddingVertical: 12, backgroundColor: '#166534', borderRadius: 8, alignItems: 'center' }}
+                          disabled={reviewActionLoadingId !== null}
+                        >
+                          {reviewActionLoadingId === `reinstate-${selectedMatch.id}` ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Reinstate for this event</Text>
+                          )}
+                        </TouchableOpacity>
+                      ) : (
+                        <View>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#475569', marginBottom: 6 }}>Suspension reason</Text>
+                          <TextInput
+                            value={reviewerNotes}
+                            onChangeText={setReviewerNotes}
+                            placeholder="Describe the violation and reason for suspension"
+                            multiline
+                            numberOfLines={3}
+                            style={{
+                              borderWidth: 1,
+                              borderColor: '#cbd5e1',
+                              borderRadius: 8,
+                              padding: 10,
+                              fontSize: 13,
+                              color: '#0f172a',
+                              backgroundColor: '#fff',
+                              textAlignVertical: 'top',
+                              minHeight: 64,
+                              marginBottom: 10,
+                            }}
+                          />
+                          <TouchableOpacity
+                            onPress={() => handleSetVolunteerEventSuspension(selectedMatch, 'suspend')}
+                            style={{ paddingVertical: 12, backgroundColor: '#b91c1c', borderRadius: 8, alignItems: 'center' }}
+                            disabled={!reviewerNotes.trim() || reviewActionLoadingId !== null}
+                          >
+                            {reviewActionLoadingId === `suspend-${selectedMatch.id}` ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Suspend from this event</Text>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      ) : null}
                     </View>
                   ) : (
                     <View style={{
@@ -19765,7 +19901,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
       const unassignedTaskCount = Math.max(taskCount - assignedTaskCount, 0);
 
-      const assignableVolunteers = volunteerEntries.filter(entry => entry.participationStatus === 'Active');
+      const assignableVolunteers = volunteerEntries.filter(
+        entry => entry.participationStatus === 'Active' || entry.participationStatus === 'Suspended'
+      );
 
       const taskCards = taskRows
 
@@ -19856,7 +19994,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
       const activeAttendanceVolunteer = assignableVolunteers.find(volunteer => volunteer.id === activeActionTaskId) || null;
       const activeAttendanceLogs = activeAttendanceVolunteer
         ? volunteerTimeLogs
-          .filter(log => log.projectId === project.id && log.volunteerId === activeAttendanceVolunteer.id)
+          .filter(log =>
+            log.projectId === project.id &&
+            doesTimeLogBelongToVolunteer(log, activeAttendanceVolunteer)
+          )
           .filter(log => getAttendanceWindowKey(project.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
           .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime())
         : [];
@@ -21433,7 +21574,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                               key={volunteer.id}
 
-                              label={hasRequiredSkills ? `${volunteer.name}${isMatch ? ' ★ (Skill Match)' : ''}` : volunteer.name}
+                              label={`${volunteer.name}${volunteer.participationStatus === 'Suspended' ? ' · Suspended' : ''}${hasRequiredSkills && isMatch ? ' ★ (Skill Match)' : ''}`}
 
                               value={volunteer.id}
 
@@ -21461,15 +21602,17 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                               onPress={() => setTaskDraft(current => ({ ...current, assignedVolunteerIds: current.assignedVolunteerIds.filter(existing => existing !== id) }))}
 
-                              style={{ backgroundColor: '#f0fdf4', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: '#bbf7d0' }}
+                              style={{ backgroundColor: volunteer.participationStatus === 'Suspended' ? '#fef2f2' : '#f0fdf4', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: volunteer.participationStatus === 'Suspended' ? '#fecaca' : '#bbf7d0' }}
 
                             >
 
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
 
-                                <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>{volunteer.name}</Text>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: volunteer.participationStatus === 'Suspended' ? '#b91c1c' : '#166534' }}>
+                                  {volunteer.name}{volunteer.participationStatus === 'Suspended' ? ' · Suspended' : ''}
+                                </Text>
 
-                                <MaterialIcons name="close" size={13} color="#166534" />
+                                <MaterialIcons name="close" size={13} color={volunteer.participationStatus === 'Suspended' ? '#b91c1c' : '#166534'} />
 
                               </View>
 
@@ -21658,7 +21801,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                       const completedTasks = assignedTasks.filter(t => t.status === 'Completed');
 
                       const logs = volunteerTimeLogs
-                        .filter(log => log.projectId === activeSelectedProject.id && volunteerIdentifiers.has(log.volunteerId))
+                        .filter(log =>
+                          log.projectId === activeSelectedProject.id &&
+                          doesTimeLogBelongToVolunteer(log, volunteer)
+                        )
                         .filter(log => getAttendanceWindowKey(activeSelectedProject.startDate, log.attendanceConfirmedAt || log.timeIn) === resolvedAttendanceDateKey)
                         .sort((a, b) => new Date(b.timeIn).getTime() - new Date(a.timeIn).getTime());
 
@@ -21712,6 +21858,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
 
                       const isChecked = Boolean(activeLog?.attendanceCheckedAt);
+                      const isSuspendedVolunteer = volunteer.participationStatus === 'Suspended';
                       const isCheckingAttendance =
                         Boolean(activeLog && attendanceCheckInFlightLogId === activeLog.id);
                       const attendanceMarkStatus = isChecked
@@ -21721,6 +21868,12 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                         : 'Not submitted';
                       const attendanceMarkBadgeColor = isChecked ? '#dcfce7' : '#fef3c7';
                       const attendanceMarkTextColor = isChecked ? '#166534' : '#92400e';
+
+                      if (isSuspendedVolunteer) {
+                        attendanceStatus = 'Suspended';
+                        badgeColor = '#fee2e2';
+                        textColor = '#b91c1c';
+                      }
 
                       return compactLayout ? (
                         <View
@@ -21831,9 +21984,9 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                             <TouchableOpacity
                               accessibilityRole="button"
                               accessibilityLabel={`${isChecked ? 'Remove attendance mark for' : 'Mark attendance for'} ${volunteer.name}`}
-                              accessibilityState={{ disabled: Boolean(isCheckingAttendance) }}
+                              accessibilityState={{ disabled: (isSuspendedVolunteer && !isChecked) || Boolean(isCheckingAttendance) }}
                               onPress={() => void handleToggleAttendanceCheck(activeLog, !isChecked)}
-                              disabled={Boolean(isCheckingAttendance)}
+                              disabled={(isSuspendedVolunteer && !isChecked) || Boolean(isCheckingAttendance)}
                               activeOpacity={0.85}
                               style={{
                                 minHeight: 44,
@@ -21847,7 +22000,7 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                                 justifyContent: 'center',
                                 gap: 8,
                                 paddingHorizontal: 12,
-                                opacity: isCheckingAttendance ? 0.7 : 1,
+                                opacity: (isSuspendedVolunteer && !isChecked) || isCheckingAttendance ? 0.65 : 1,
                               }}
                             >
                               {isCheckingAttendance ? (
@@ -21878,10 +22031,10 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                           <TouchableOpacity
                             accessibilityRole="checkbox"
                             accessibilityLabel={`${isChecked ? 'Unmark' : 'Mark'} attendance for ${volunteer.name}`}
-                            accessibilityState={{ checked: isChecked, disabled: !activeLog || Boolean(isCheckingAttendance) }}
+                            accessibilityState={{ checked: isChecked, disabled: !activeLog || (isSuspendedVolunteer && !isChecked) || Boolean(isCheckingAttendance) }}
                             style={{ width: 40, minHeight: 42, justifyContent: 'center', alignItems: 'center' }}
-                            onPress={() => activeLog && handleToggleAttendanceCheck(activeLog, !isChecked)}
-                            disabled={!activeLog || Boolean(isCheckingAttendance)}
+                            onPress={() => activeLog && (!(isSuspendedVolunteer && !isChecked)) && handleToggleAttendanceCheck(activeLog, !isChecked)}
+                            disabled={!activeLog || (isSuspendedVolunteer && !isChecked) || Boolean(isCheckingAttendance)}
                           >
                             {isCheckingAttendance ? (
                               <ActivityIndicator size="small" color="#166534" />

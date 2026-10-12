@@ -152,6 +152,7 @@ function getEventStatusLabel(
   joinedByUser?: boolean,
   participationStatus?: VolunteerProjectJoinRecord['participationStatus']
 ): string {
+  if (participationStatus === 'Suspended') return 'Suspended';
   if (participationStatus === 'Completed' || match?.status === 'Completed') return 'Completed';
   if (participationStatus === 'Active' || match?.status === 'Matched' || joinedByUser) return 'Joined';
   if (match?.status === 'Requested') return 'Pending review';
@@ -526,7 +527,8 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
         if (
           (match && match.status !== 'Rejected') ||
           joinRecord?.participationStatus === 'Active' ||
-          joinRecord?.participationStatus === 'Completed'
+          joinRecord?.participationStatus === 'Completed' ||
+          joinRecord?.participationStatus === 'Suspended'
         ) return false;
         return true;
       })
@@ -696,6 +698,11 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
             <Text style={styles.cardDate}>{formatProjectDateRange(event.startDate, event.endDate)}</Text>
           </View>
           <Text style={styles.cardDescription} numberOfLines={3}>{event.description}</Text>
+          {joinRecord?.participationStatus === 'Suspended' ? (
+            <Text style={{ fontSize: 12, lineHeight: 18, color: '#991b1b', marginTop: 6 }}>
+              You remain in the event and keep your assignments, but can’t check in or submit an event report. Reason: {joinRecord.suspensionReason || 'Contact the organizer for details.'}
+            </Text>
+          ) : null}
           <View style={styles.infoRow}>
             <MaterialIcons name="place" size={16} color="#64748b" />
             <Text style={styles.metaText} numberOfLines={2}>{event.location.address}</Text>
@@ -716,7 +723,8 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
           <TouchableOpacity
             style={[
               styles.button,
-              { backgroundColor: isFull && !isJoined ? '#dc2626' : visual.color },
+              { backgroundColor: joinRecord?.participationStatus === 'Suspended' ? '#fee2e2' : isFull && !isJoined ? '#dc2626' : visual.color },
+              joinRecord?.participationStatus === 'Suspended' && { borderColor: '#fecaca', borderWidth: 1 },
               isDisabled && styles.buttonDisabled,
             ]}
             onPress={() => !isDisabled && handleJoin(event.id)}
@@ -728,22 +736,25 @@ export default function VolunteerProjectsScreen({ navigation, route }: { navigat
             ) : (
               <MaterialIcons
                 name={
-                  isEnded ? 'event-busy'
+                  joinRecord?.participationStatus === 'Suspended' ? 'person-off'
+                  : isEnded ? 'event-busy'
                   : isFull && !isJoined ? 'group-off'
                   : isJoined ? 'check-circle'
                   : 'send'
                 }
                 size={18}
-                color="#fff"
+                color={joinRecord?.participationStatus === 'Suspended' ? '#b91c1c' : '#fff'}
               />
             )}
-            <Text style={styles.buttonText}>
+            <Text style={[styles.buttonText, joinRecord?.participationStatus === 'Suspended' && { color: '#b91c1c' }]}>
               {isLoading
                 ? 'Sending...'
                 : isCancelled
                 ? 'Event Cancelled'
                 : isCompleted
                 ? 'Completed'
+                : joinRecord?.participationStatus === 'Suspended'
+                ? 'Suspended'
                 : isFull && !isJoined
                 ? 'Event Full'
                 : isPending

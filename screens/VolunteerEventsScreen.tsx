@@ -374,6 +374,9 @@ export default function VolunteerEventsScreen() {
       return { label: 'Cancelled', color: '#70757a', joinable: false };
     }
     const currentJoinRecord = getCurrentUserJoinRecord(event);
+    if (currentJoinRecord?.participationStatus === 'Suspended') {
+      return { label: 'Suspended', color: '#B0432B', joinable: false };
+    }
     const isJoined = currentJoinRecord && (currentJoinRecord.participationStatus || 'Active') === 'Active';
     const isCompleted = currentJoinRecord && currentJoinRecord.participationStatus === 'Completed';
 
@@ -679,6 +682,14 @@ export default function VolunteerEventsScreen() {
             </View>
           )}
 
+          {status.label === 'Suspended' ? (
+            <View style={{ marginTop: 8, padding: 10, borderRadius: 7, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca' }}>
+              <Text style={{ fontSize: 11, lineHeight: 16, color: '#991b1b' }}>
+                You remain in the event and keep your assignments, but can’t check in or submit an event report. Reason: {getCurrentUserJoinRecord(item)?.suspensionReason || 'Contact the organizer for details.'}
+              </Text>
+            </View>
+          ) : null}
+
           {/* Button */}
           {status.joinable ? (
             <TouchableOpacity
@@ -693,6 +704,15 @@ export default function VolunteerEventsScreen() {
                   {status.label === 'Apply Again' ? 'Apply Again' : 'Join Event'}
                 </Text>
               )}
+            </TouchableOpacity>
+          ) : status.label === 'Suspended' ? (
+            <TouchableOpacity
+              style={[styles.joinBtn, { backgroundColor: '#fee2e2', borderColor: '#fecaca', opacity: 0.8 }]}
+              disabled
+              accessibilityRole="button"
+              accessibilityLabel="Suspended from this event"
+            >
+              <Text style={[styles.joinBtnText, { color: '#b91c1c' }]}>Suspended</Text>
             </TouchableOpacity>
           ) : (
             <View style={[styles.joinBtn, { backgroundColor: '#f1f3f4', borderWidth: 0 }]}>

@@ -203,6 +203,21 @@ export default function ReportUploadModal({
         : undefined,
     [projects, selectedProject]
   );
+  const suspendedJoinRecordForSelectedProject = useMemo(
+    () =>
+      isVolunteer && selectedProject
+        ? volunteerJoinRecords?.find(
+            record =>
+              record.projectId === selectedProject &&
+              record.participationStatus === 'Suspended' &&
+              (!volunteerProfileId ||
+                record.volunteerId === volunteerProfileId ||
+                record.volunteerUserId === user?.id)
+          )
+        : undefined,
+    [isVolunteer, selectedProject, user?.id, volunteerJoinRecords, volunteerProfileId]
+  );
+  const isSuspendedEventSelected = Boolean(suspendedJoinRecordForSelectedProject);
   const selectedPartnerProjectSummary = useMemo(
     () =>
       isPartner
@@ -419,6 +434,13 @@ export default function ReportUploadModal({
     }
     setSubmissionError(null);
 
+    if (isSuspendedEventSelected) {
+      const errorMessage = `You remain assigned to this event, but cannot submit a report while suspended. Reason: ${suspendedJoinRecordForSelectedProject?.suspensionReason || 'Contact the organizer for details.'}`;
+      setSubmissionError(errorMessage);
+      Alert.alert('Report Unavailable', errorMessage);
+      return;
+    }
+
     if (!validateForm()) {
       return;
     }
@@ -584,6 +606,7 @@ export default function ReportUploadModal({
     handleReset,
     isPartner,
     isSubmitting,
+    isSuspendedEventSelected,
     isVolunteer,
     metrics,
     onSubmit,
@@ -591,6 +614,7 @@ export default function ReportUploadModal({
     reportType,
     selectedProject,
     selectedPartnerProjectSummary,
+    suspendedJoinRecordForSelectedProject?.suspensionReason,
     title,
     volunteerPraise,
     volunteerMetrics.assignedTaskTitles,
@@ -807,13 +831,26 @@ export default function ReportUploadModal({
             const hasConfirmedTimeIn = (volunteerTimeLogs || []).some(
               log => log.projectId === project.id && Boolean(log.timeIn)
             );
+            const isSuspended = Boolean(
+              isVolunteer &&
+                volunteerJoinRecords?.some(
+                  record =>
+                    record.projectId === project.id &&
+                    record.participationStatus === 'Suspended' &&
+                    (!volunteerProfileId ||
+                      record.volunteerId === volunteerProfileId ||
+                      record.volunteerUserId === user?.id)
+                )
+            );
             return (
               <TouchableOpacity
                 key={project.id}
                 style={[
                   styles.projectOption,
                   selectedProject === project.id && styles.projectOptionSelected,
+                  isSuspended && { opacity: 0.72, backgroundColor: '#fff7f7' },
                 ]}
+                disabled={isSuspended}
                 onPress={() => {
                   setSelectedProject(project.id);
                   setShowProjectPicker(false);
@@ -823,10 +860,19 @@ export default function ReportUploadModal({
                 <View style={{ flex: 1 }}>
                   <Text style={styles.projectOptionText}>{project.title}</Text>
                   <Text style={styles.projectOptionCategory}>
-                    {hasConfirmedTimeIn ? 'Attendance Confirmed' : project.isEvent ? 'Event' : 'Project'}
+                    {isSuspended
+                      ? 'Suspended · Reporting disabled'
+                      : hasConfirmedTimeIn
+                      ? 'Attendance Confirmed'
+                      : project.isEvent ? 'Event' : 'Project'}
                   </Text>
                 </View>
-                {hasConfirmedTimeIn ? (
+                {isSuspended ? (
+                  <View style={[styles.activeAttendanceBadge, { backgroundColor: '#fee2e2' }]}>
+                    <MaterialIcons name="lock" size={12} color="#b91c1c" />
+                    <Text style={[styles.activeAttendanceText, { color: '#b91c1c' }]}>Suspended</Text>
+                  </View>
+                ) : hasConfirmedTimeIn ? (
                   <View style={styles.activeAttendanceBadge}>
                     <MaterialIcons name="check" size={12} color="#166534" />
                     <Text style={styles.activeAttendanceText}>Timed In</Text>
@@ -856,8 +902,10 @@ export default function ReportUploadModal({
               selectedProjectData.endDate
             ).toLocaleDateString()}`}
           </Text>
-          <Text style={styles.eventSummaryHint}>
-            Time-in days follow the event's selected start time until the end date.
+          <Text style={[styles.eventSummaryHint, isSuspendedEventSelected && { color: '#991b1b' }]}>
+            {isSuspendedEventSelected
+              ? `Suspended: check-in and event reports are disabled. Your assignments remain. Reason: ${suspendedJoinRecordForSelectedProject?.suspensionReason || 'Contact the organizer for details.'}`
+              : "Time-in days follow the event's selected start time until the end date."}
           </Text>
         </View>
       ) : null}
@@ -1087,16 +1135,21 @@ export default function ReportUploadModal({
             </TouchableOpacity>
             <TouchableOpacity
               onPress={handleSubmit}
-              style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
-              disabled={isSubmitting}
+              style={[
+                styles.submitButton,
+                (isSubmitting || isSuspendedEventSelected) && styles.submitButtonDisabled,
+              ]}
+              disabled={isSubmitting || isSuspendedEventSelected}
             >
               {isSubmitting ? (
                 <ActivityIndicator size="small" color="#fff" />
+              ) : isSuspendedEventSelected ? (
+                <MaterialIcons name="lock" size={18} color="#fff" />
               ) : (
                 <MaterialIcons name="check-circle" size={18} color="#fff" />
               )}
               <Text style={styles.submitButtonText}>
-                {isSubmitting ? 'Submitting...' : 'Submit Report'}
+                {isSubmitting ? 'Submitting...' : isSuspendedEventSelected ? 'Reporting Disabled' : 'Submit Report'}
               </Text>
             </TouchableOpacity>
           </View>

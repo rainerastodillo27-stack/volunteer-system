@@ -876,6 +876,11 @@ class EventTaskAssignmentPayload(BaseModel):
     volunteerId: str | None = None
 
 
+class VolunteerEventSuspensionPayload(BaseModel):
+    action: str
+    reason: str | None = None
+
+
 REPORT_MEDIA_FILE_MAX_LENGTH = 500
 APP_TIMEZONE = ZoneInfo("Asia/Manila")
 REMINDER_LEAD_DAYS = 3
@@ -1387,7 +1392,7 @@ def _get_active_event_volunteer_keys(
         )
         if not key:
             continue
-        if str(record.get("participationStatus") or "Active").strip() == "Active":
+        if str(record.get("participationStatus") or "Active").strip() in {"Active", "Suspended"}:
             confirmed_keys.add(key)
         else:
             inactive_keys.add(key)
@@ -1410,7 +1415,9 @@ def _get_active_event_volunteer_keys(
         if key and key not in inactive_keys:
             fallback_keys.add(key)
 
-    return confirmed_keys | fallback_keys
+    # A historical Matched status or stale event array must not restore a
+    # completed membership's slot. Suspended volunteers remain event members.
+    return (confirmed_keys | fallback_keys) - inactive_keys
 
 
 def _get_event_reminder_recipients(
@@ -4971,13 +4978,15 @@ def _postgres_get_volunteer_by_user_id(
 def _get_volunteer_joined_event_scope(
     connection: Any,
     user_id: str,
+    *,
+    include_suspended: bool = False,
 ) -> tuple[set[str], set[str]]:
     """Return the identifiers and event ids a volunteer actually joined.
 
-    Requested/matched records are intentionally excluded. Active and
-    Completed join records represent membership, while the participant arrays
-    preserve compatibility with older event rows created before join records
-    existed.
+    Requested/matched records are intentionally excluded. Active, Completed,
+    and Suspended join records represent membership. Suspended membership is
+    excluded by default for attendance and report actions, but can be included
+    for read-only event history and messages.
     """
     normalized_user_id = str(user_id or "").strip()
     volunteer = _postgres_get_volunteer_by_user_id(
@@ -4998,6 +5007,7 @@ def _get_volunteer_joined_event_scope(
         return set(), set()
 
     joined_event_ids: set[str] = set()
+    suspended_event_ids: set[str] = set()
     join_records = _get_cached_collection(
         connection,
         "volunteerProjectJoins",
@@ -5011,7 +5021,11 @@ def _get_volunteer_joined_event_scope(
             if str(record.get(field) or "").strip()
         }
         project_id = str(record.get("projectId") or "").strip()
-        if status in {"Active", "Completed"} and project_id and record_identifiers & volunteer_identifiers:
+        if status == "Suspended" and project_id and record_identifiers & volunteer_identifiers:
+            suspended_event_ids.add(project_id)
+        if (
+            status in {"Active", "Completed"} or (include_suspended and status == "Suspended")
+        ) and project_id and record_identifiers & volunteer_identifiers:
             joined_event_ids.add(project_id)
 
     event_records = (
@@ -5035,7 +5049,7 @@ def _get_volunteer_joined_event_scope(
             for value in (event.get(field) or [])
             if str(value or "").strip()
         }
-        if participant_ids & volunteer_identifiers:
+        if (include_suspended or event_id not in suspended_event_ids) and participant_ids & volunteer_identifiers:
             joined_event_ids.add(event_id)
 
     # A legacy history entry is accepted only when it points to an event; a
@@ -5044,8 +5058,11 @@ def _get_volunteer_joined_event_scope(
         str(project_id or "").strip()
         for project_id in (volunteer or {}).get("pastProjects") or []
         if str(project_id or "").strip() in known_event_ids
+        and (include_suspended or str(project_id or "").strip() not in suspended_event_ids)
     )
 
+    if not include_suspended:
+        joined_event_ids.difference_update(suspended_event_ids)
     return volunteer_identifiers, joined_event_ids & known_event_ids
 
 
@@ -5072,9 +5089,37 @@ def _scope_volunteer_storage_collection(
     volunteer_identifiers, joined_event_ids = _get_volunteer_joined_event_scope(
         connection,
         str(session.get("sub") or "").strip(),
+        include_suspended=True,
     )
     session_user_id = str(session.get("sub") or "").strip()
     items = value if isinstance(value, list) else []
+
+    if key == "volunteerProjectJoins":
+        supervised_event_ids: set[str] = set()
+        field_officer_identifiers = _get_volunteer_assignment_identifiers(connection, session_user_id)
+        for event in get_postgres_hot_storage_collection(connection, "events", include_images=False):
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("id") or "").strip()
+            if event_id and any(
+                isinstance(task, dict)
+                and bool(task.get("isFieldOfficer"))
+                and _task_has_volunteer_assignment(task, field_officer_identifiers)
+                for task in (event.get("internalTasks") or [])
+            ):
+                supervised_event_ids.add(event_id)
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("participationStatus") or "Active").strip()
+            in {"Active", "Completed", "Suspended"}
+            and (
+                str(item.get("volunteerId") or "").strip() in volunteer_identifiers
+                or str(item.get("volunteerUserId") or "").strip() in volunteer_identifiers
+                or str(item.get("projectId") or "").strip() in supervised_event_ids
+            )
+        ]
 
     if key in {"partnerReports", "publishedImpactReports"}:
         return [
@@ -5111,13 +5156,12 @@ def _scope_volunteer_storage_collection(
         item
         for item in items
         if isinstance(item, dict)
-        and str(item.get("projectId") or "").strip() in joined_event_ids
         and (
             str(item.get("volunteerId") or "").strip() in volunteer_identifiers
             or str(item.get("volunteerUserId") or "").strip() in volunteer_identifiers
         )
         and str(item.get("participationStatus") or "Active").strip()
-        in {"Active", "Completed"}
+        in {"Active", "Completed", "Suspended"}
     ]
 
 
@@ -5339,7 +5383,11 @@ def _scope_storage_collection(
 
     if role == "volunteer":
         if key == "projectGroupMessages":
-            _, joined_event_ids = _get_volunteer_joined_event_scope(connection, session_user_id)
+            _, joined_event_ids = _get_volunteer_joined_event_scope(
+                connection,
+                session_user_id,
+                include_suspended=True,
+            )
             return [item for item in items if str(item.get("projectId") or item.get("project_id") or "").strip() in joined_event_ids]
         if key == "volunteerMatches":
             volunteer = _postgres_get_volunteer_by_user_id(connection, session_user_id)
@@ -5399,7 +5447,7 @@ def _scope_storage_collection(
                 )
                 if isinstance(record, dict)
                 and str(record.get("projectId") or "").strip() in project_ids
-                and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed"}
+                and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed", "Suspended"}
                 for value in (record.get("volunteerId"), record.get("volunteerUserId"))
                 if str(value or "").strip()
             )
@@ -5443,6 +5491,33 @@ def _get_volunteer_assignment_identifiers(connection: Any, volunteer_id: str) ->
         profile_id = str(volunteer.get("id") or "").strip()
         user_id = str(volunteer.get("userId") or "").strip()
         identifiers.update(value for value in (profile_id, user_id) if value)
+    return identifiers
+
+
+def _get_event_suspended_volunteer_identifiers(
+    connection: Any,
+    event_id: str,
+) -> set[str]:
+    """Return profile and account ids for volunteers suspended from an event."""
+    normalized_event_id = str(event_id or "").strip()
+    if not normalized_event_id:
+        return set()
+
+    identifiers: set[str] = set()
+    for record in _postgres_get_hot_items_by_field(
+        connection,
+        "volunteerProjectJoins",
+        "projectId",
+        normalized_event_id,
+        include_media=False,
+    ):
+        if not isinstance(record, dict) or str(record.get("participationStatus") or "Active").strip() != "Suspended":
+            continue
+        identifiers.update(
+            str(record.get(field) or "").strip()
+            for field in ("volunteerId", "volunteerUserId")
+            if str(record.get(field) or "").strip()
+        )
     return identifiers
 
 
@@ -5508,7 +5583,7 @@ def _get_field_officer_event_participant_identifiers(
                 if isinstance(record, dict)
                 and str(record.get("projectId") or "").strip() == event_id
                 and str(record.get("participationStatus") or "Active").strip()
-                in {"Active", "Completed"}
+                in {"Active", "Completed", "Suspended"}
                 for value in (record.get("volunteerId"), record.get("volunteerUserId"))
                 if str(value or "").strip()
             )
@@ -5780,7 +5855,7 @@ def _postgres_sync_volunteer_engagement_status(
     ]
 
     has_active_participation = any(
-        (record.get("participationStatus") or "Active") == "Active"
+        (record.get("participationStatus") or "Active") in {"Active", "Suspended"}
         and bool(
             (
                 _postgres_get_project_like_item_by_id(
@@ -10601,6 +10676,7 @@ def get_volunteer_logs(
             _, joined_event_ids = _get_volunteer_joined_event_scope(
                 connection,
                 str(session.get("sub") or "").strip(),
+                include_suspended=True,
             )
             logs = [
                 log
@@ -10891,6 +10967,26 @@ async def set_volunteer_attendance_check(
         if log is None:
             raise HTTPException(status_code=404, detail="Attendance record not found.")
 
+        if payload.checked:
+            project, _ = _postgres_get_project_like_item_by_id(
+                connection,
+                str(log.get("projectId") or "").strip(),
+                include_media=False,
+            )
+            if (
+                project is not None
+                and bool(project.get("isEvent"))
+                and str(log.get("volunteerId") or "").strip()
+                in _get_event_suspended_volunteer_identifiers(
+                    connection,
+                    str(project.get("id") or "").strip(),
+                )
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Attendance cannot be marked for a volunteer suspended from this event.",
+                )
+
         if payload.checked and not str(log.get("attendanceConfirmedAt") or "").strip():
             raise HTTPException(
                 status_code=400,
@@ -11028,6 +11124,7 @@ async def end_volunteer_log(
             _, joined_event_ids = _get_volunteer_joined_event_scope(
                 connection,
                 str(session.get("sub") or "").strip(),
+                include_suspended=True,
             )
             if payload.projectId not in joined_event_ids:
                 raise HTTPException(
@@ -12162,7 +12259,7 @@ async def save_partner_event(
                     include_media=False,
                 )
                 if isinstance(record, dict)
-                and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed"}
+                and str(record.get("participationStatus") or "Active").strip() in {"Active", "Completed", "Suspended"}
                 for value in (record.get("volunteerId"), record.get("volunteerUserId"))
                 if str(value or "").strip()
             )
@@ -12225,6 +12322,220 @@ async def save_partner_event(
     if schedule_changed:
         asyncio.create_task(_push_partner_google_calendar_item("events", saved_event))
     return {"status": "ok", "event": saved_event, "changedKeys": changed_keys}
+
+
+@app.patch("/events/{event_id}/volunteers/{volunteer_id}/suspension")
+async def update_event_volunteer_suspension(
+    request: FastAPIRequest,
+    event_id: str,
+    volunteer_id: str,
+    payload: VolunteerEventSuspensionPayload,
+) -> dict[str, Any]:
+    """Suspend or reinstate an already-approved volunteer on one event."""
+    session = _require_admin_session(request)
+    _require_postgres()
+
+    action = str(payload.action or "").strip().lower()
+    if action not in {"suspend", "reinstate"}:
+        raise HTTPException(status_code=400, detail="Choose suspend or reinstate.")
+    reason = str(payload.reason or "").strip()
+    if action == "suspend" and not reason:
+        raise HTTPException(status_code=400, detail="A reason is required to suspend a volunteer.")
+
+    normalized_event_id = str(event_id or "").strip()
+    normalized_volunteer_id = str(volunteer_id or "").strip()
+    if not normalized_event_id or not normalized_volunteer_id:
+        raise HTTPException(status_code=400, detail="Event id and volunteer id are required.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    admin_id = str(session.get("sub") or "").strip()
+    if not admin_id:
+        raise HTTPException(status_code=400, detail="An administrator id is required.")
+
+    changed_keys = [
+        "events",
+        "volunteerProjectJoins",
+        "volunteerTimeLogs",
+        "volunteers",
+        "partnerReports",
+        "projectGroupMessages",
+    ]
+    with get_connection() as connection:
+        event = _postgres_get_hot_item_by_id(
+            connection,
+            "events",
+            normalized_event_id,
+            include_media=False,
+            for_update=True,
+        )
+        if event is None or not bool(event.get("isEvent")):
+            raise HTTPException(status_code=404, detail="Event not found.")
+
+        volunteer = _postgres_get_hot_item_by_id(
+            connection,
+            "volunteers",
+            normalized_volunteer_id,
+            include_media=False,
+        )
+        if volunteer is None:
+            volunteer = _postgres_get_volunteer_by_user_id(
+                connection,
+                normalized_volunteer_id,
+                include_media=False,
+            )
+        if volunteer is None:
+            raise HTTPException(status_code=404, detail="Volunteer not found.")
+
+        canonical_volunteer_id = str(volunteer.get("id") or "").strip()
+        volunteer_user_id = str(volunteer.get("userId") or "").strip()
+        volunteer_identifiers = {
+            value for value in (canonical_volunteer_id, volunteer_user_id) if value
+        }
+        join_records = _postgres_get_hot_items_by_field(
+            connection,
+            "volunteerProjectJoins",
+            "projectId",
+            normalized_event_id,
+            include_media=False,
+        )
+        join_record = next(
+            (
+                record
+                for record in join_records
+                if volunteer_identifiers
+                & {
+                    str(record.get("volunteerId") or "").strip(),
+                    str(record.get("volunteerUserId") or "").strip(),
+                }
+            ),
+            None,
+        )
+
+        if join_record is None:
+            matches = _postgres_get_hot_items_by_field(
+                connection,
+                "volunteerMatches",
+                "volunteerId",
+                canonical_volunteer_id,
+                include_media=False,
+            )
+            approved_match = next(
+                (
+                    match
+                    for match in matches
+                    if str(match.get("projectId") or "").strip() == normalized_event_id
+                    and str(match.get("status") or "").strip() == "Matched"
+                ),
+                None,
+            )
+            is_legacy_member = bool(
+                canonical_volunteer_id in (event.get("volunteers") or [])
+                or volunteer_user_id in (event.get("joinedUserIds") or [])
+            )
+            if approved_match is None and not is_legacy_member:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only an approved volunteer who joined this event can be suspended.",
+                )
+            _postgres_ensure_volunteer_project_join_record(
+                connection,
+                normalized_event_id,
+                volunteer,
+                "AdminMatch",
+            )
+            join_records = _postgres_get_hot_items_by_field(
+                connection,
+                "volunteerProjectJoins",
+                "projectId",
+                normalized_event_id,
+                include_media=False,
+            )
+            join_record = next(
+                (
+                    record
+                    for record in join_records
+                    if volunteer_identifiers
+                    & {
+                        str(record.get("volunteerId") or "").strip(),
+                        str(record.get("volunteerUserId") or "").strip(),
+                    }
+                ),
+                None,
+            )
+
+        if join_record is None:
+            raise HTTPException(status_code=409, detail="The volunteer's event membership could not be found.")
+
+        current_status = str(join_record.get("participationStatus") or "Active").strip()
+        if action == "suspend" and current_status != "Active":
+            if current_status == "Suspended":
+                raise HTTPException(status_code=409, detail="This volunteer is already suspended from the event.")
+            raise HTTPException(status_code=409, detail="Only an active, approved participant can be suspended.")
+        if action == "reinstate" and current_status != "Suspended":
+            raise HTTPException(status_code=409, detail="This volunteer is not suspended from the event.")
+
+        history = [
+            dict(entry)
+            for entry in (join_record.get("suspensionHistory") or [])
+            if isinstance(entry, dict)
+        ]
+        updated_event = event
+        if action == "suspend":
+            history.append({
+                "suspendedAt": now_iso,
+                "suspendedBy": admin_id,
+                "reason": reason,
+            })
+            updated_join_record = {
+                **join_record,
+                "participationStatus": "Suspended",
+                "suspensionReason": reason,
+                "suspendedAt": now_iso,
+                "suspendedBy": admin_id,
+                "suspensionHistory": history,
+            }
+
+            # Stop any open attendance timer at the suspension time. It keeps
+            # the already-recorded attendance history without allowing a new
+            # completion report to be filed after suspension.
+            for log in _postgres_get_hot_items_by_field(
+                connection,
+                "volunteerTimeLogs",
+                "volunteerId",
+                canonical_volunteer_id,
+                include_media=False,
+            ):
+                if (
+                    str(log.get("projectId") or "").strip() == normalized_event_id
+                    and not str(log.get("timeOut") or "").strip()
+                ):
+                    closed_log = {**log, "timeOut": now_iso}
+                    _postgres_upsert_hot_item(connection, "volunteerTimeLogs", closed_log)
+                    _postgres_add_logged_hours_to_volunteer(connection, canonical_volunteer_id, closed_log)
+        else:
+            if history and not history[-1].get("reinstatedAt"):
+                history[-1] = {**history[-1], "reinstatedAt": now_iso, "reinstatedBy": admin_id}
+            updated_join_record = {
+                **join_record,
+                "participationStatus": "Active",
+                "suspensionReason": None,
+                "suspendedAt": None,
+                "suspendedBy": None,
+                "suspensionHistory": history,
+            }
+
+        _postgres_upsert_hot_item(connection, "volunteerProjectJoins", updated_join_record)
+        updated_volunteer = _postgres_sync_volunteer_engagement_status(connection, canonical_volunteer_id)
+        connection.commit()
+
+    _invalidate_collection_cache(changed_keys)
+    _projects_snapshot_cache.clear()
+    asyncio.create_task(connection_manager.broadcast_storage_event(changed_keys))
+    return {
+        "joinRecord": updated_join_record,
+        "event": updated_event,
+        "volunteer": updated_volunteer,
+    }
 
 
 @app.post("/events/{event_id}/task-assignments")
@@ -12318,7 +12629,7 @@ async def update_event_task_assignments(
             )
             if isinstance(record, dict)
             and str(record.get("participationStatus") or "Active").strip()
-            in {"Active", "Completed"}
+            in {"Active", "Completed", "Suspended"}
             for value in (record.get("volunteerId"), record.get("volunteerUserId"))
             if str(value or "").strip()
         )

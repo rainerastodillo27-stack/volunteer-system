@@ -85,7 +85,7 @@ export function getVolunteerJoinedEventIds({
       .filter(record => {
         const status = String(record.participationStatus || 'Active').trim();
         return (
-          (status === 'Active' || status === 'Completed') &&
+          (status === 'Active' || status === 'Completed' || status === 'Suspended') &&
           (volunteerIds.has(normalizedId(record.volunteerId)) ||
             volunteerIds.has(normalizedId(record.volunteerUserId)))
         );

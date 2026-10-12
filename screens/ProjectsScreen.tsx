@@ -1522,6 +1522,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
     const joined = isJoined(project);
     const joinRecord = volunteerJoinRecordByProjectId.get(project.id);
     const volunteerMatch = volunteerMatchByProjectId.get(project.id);
+    const isSuspended = joinRecord?.participationStatus === 'Suspended';
     const isAssigned = (project.internalTasks || []).some(
       task => isVolunteerAssignedToTask(task, volunteerProfile?.id)
     );
@@ -1540,6 +1541,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
       : null;
     const eventHasNotStarted = project.isEvent ? !hasEventStartedForToday(project.startDate) : false;
     const canTimeIn =
+      !isSuspended &&
       isAssigned &&
       !hasConfirmedToday &&
       !completedParticipation &&
@@ -1549,7 +1551,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
       !eventHasNotStarted &&
       eventScheduledToday;
 
-    const joinButtonLabel = completedParticipation
+    const joinButtonLabel = isSuspended
+      ? 'Suspended'
+      : completedParticipation
       ? 'Task Completed'
       : joined
       ? isAssigned
@@ -1565,7 +1569,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
       ? 'Request Again'
       : 'Request to Join';
 
-    const joinButtonIcon: keyof typeof MaterialIcons.glyphMap = completedParticipation
+    const joinButtonIcon: keyof typeof MaterialIcons.glyphMap = isSuspended
+      ? 'person-off'
+      : completedParticipation
       ? 'task-alt'
       : joined
       ? 'check-circle'
@@ -1587,7 +1593,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
     );
     const isEventFull = project.isEvent && volunteersNeeded > 0 && totalSlotsTaken >= volunteersNeeded;
 
-    const statusMessage = completedParticipation
+    const statusMessage = isSuspended
+      ? `You remain in this event and keep your assignments, but can’t check in or submit an event report while suspended. Reason: ${joinRecord?.suspensionReason || 'Contact the organizer for details.'}`
+      : completedParticipation
       ? 'You already completed this event.'
       : joined
       ? isAssigned
@@ -1614,10 +1622,11 @@ export default function ProjectsScreen({ navigation, route }: any) {
       : 'Open for volunteer requests.';
 
     const isJoinDisabled =
-      joined || completedParticipation || isPendingApproval || isClosedStatus || isOnHold || isEventFull;
+      isSuspended || joined || completedParticipation || isPendingApproval || isClosedStatus || isOnHold || isEventFull;
 
     return {
       joined,
+      isSuspended,
       joinButtonIcon,
       joinButtonLabel,
       completedParticipation,
@@ -1993,6 +2002,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                 <TouchableOpacity
                                   style={[
                                     styles.joinButton,
+                                    linkedEventAction.isSuspended && { backgroundColor: '#fee2e2', borderColor: '#fecaca' },
                                     eventCompleted
                                       ? styles.joinButtonCompleted
                                       : (eventJoined || linkedEventAction.isPendingApproval) && styles.joinButtonJoined,
@@ -2005,7 +2015,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                     name={linkedEventAction.joinButtonIcon}
                                     size={18}
                                     color={
-                                      eventCompleted
+                                      linkedEventAction.isSuspended
+                                        ? '#b91c1c'
+                                        : eventCompleted
                                         ? '#166534'
                                         : eventJoined || linkedEventAction.isPendingApproval
                                         ? '#155724'
@@ -2015,6 +2027,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                   <Text
                                     style={[
                                       styles.joinButtonText,
+                                      linkedEventAction.isSuspended && { color: '#b91c1c' },
                                       eventCompleted
                                         ? styles.joinButtonTextCompleted
                                         : (eventJoined || linkedEventAction.isPendingApproval) && styles.joinButtonTextJoined,
@@ -2076,7 +2089,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                                       color="#fff"
                                     />
                                     <Text style={styles.timeButtonText}>
-                                      {linkedEventAction.hasConfirmedToday
+                                      {linkedEventAction.isSuspended
+                                        ? 'Unavailable while suspended'
+                                        : linkedEventAction.hasConfirmedToday
                                         ? 'Done Today'
                                         : linkedEventAction.canTimeIn
                                         ? 'Confirm Attendance'
@@ -2277,6 +2292,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         <TouchableOpacity
                           style={[
                             styles.joinButton,
+                            eventActionState?.isSuspended && { backgroundColor: '#fee2e2', borderColor: '#fecaca' },
                             completedParticipation
                               ? styles.joinButtonCompleted
                               : (joined || isPendingApproval) && styles.joinButtonJoined,
@@ -2289,7 +2305,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                             name={joinButtonIcon}
                             size={18}
                             color={
-                              completedParticipation
+                              eventActionState?.isSuspended
+                                ? '#b91c1c'
+                                : completedParticipation
                                 ? '#166534'
                                 : joined || isPendingApproval
                                 ? '#155724'
@@ -2299,6 +2317,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                           <Text
                             style={[
                               styles.joinButtonText,
+                              eventActionState?.isSuspended && { color: '#b91c1c' },
                               completedParticipation
                                 ? styles.joinButtonTextCompleted
                                 : (joined || isPendingApproval) && styles.joinButtonTextJoined,
@@ -2352,7 +2371,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                               color="#fff"
                             />
                             <Text style={styles.timeButtonText}>
-                              {eventActionState?.hasConfirmedToday
+                              {eventActionState?.isSuspended
+                                ? 'Unavailable while suspended'
+                                : eventActionState?.hasConfirmedToday
                                 ? 'Done Today'
                                 : eventActionState?.eventHasNotStarted
                                 ? 'Await Start'
@@ -3044,6 +3065,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                   <TouchableOpacity
                     style={[
                       styles.joinButton,
+                      selectedEventActionState.isSuspended && { backgroundColor: '#fee2e2', borderColor: '#fecaca' },
                       selectedEventActionState.completedParticipation
                         ? styles.joinButtonCompleted
                         : (selectedEventActionState.joined || selectedEventActionState.isPendingApproval) && styles.joinButtonJoined,
@@ -3056,7 +3078,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                       name={selectedEventActionState.joinButtonIcon}
                       size={18}
                       color={
-                        selectedEventActionState.completedParticipation
+                        selectedEventActionState.isSuspended
+                          ? '#b91c1c'
+                          : selectedEventActionState.completedParticipation
                           ? '#166534'
                           : selectedEventActionState.joined || selectedEventActionState.isPendingApproval
                           ? '#155724'
@@ -3066,6 +3090,7 @@ export default function ProjectsScreen({ navigation, route }: any) {
                     <Text
                       style={[
                         styles.joinButtonText,
+                        selectedEventActionState.isSuspended && { color: '#b91c1c' },
                         selectedEventActionState.completedParticipation
                           ? styles.joinButtonTextCompleted
                           : (selectedEventActionState.joined || selectedEventActionState.isPendingApproval) && styles.joinButtonTextJoined,
@@ -3122,7 +3147,9 @@ export default function ProjectsScreen({ navigation, route }: any) {
                         color="#fff"
                       />
                       <Text style={styles.timeButtonText}>
-                        {selectedEventActionState.hasConfirmedToday
+                        {selectedEventActionState.isSuspended
+                          ? 'Unavailable while suspended'
+                          : selectedEventActionState.hasConfirmedToday
                           ? 'Done Today'
                           : selectedEventActionState.canTimeIn
                           ? 'Confirm Attendance'

@@ -197,7 +197,7 @@ export function getActiveProjectJoinCount(
       );
       if (!key) return;
 
-      if ((record.participationStatus || 'Active') === 'Active') {
+      if ((record.participationStatus || 'Active') === 'Active' || record.participationStatus === 'Suspended') {
         confirmedVolunteerKeys.add(key);
       } else {
         inactiveVolunteerKeys.add(key);
@@ -230,7 +230,7 @@ export function getActiveProjectJoinCount(
     }
   });
 
-  return new Set([...confirmedVolunteerKeys, ...fallbackVolunteerKeys]).size;
+  return new Set([...confirmedVolunteerKeys, ...fallbackVolunteerKeys].filter(key => !inactiveVolunteerKeys.has(key))).size;
 }
 
 export function getActiveProjectGroupJoinCount(

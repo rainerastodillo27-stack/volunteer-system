@@ -230,6 +230,7 @@ export default function VolunteerProjectDetailsScreen({
   const hasConfirmedJoin =
     currentJoinRecord?.participationStatus === 'Active' ||
     currentJoinRecord?.participationStatus === 'Completed';
+  const isSuspended = currentJoinRecord?.participationStatus === 'Suspended';
   const isJoined =
     currentMatch?.status === 'Matched' ||
     currentMatch?.status === 'Completed' ||
@@ -280,6 +281,19 @@ export default function VolunteerProjectDetailsScreen({
   const projectImageSource = getPrimaryProjectImageSource(project, parentProject || undefined);
 
   const renderJoinButton = (styleProps = {}) => {
+    if (isSuspended) {
+      return (
+        <TouchableOpacity
+          style={[styles.joinBtn, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }, styleProps]}
+          disabled
+          accessibilityRole="button"
+          accessibilityLabel="Suspended from this event"
+        >
+          <MaterialIcons name="person-off" size={18} color="#b91c1c" style={{ marginRight: 6 }} />
+          <Text style={[styles.joinBtnText, { color: '#b91c1c' }]}>Suspended</Text>
+        </TouchableOpacity>
+      );
+    }
     if (isEventClosed) {
       return (
         <View style={[styles.joinBtn, styles.joinBtnClosed, styleProps]}>
@@ -350,9 +364,9 @@ export default function VolunteerProjectDetailsScreen({
           <View style={[styles.heroDetails, !isDesktop && styles.heroDetailsMobile]}>
             <Text style={styles.heroTitle}>{project.title}</Text>
 
-            <View style={[styles.statusBadge, { backgroundColor: isEventClosed ? '#e2e8f0' : isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : isFull ? '#fde8e8' : '#e6f4ea' }]}>
-              <Text style={[styles.statusBadgeText, { color: isEventClosed ? '#475569' : isJoined ? '#137333' : isPending ? '#b06000' : isFull ? '#c53030' : '#137333' }]}>
-                {isEventClosed ? eventLifecycleStatus : isJoined ? 'Approved' : isPending ? 'Pending' : isFull ? 'Event Full' : 'Open'}
+            <View style={[styles.statusBadge, { backgroundColor: isSuspended ? '#fee2e2' : isEventClosed ? '#e2e8f0' : isJoined ? '#e6f4ea' : isPending ? '#fef7e0' : isFull ? '#fde8e8' : '#e6f4ea' }]}>
+              <Text style={[styles.statusBadgeText, { color: isSuspended ? '#b91c1c' : isEventClosed ? '#475569' : isJoined ? '#137333' : isPending ? '#b06000' : isFull ? '#c53030' : '#137333' }]}>
+                {isSuspended ? 'Suspended' : isEventClosed ? eventLifecycleStatus : isJoined ? 'Approved' : isPending ? 'Pending' : isFull ? 'Event Full' : 'Open'}
               </Text>
             </View>
 
@@ -510,6 +524,15 @@ export default function VolunteerProjectDetailsScreen({
         <Text style={styles.appSlotsValue}>{`${joinedCount} / ${totalSlots} filled`}</Text>
 
         <View style={{ marginTop: 16 }}>{renderJoinButton()}</View>
+
+        {isSuspended ? (
+          <View style={{ marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca' }}>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#991b1b', marginBottom: 4 }}>Participation suspended</Text>
+            <Text style={{ fontSize: 12, lineHeight: 18, color: '#7f1d1d' }}>
+              Your event membership and assignments remain. You can’t check in or submit an event report while suspended. Reason: {currentJoinRecord?.suspensionReason || 'Contact the organizer for details.'}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.deadlineRow} {...({} as any)}>
           <MaterialIcons name="access-time" size={14} color="#64748b" style={{ marginRight: 6 }} />

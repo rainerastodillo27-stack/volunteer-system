@@ -69,6 +69,7 @@ function EmptyTasksIllustration() {
 import {
   getAllVolunteers,
   getAllVolunteerTimeLogs,
+  getAllVolunteerProjectJoinRecords,
   getProjectsScreenSnapshot,
   REALTIME_STORAGE_CHANGE_OPTIONS,
   subscribeToStorageChanges,
@@ -132,6 +133,7 @@ type TaskEventAttendanceState = {
   todayLog: VolunteerTimeLog | null;
   latestLog: VolunteerTimeLog | null;
   canConfirmAttendance: boolean;
+  isSuspended: boolean;
   eventHasNotStarted: boolean;
   eventHasEnded: boolean;
   hasConfirmedToday: boolean;
@@ -450,7 +452,8 @@ function getTrackedTaskStatus(
 function getTaskEventAttendanceState(
   project: Project,
   isAssigned: boolean,
-  timeLogs: VolunteerTimeLog[]
+  timeLogs: VolunteerTimeLog[],
+  isSuspended = false,
 ): TaskEventAttendanceState {
   const sortedLogs = [...timeLogs].sort(
     (left, right) =>
@@ -477,10 +480,12 @@ function getTaskEventAttendanceState(
     lifecycleStatus === 'Completed' ||
     lifecycleStatus === 'Cancelled';
   const canConfirmAttendance =
-    isAssigned && eventScheduledToday && !hasConfirmedToday && !eventHasNotStarted && !eventHasEnded;
+    !isSuspended && isAssigned && eventScheduledToday && !hasConfirmedToday && !eventHasNotStarted && !eventHasEnded;
 
   let helperText = 'Attendance confirmation is ready for this attendance window.';
-  if (!isAssigned) {
+  if (isSuspended) {
+    helperText = 'Your event membership and assignments remain active, but you cannot check in or submit an event report while suspended.';
+  } else if (!isAssigned) {
     helperText = 'You need an assigned task before attendance opens for this event.';
   } else if (eventHasEnded) {
     helperText = 'Attendance is closed because the event timeline already ended.';
@@ -500,6 +505,7 @@ function getTaskEventAttendanceState(
     todayLog,
     latestLog,
     canConfirmAttendance,
+    isSuspended,
     eventHasNotStarted,
     eventHasEnded,
     hasConfirmedToday,
@@ -558,6 +564,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   const [volunteerTimeLogs, setVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [allVolunteerTimeLogs, setAllVolunteerTimeLogs] = useState<VolunteerTimeLog[]>([]);
   const [volunteerJoinRecords, setVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
+  const [managedVolunteerJoinRecords, setManagedVolunteerJoinRecords] = useState<VolunteerProjectJoinRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<AssignedTask | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -593,7 +600,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     [volunteerJoinRecords]
   );
 
-  const loadManagementData = React.useCallback(async () => {
+  const loadManagementData = React.useCallback(async (forceRefresh = false) => {
     if (!user?.id) {
       return;
     }
@@ -602,6 +609,10 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       managementDataUserIdRef.current = user.id;
       managementDataLoadedRef.current = false;
       managementDataLoadInFlightRef.current = null;
+    }
+
+    if (forceRefresh) {
+      managementDataLoadedRef.current = false;
     }
 
     if (managementDataLoadedRef.current) {
@@ -625,9 +636,14 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         console.warn('[VolunteerTasksScreen] Attendance history load skipped:', error);
         return [] as VolunteerTimeLog[];
       }),
+      getAllVolunteerProjectJoinRecords({ forceRefresh: true }).catch(error => {
+        console.warn('[VolunteerTasksScreen] Event membership load skipped:', error);
+        return [] as VolunteerProjectJoinRecord[];
+      }),
     ])
-      .then(([volunteers, timeLogs]) => {
+      .then(([volunteers, timeLogs, joinRecords]) => {
         setAllVolunteers(volunteers);
+        setManagedVolunteerJoinRecords(joinRecords);
         setAllVolunteerTimeLogs(current => {
           const byId = new Map(current.map(log => [log.id, log] as const));
           timeLogs.forEach(log => byId.set(log.id, log));
@@ -745,7 +761,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
       // administrator appear immediately, even when a realtime update was
       // missed while this screen was open.
       void loadVolunteerTasksCoalesced(true);
-      void loadManagementData();
+      void loadManagementData(true);
     },
     [loadManagementData, loadVolunteerTasksCoalesced]
   );
@@ -758,7 +774,12 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
       const unsubscribeStorage = subscribeToStorageChanges(
         ['projects', 'events', 'volunteers', 'volunteerTimeLogs', 'volunteerProjectJoins'],
-        () => loadVolunteerTasksCoalesced(true),
+        () => {
+          void loadVolunteerTasksCoalesced(true);
+          if (activeTab === 'Manage Assignments') {
+            void loadManagementData(true);
+          }
+        },
         REALTIME_STORAGE_CHANGE_OPTIONS
       );
       const appStateSubscription = Platform.OS === 'web'
@@ -766,6 +787,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         : AppState.addEventListener('change', nextState => {
             if (nextState === 'active') {
               void loadVolunteerTasksCoalesced(true);
+              if (activeTab === 'Manage Assignments') {
+                void loadManagementData(true);
+              }
             }
           });
 
@@ -773,7 +797,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         unsubscribeStorage();
         appStateSubscription?.remove();
       };
-    }, [loadVolunteerTasksCoalesced])
+    }, [activeTab, loadManagementData, loadVolunteerTasksCoalesced])
   );
 
   useEffect(() => {
@@ -852,7 +876,12 @@ export default function VolunteerTasksScreen({ navigation }: any) {
 
     const projectLogs = volunteerTimeLogs.filter(log => log.projectId === projectId);
     const isAssigned = tasks.some(task => task.projectId === projectId);
-    const attendanceState = getTaskEventAttendanceState(project, isAssigned, projectLogs);
+    const attendanceState = getTaskEventAttendanceState(
+      project,
+      isAssigned,
+      projectLogs,
+      volunteerJoinRecordByProjectId.get(project.id)?.participationStatus === 'Suspended',
+    );
 
     if (!attendanceState.canConfirmAttendance) {
       Alert.alert('Attendance Unavailable', attendanceState.helperText);
@@ -970,6 +999,13 @@ export default function VolunteerTasksScreen({ navigation }: any) {
     : null;
   const selectedEventIsClosed = ['Completed', 'Cancelled'].includes(selectedEventLifecycleStatus || '');
 
+  const isVolunteerSuspendedFromEvent = useCallback((event: Project, volunteer: Volunteer) =>
+    managedVolunteerJoinRecords.some(record =>
+      record.projectId === event.id &&
+      record.participationStatus === 'Suspended' &&
+      (record.volunteerId === volunteer.id || record.volunteerUserId === volunteer.userId)
+    ), [managedVolunteerJoinRecords]);
+
   const joinedVolunteerOptions = useMemo(() => {
     if (!selectedEventProject) {
       return [];
@@ -1062,6 +1098,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
         return {
           volunteer,
           logs,
+          isSuspended: isVolunteerSuspendedFromEvent(selectedManagedEvent, volunteer),
           checkedAttendanceDays: new Set(
             logs
               .filter(log => Boolean(log.attendanceCheckedAt))
@@ -1074,6 +1111,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
   }, [
     allVolunteerTimeLogs,
     managedEventVolunteerOptions,
+    isVolunteerSuspendedFromEvent,
     resolvedManagedAttendanceDateKey,
     selectedManagedEvent,
   ]);
@@ -2133,7 +2171,8 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                     const attendanceState = getTaskEventAttendanceState(
                       selectedTaskGroupProject,
                       true,
-                      projectLogs
+                      projectLogs,
+                      volunteerJoinRecordByProjectId.get(selectedTaskGroup.projectId)?.participationStatus === 'Suspended',
                     );
 
                     return (
@@ -2151,13 +2190,17 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                           <View
                             style={[
                               styles.attendanceStatusBadge,
-                              attendanceState.hasConfirmedToday
+                              attendanceState.isSuspended
+                                ? { backgroundColor: '#fee2e2', borderColor: '#fecaca' }
+                                : attendanceState.hasConfirmedToday
                                 ? styles.attendanceStatusBadgeActive
                                 : styles.attendanceStatusBadgeIdle,
                             ]}
                           >
                             <Text style={styles.attendanceStatusText}>
-                              {attendanceState.hasMarkedToday
+                              {attendanceState.isSuspended
+                                ? 'Suspended'
+                                : attendanceState.hasMarkedToday
                                 ? 'Marked'
                                 : attendanceState.hasConfirmedToday
                                 ? 'Confirmed'
@@ -2225,7 +2268,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                               <>
                                 <MaterialIcons
                                   name={
-                                    attendanceState.hasConfirmedToday
+                                    attendanceState.isSuspended
+                                      ? 'person-off'
+                                      : attendanceState.hasConfirmedToday
                                       ? 'check-circle'
                                       : attendanceState.eventHasNotStarted
                                       ? 'schedule'
@@ -2235,7 +2280,9 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                   color="#fff"
                                 />
                                 <Text style={styles.attendanceButtonText}>
-                                  {attendanceState.hasMarkedToday
+                                  {attendanceState.isSuspended
+                                    ? 'Unavailable while suspended'
+                                    : attendanceState.hasMarkedToday
                                     ? 'Marked'
                                     : attendanceState.hasConfirmedToday
                                     ? 'Done Today'
@@ -2642,11 +2689,22 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                               <Text style={styles.assignmentMeta}>
                                 Selected day records: {entry.logs.length}
                               </Text>
+                              {entry.isSuspended ? (
+                                <Text style={[styles.assignmentMeta, { color: '#b91c1c', fontWeight: '700' }]}>
+                                  Suspended: attendance marking is disabled.
+                                </Text>
+                              ) : null}
                             </View>
                             <View style={styles.attendanceReviewStatusBadge}>
-                              <MaterialIcons name="verified-user" size={16} color="#166534" />
-                              <Text style={styles.attendanceReviewStatusBadgeText}>
-                                {entry.logs.some(log => Boolean(log.attendanceCheckedAt))
+                              <MaterialIcons
+                                name={entry.isSuspended ? 'person-off' : 'verified-user'}
+                                size={16}
+                                color={entry.isSuspended ? '#b91c1c' : '#166534'}
+                              />
+                              <Text style={[styles.attendanceReviewStatusBadgeText, entry.isSuspended && { color: '#b91c1c' }]}>
+                                {entry.isSuspended
+                                  ? 'Suspended'
+                                  : entry.logs.some(log => Boolean(log.attendanceCheckedAt))
                                   ? 'Marked'
                                   : entry.logs.length
                                   ? 'Needs Review'
@@ -2695,17 +2753,23 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                   style={[
                                     styles.attendanceReviewButton,
                                     log.attendanceCheckedAt && styles.attendanceReviewButtonActive,
+                                    entry.isSuspended && !log.attendanceCheckedAt && { opacity: 0.55 },
                                   ]}
                                   onPress={() =>
                                     void handleToggleAttendanceCheck(log, !Boolean(log.attendanceCheckedAt))
                                   }
                                   activeOpacity={0.85}
+                                  disabled={entry.isSuspended && !log.attendanceCheckedAt}
                                 >
                                   {actionLoadingKey === `attendance-check-${log.id}` ? (
                                     <ActivityIndicator size="small" color="#ffffff" />
                                   ) : (
                                     <Text style={styles.attendanceReviewButtonText}>
-                                      {log.attendanceCheckedAt ? 'Remove Mark' : 'Mark Attendance'}
+                                      {log.attendanceCheckedAt
+                                        ? 'Remove Mark'
+                                        : entry.isSuspended
+                                        ? 'Attendance Disabled'
+                                        : 'Mark Attendance'}
                                     </Text>
                                   )}
                                 </TouchableOpacity>
@@ -2828,6 +2892,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                               <View style={styles.assignmentButtonGroup}>
                                 {managedEventVolunteerOptions.map(volunteer => {
                                   const isAssigned = isVolunteerAssignedToTask(eventTask, volunteer.id);
+                                  const isSuspended = isVolunteerSuspendedFromEvent(selectedManagedEvent, volunteer);
                                   const isSavingVolunteer =
                                     actionLoadingKey === `task-assignment-${selectedManagedEvent.id}-${eventTask.id}` &&
                                     taskAssignmentLoadingVolunteerId === volunteer.id;
@@ -2837,6 +2902,7 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                       style={[
                                         styles.assignmentButton,
                                         isAssigned && styles.assignmentButtonActive,
+                                        isSuspended && { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
                                       ]}
                                       disabled={Boolean(actionLoadingKey)}
                                       onPress={() => handleTaskVolunteerChipPress(eventTask, volunteer)}
@@ -2848,9 +2914,10 @@ export default function VolunteerTasksScreen({ navigation }: any) {
                                           style={[
                                             styles.assignmentButtonText,
                                             isAssigned && styles.assignmentButtonTextActive,
+                                            isSuspended && { color: '#b91c1c' },
                                           ]}
                                         >
-                                          {volunteer.name}
+                                          {isSuspended ? `${volunteer.name} · Suspended` : volunteer.name}
                                         </Text>
                                       )}
                                     </TouchableOpacity>

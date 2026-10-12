@@ -403,6 +403,14 @@ export interface VolunteerProjectMatch {
 }
 
 // Represents a volunteer joining an event through either self-join or admin assignment.
+export interface VolunteerProjectSuspensionHistoryEntry {
+  suspendedAt: string;
+  suspendedBy: string;
+  reason: string;
+  reinstatedAt?: string;
+  reinstatedBy?: string;
+}
+
 export interface VolunteerProjectJoinRecord {
   id: string;
   projectId: string;
@@ -412,9 +420,13 @@ export interface VolunteerProjectJoinRecord {
   volunteerEmail: string;
   joinedAt: string;
   source: 'VolunteerJoin' | 'AdminMatch';
-  participationStatus: 'Active' | 'Completed';
+  participationStatus: 'Active' | 'Completed' | 'Suspended';
   completedAt?: string;
   completedBy?: string;
+  suspensionReason?: string;
+  suspendedAt?: string;
+  suspendedBy?: string;
+  suspensionHistory?: VolunteerProjectSuspensionHistoryEntry[];
 }
 
 export interface PartnerProjectProposalDetails {

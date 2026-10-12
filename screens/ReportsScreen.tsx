@@ -1310,6 +1310,24 @@ export default function ReportsScreen({ navigation, route }: any) {
         return false;
       }
 
+      if (user.role === 'volunteer') {
+        const suspendedJoinRecord = volunteerJoinRecords.find(
+          record =>
+            record.projectId === targetProjectId &&
+            record.participationStatus === 'Suspended' &&
+            (!volunteerProfileId ||
+              record.volunteerId === volunteerProfileId ||
+              record.volunteerUserId === user.id)
+        );
+        if (suspendedJoinRecord) {
+          showToast(
+            `You remain assigned to this event, but cannot submit a report while suspended. Reason: ${suspendedJoinRecord.suspensionReason || 'Contact the organizer for details.'}`,
+            'error',
+          );
+          return false;
+        }
+      }
+
       try {
         const reportType = reportData.reportType as ImpactHubReportType;
         if (
@@ -1406,6 +1424,8 @@ export default function ReportsScreen({ navigation, route }: any) {
       loadReportsCoalesced,
       projects,
       showToast,
+      volunteerJoinRecords,
+      volunteerProfileId,
       user?.id,
       user?.name,
       user?.role,
