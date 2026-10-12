@@ -12,6 +12,7 @@ google-calendar-credentials.json
 .dev-pids/
 artifacts/
 dist/
+dist-partner-task-fix/
 .web-export-check/
 .expo-export-check-*/
 .run-logs/

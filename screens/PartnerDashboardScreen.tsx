@@ -61,8 +61,6 @@ import {
 
   buildProgramProposalProjectId,
 
-  getProgramModuleFromProposalProjectId,
-
 } from '../models/storage';
 
 import {
@@ -772,46 +770,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
     [partnerApplications]
 
   );
-
-
-
-  const programApplicationsByTarget = useMemo(() => {
-    const byProgramId = new Map<string, PartnerProjectApplication>();
-    const legacyByModule = new Map<string, PartnerProjectApplication>();
-
-    const keepLatest = (
-      map: Map<string, PartnerProjectApplication>,
-      key: string,
-      application: PartnerProjectApplication,
-    ) => {
-      const existing = map.get(key);
-      if (
-        !existing ||
-        new Date(application.requestedAt).getTime() > new Date(existing.requestedAt).getTime()
-      ) {
-        map.set(key, application);
-      }
-    };
-
-    partnerApplications.forEach(application => {
-      const legacyModule = getProgramModuleFromProposalProjectId(application.projectId);
-      const targetProgramId =
-        String(application.proposalDetails?.targetProjectId || '').trim() ||
-        (!legacyModule ? String(application.projectId || '').trim() : '');
-
-      if (targetProgramId) {
-        keepLatest(byProgramId, targetProgramId, application);
-        return;
-      }
-
-      const programModule = legacyModule || application.proposalDetails?.requestedProgramModule || '';
-      if (programModule) {
-        keepLatest(legacyByModule, programModule, application);
-      }
-    });
-
-    return { byProgramId, legacyByModule };
-  }, [partnerApplications]);
 
 
 
@@ -1681,11 +1639,11 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
 
           <View style={styles.sectionHeaderCopy}>
 
-            <Text style={styles.sectionTitle}>Approved Proposal Projects</Text>
+            <Text style={styles.sectionTitle}>Approved Projects</Text>
 
             <Text style={styles.sectionSubtitle}>
 
-              Track the live status of projects that were approved from your proposals.
+              Track the live status of projects approved for your organization.
 
             </Text>
 
@@ -1801,203 +1759,6 @@ export default function PartnerDashboardScreen({ navigation, route }: any) {
       </View>
 
 
-
-      <View style={styles.section}>
-
-        <Text style={styles.sectionTitle}>Registration Status</Text>
-
-        {partners.length === 0 ? (
-
-          <View style={styles.card}>
-
-            <Text style={styles.cardText}>No organization application found yet.</Text>
-
-          </View>
-
-        ) : (
-
-          partners.map(partner => (
-
-            <View key={partner.id} style={styles.card}>
-
-              <View style={styles.cardHeader}>
-
-                <View style={{ flex: 1 }}>
-
-                  <Text style={styles.cardTitle}>{partner.name}</Text>
-
-                  <Text style={styles.cardMeta}>
-                    {partner.sectorType}
-                    {partner.sectorType === 'NGO' && partner.dswdAccreditationNo?.trim()
-                      ? ` - DSWD: ${partner.dswdAccreditationNo.trim()}`
-                      : ''}
-                  </Text>
-                </View>
-
-                <View
-
-                  style={[
-
-                    styles.statusBadge,
-
-                    { backgroundColor: getProjectStatusColor(partner.status === 'Approved' ? 'Completed' : 'Active') },
-
-                  ]}
-
-                >
-
-                  <Text style={styles.statusBadgeText}>{partner.status}</Text>
-
-                </View>
-
-              </View>
-
-              <Text style={styles.cardText}>
-                Login access: {partner.credentialsUnlockedAt ? 'Unlocked' : 'Locked'}
-              </Text>
-            </View>
-
-          ))
-
-        )}
-
-      </View>
-
-
-
-      <View style={styles.section}>
-
-        <Text style={styles.sectionTitle}>Browse Programs</Text>
-
-        <Text style={styles.sectionSubtitle}>
-
-          Select a program to view its projects or submit a proposal.
-
-        </Text>
-
-        {availableProgramCards.length === 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.emptyText}>No programs available yet. Programs will appear here once created by admin.</Text>
-          </View>
-        ) : null}
-
-        {availableProgramCards.map(programCard => {
-          const module = programCard.module;
-
-          const application =
-            programApplicationsByTarget.byProgramId.get(programCard.id) ||
-            programApplicationsByTarget.legacyByModule.get(module);
-
-          const status = application?.status;
-
-          const isApproved = status === 'Approved';
-
-          const isPending = status === 'Pending';
-
-          const isRejected = status === 'Rejected';
-
-          const proposalProjectId = programCard.id;
-
-          const proposalSubmissionLocked = isPending || isApproved;
-          const buttonLabel = isRejected
-            ? 'Revise & Resubmit'
-            : isPending
-              ? 'Proposal Pending Review'
-              : isApproved
-                ? 'Proposal Approved'
-                : 'Submit Project Proposal';
-
-
-
-          return (
-
-            <View
-
-              key={programCard.id}
-
-              style={[styles.card, styles.programCard, { borderColor: programCard.accent }]}
-
-            >
-
-              <View style={styles.programCardHeader}>
-
-                <View style={[styles.programIcon, { backgroundColor: programCard.accent }]}> 
-
-                  <MaterialIcons
-
-                    name={getProgramModuleIcon(module)}
-
-                    size={20}
-
-                    color="#fff"
-
-                  />
-
-                </View>
-
-                <View style={{ flex: 1 }}>
-
-                  <Text style={styles.cardTitle}>{programCard.title}</Text>
-
-                  <Text style={styles.cardMeta}>{programCard.description}</Text>
-
-                </View>
-
-              </View>
-
-              {isRejected && application?.reviewNotes ? (
-
-                <View style={{ marginBottom: 8, padding: 10, backgroundColor: '#fef2f2', borderRadius: 8, borderWidth: 1, borderColor: '#fecaca' }}>
-
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#991b1b', marginBottom: 2 }}>Rejection Reason</Text>
-
-                  <Text style={{ fontSize: 12, color: '#7f1d1d' }}>{application.reviewNotes}</Text>
-
-                </View>
-
-              ) : null}
-
-              {/* View Proposal button for submitted/approved proposals */}
-              {application && (
-                <TouchableOpacity
-                  style={[styles.viewProposalButton, { borderColor: programCard.accent }]}
-                  onPress={() => openProposalPreview(application)}
-                >
-                  <MaterialIcons name="description" size={15} color={programCard.accent} />
-                  <Text style={[styles.viewProposalButtonText, { color: programCard.accent }]}>
-                    View Submitted Proposal
-                  </Text>
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity
-
-                style={[
-                  styles.primaryButton,
-                  (actionProjectId === proposalProjectId || proposalSubmissionLocked) && styles.timeButtonDisabled,
-                ]}
-
-                onPress={() => openProposalForm(module, programCard.id, isRejected ? application : undefined)}
-
-                disabled={actionProjectId === proposalProjectId || proposalSubmissionLocked}
-
-              >
-
-                <Text style={styles.primaryButtonText}>
-
-                  {actionProjectId === proposalProjectId ? 'Sending...' : buttonLabel}
-
-                </Text>
-
-              </TouchableOpacity>
-
-            </View>
-
-          );
-
-        })}
-
-      </View>
 
     </ScrollView>
 
