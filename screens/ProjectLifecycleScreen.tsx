@@ -24885,11 +24885,13 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
 
                 <ProjectTimelineCalendarCard
 
-                  title="Admin Project Calendar"
+                  title="Admin Event Calendar"
 
-                  subtitle="Review the shared project schedule, admin planning dates, and Google Calendar events."
+                  subtitle="Review scheduled events and Google Calendar entries."
 
                   projects={projects}
+
+                  partners={partners}
 
                   planningCalendars={planningCalendars}
 
@@ -24904,6 +24906,8 @@ export default function ProjectLifecycleScreen({ navigation, route }: any) {
                   setStatusFilter={setStatusFilter}
 
                   hideSecondCalendar
+
+                  showSelectedDayEventsInSidebar
 
                   onOpenProject={projectId => {
 

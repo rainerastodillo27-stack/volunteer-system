@@ -46,6 +46,16 @@ import {
   syncProjectsToGoogleCalendar,
 } from '../utils/googleCalendarSync';
 
+type DashboardCalendarChip = {
+  key: string;
+  title: string;
+  startDate: string;
+  timeLabel: string;
+  color: string;
+  projectId?: string;
+  htmlLink?: string;
+};
+
 // Helper function to get parent or grandparent program name
 function getProjectProgramLabel(project: Project, allProjects: Project[]): string {
   // Check parent project and return its title
@@ -229,6 +239,15 @@ function getGoogleEventsForDay(
 
     return (startMs <= targetEnd && endMs >= targetStart);
   });
+}
+
+function formatDashboardCalendarChipTime(value?: string): string {
+  if (!value) return '';
+  if (!/[T ]\d{2}:\d{2}/.test(value)) return 'All day';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatGoogleEventTime(event: any): string {
@@ -1168,7 +1187,27 @@ export default function DashboardScreen({ navigation }: any) {
                   {calGridCells.slice(rowIdx * 7, rowIdx * 7 + 7).map((cell, colIdx) => {
                     const systemEvents = getProjectsForDay(cell.day, cell.month, cell.year, projectsData);
                     const cellGEvents = getGoogleEventsForDay(cell.day, cell.month, cell.year, googleEvents);
-                    const totalEventsCount = systemEvents.length + cellGEvents.length;
+                    const dayEventChips: DashboardCalendarChip[] = [
+                      ...systemEvents.map(project => ({
+                        key: `system-${project.id}`,
+                        title: project.title || 'Untitled Event',
+                        startDate: project.startDate,
+                        timeLabel: formatDashboardCalendarChipTime(project.startDate),
+                        color: getProjectStatusColor(project),
+                        projectId: project.id,
+                      })),
+                      ...cellGEvents.map((event, eventIdx) => {
+                        const startDate = event.start?.dateTime || event.start?.date || '';
+                        return {
+                          key: `google-${event.id || eventIdx}`,
+                          title: event.summary || 'Google Calendar Event',
+                          startDate,
+                          timeLabel: formatDashboardCalendarChipTime(startDate),
+                          color: '#0284c7',
+                          htmlLink: event.htmlLink,
+                        };
+                      }),
+                    ].sort((left, right) => new Date(left.startDate).getTime() - new Date(right.startDate).getTime());
                     const isToday =
                       cell.isCurrentMonth &&
                       cell.day === todayDate.getDate() &&
@@ -1176,7 +1215,6 @@ export default function DashboardScreen({ navigation }: any) {
                       cell.year === todayDate.getFullYear();
                     const dateKey = `${cell.year}-${String(cell.month + 1).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}`;
                     const isSelected = selectedDateKey === dateKey;
-                    const hasEvents = totalEventsCount > 0;
 
                     return (
                       <TouchableOpacity
@@ -1204,12 +1242,34 @@ export default function DashboardScreen({ navigation }: any) {
                         >
                           {cell.day}
                         </Text>
-                        {hasEvents ? (
-                          <View style={styles.calIndicatorRow}>
-                            <View style={[styles.calIndicatorDot, { backgroundColor: systemEvents.length > 0 ? '#16a34a' : '#0284c7' }]} />
-                            {totalEventsCount > 1 && (
-                              <Text style={[styles.calIndicatorCount, { color: systemEvents.length > 0 ? '#16a34a' : '#0284c7' }]}>{totalEventsCount}</Text>
-                            )}
+                        {dayEventChips.length > 0 ? (
+                          <View style={styles.calDayEventList}>
+                            {dayEventChips.slice(0, 2).map(event => (
+                              <TouchableOpacity
+                                key={event.key}
+                                style={[styles.calDayEventChip, { backgroundColor: event.color }]}
+                                activeOpacity={0.8}
+                                accessibilityRole="button"
+                                accessibilityLabel={`${event.timeLabel} ${event.title}`}
+                                onPress={pressEvent => {
+                                  pressEvent.stopPropagation?.();
+                                  if (event.projectId) {
+                                    openLifecycle(event.projectId);
+                                  } else if (event.htmlLink) {
+                                    handleOpenEventLink(event.htmlLink);
+                                  }
+                                }}
+                              >
+                                <Text style={styles.calDayEventChipText} numberOfLines={1}>
+                                  {event.timeLabel} {event.title}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                            {dayEventChips.length > 2 ? (
+                              <Text style={styles.calDayMoreEventsText}>
+                                +{dayEventChips.length - 2} more
+                              </Text>
+                            ) : null}
                           </View>
                         ) : null}
                       </TouchableOpacity>
@@ -2161,10 +2221,11 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
     position: 'relative',
     backgroundColor: '#ffffff',
+    padding: 6,
   },
   calDayCellMuted: {
     backgroundColor: '#f8fafc',
@@ -2177,6 +2238,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#334155',
+    alignSelf: 'flex-start',
   },
   calDayNumMuted: {
     color: '#cbd5e1',
@@ -2185,23 +2247,29 @@ const styles = StyleSheet.create({
     color: '#16a34a',
     fontWeight: '800',
   },
-  calIndicatorRow: {
-    position: 'absolute',
-    bottom: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
+  calDayEventList: {
+    width: '100%',
+    alignItems: 'stretch',
+    gap: 3,
+    marginTop: 4,
   },
-  calIndicatorDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#16a34a',
+  calDayEventChip: {
+    width: '100%',
+    borderRadius: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
-  calIndicatorCount: {
+  calDayEventChipText: {
     fontSize: 8,
     fontWeight: '700',
-    color: '#16a34a',
+    lineHeight: 10,
+    color: '#ffffff',
+  },
+  calDayMoreEventsText: {
+    fontSize: 8,
+    fontWeight: '600',
+    color: '#64748b',
+    marginTop: 1,
   },
   row3Grid: {
     flexDirection: 'row',

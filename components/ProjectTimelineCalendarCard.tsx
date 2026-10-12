@@ -13,6 +13,7 @@ type TimelineEntry = {
   description?: string;
   startDate: string;
   endDate: string;
+  location?: string;
   color: string;
   laneLabel: string;
   projectId?: string;
@@ -25,6 +26,7 @@ type ProjectTimelineCalendarCardProps = {
   title: string;
   subtitle: string;
   projects: Project[];
+  partners?: { id: string; name: string }[];
   planningCalendars: AdminPlanningCalendar[];
   planningItems: AdminPlanningItem[];
   accentColor?: string;
@@ -37,6 +39,7 @@ type ProjectTimelineCalendarCardProps = {
   includeProjectEntries?: boolean;
   includeUnlinkedPlanningItems?: boolean;
   showProjectManagementActions?: boolean;
+  showSelectedDayEventsInSidebar?: boolean;
   onAddEvent?: (date: Date) => void;
   onOpenProject?: (projectId: string) => void;
   onEditProject?: (projectId: string) => void;
@@ -133,6 +136,7 @@ export default function ProjectTimelineCalendarCard({
   title,
   subtitle,
   projects,
+  partners = [],
   planningCalendars,
   planningItems,
   accentColor = '#166534',
@@ -145,6 +149,7 @@ export default function ProjectTimelineCalendarCard({
   includeProjectEntries = false,
   includeUnlinkedPlanningItems = true,
   showProjectManagementActions = true,
+  showSelectedDayEventsInSidebar = false,
   onAddEvent,
   onOpenProject,
   onEditProject,
@@ -279,6 +284,7 @@ export default function ProjectTimelineCalendarCard({
             description: project.description,
             startDate: project.startDate,
             endDate: project.endDate || project.startDate,
+            location: project.location?.address || project.locationVenue || undefined,
             color: getProjectStatusColor(project),
             laneLabel: getLaneLabel(project),
             projectId: project.id,
@@ -312,6 +318,7 @@ export default function ProjectTimelineCalendarCard({
             description: item.description || item.location || undefined,
             startDate: item.startDate,
             endDate: item.endDate || item.startDate,
+            location: item.location || undefined,
             color: calendarById.get(item.calendarId)?.color || '#475569',
             laneLabel: calendarById.get(item.calendarId)?.name || 'Planner',
             projectId: item.linkedProjectId,
@@ -334,6 +341,7 @@ export default function ProjectTimelineCalendarCard({
             description: event.description || undefined,
             startDate,
             endDate,
+            location: event.location || undefined,
             color: '#166534',
             laneLabel: 'Google Calendar',
             kind: 'google',
@@ -597,7 +605,7 @@ export default function ProjectTimelineCalendarCard({
       {/* Main Grid Layout */}
       <View style={[styles.mainLayout, { flexDirection: isMobile ? 'column' : 'row' }]}>
         
-        {/* Left Column (Big Calendar + Event List) */}
+        {/* Left Column (Big Calendar) */}
         <View style={[styles.leftColumn, isMobile && styles.leftColumnMobile]}>
           
           {/* Calendar Header with navigation and Mode buttons */}
@@ -743,6 +751,8 @@ export default function ProjectTimelineCalendarCard({
             </View>
           )}
 
+          {!showSelectedDayEventsInSidebar && (
+          <>
           {/* Event List Table at the bottom */}
           <View style={styles.eventTableContainer}>
             <Text style={styles.eventTableTitle}>Event List</Text>
@@ -841,6 +851,8 @@ export default function ProjectTimelineCalendarCard({
             </View>
             </ScrollView>
           </View>
+          </>
+          )}
 
         </View>
 
@@ -914,7 +926,117 @@ export default function ProjectTimelineCalendarCard({
             </>
           )}
 
-          {/* Upcoming Events list */}
+          {showSelectedDayEventsInSidebar ? (
+            <View style={styles.selectedDayEventsSection}>
+              <View style={styles.selectedDayEventsHeader}>
+                <MaterialIcons name="event-note" size={18} color="#16a34a" />
+                <Text style={styles.selectedDayEventsTitle}>
+                  Events for {selectedDate.toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+                </Text>
+              </View>
+
+              {selectedDayEvents.length > 0 ? (
+                selectedDayEvents.map(entry => {
+                  const project = projects.find(item => item.id === entry.projectId);
+                  const partnerName = project?.partnerId
+                    ? partners.find(partner => partner.id === project.partnerId)?.name || 'Partner'
+                    : undefined;
+                  const statusColor = project ? getProjectStatusColor(project) : '#64748b';
+                  const eventTypeLabel = project?.isEvent
+                    ? 'Event'
+                    : entry.kind === 'google'
+                      ? 'Google Calendar'
+                      : 'Schedule';
+                  const startTime = new Date(entry.startDate).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  });
+
+                  return (
+                    <View key={entry.id} style={styles.selectedDayEventCard}>
+                      <View style={styles.selectedDayEventHeader}>
+                        <Text style={styles.selectedDayEventName} numberOfLines={2}>
+                          {entry.title}
+                        </Text>
+                        <View style={styles.selectedDayEventBadges}>
+                          <Text style={styles.selectedDayEventTypeBadge}>{eventTypeLabel}</Text>
+                          {project ? (
+                            <Text style={[styles.selectedDayEventStatusBadge, { color: statusColor }]}>
+                              {getProjectDisplayStatus(project)}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+
+                      <View style={styles.selectedDayEventMetaRow}>
+                        <MaterialIcons name="calendar-today" size={12} color="#64748b" />
+                        <Text style={styles.selectedDayEventMetaText}>
+                          {formatRange(entry.startDate, entry.endDate)} - {startTime}
+                        </Text>
+                      </View>
+
+                      {entry.description ? (
+                        <Text style={styles.selectedDayEventDescription} numberOfLines={3}>
+                          {entry.description}
+                        </Text>
+                      ) : null}
+
+                      {entry.location ? (
+                        <View style={styles.selectedDayEventMetaRow}>
+                          <MaterialIcons name="place" size={12} color="#64748b" />
+                          <Text style={styles.selectedDayEventMetaText} numberOfLines={2}>
+                            {entry.location}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {partnerName ? (
+                        <View style={styles.selectedDayEventMetaRow}>
+                          <MaterialIcons name="business" size={12} color="#64748b" />
+                          <Text style={styles.selectedDayEventMetaText} numberOfLines={1}>
+                            {partnerName}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {project?.id || entry.htmlLink ? (
+                        <TouchableOpacity
+                          style={styles.selectedDayEventDetailsButton}
+                          onPress={() => {
+                            if (project?.id) {
+                              onOpenProject?.(project.id);
+                            } else if (entry.htmlLink) {
+                              void Linking.openURL(entry.htmlLink).catch(() => undefined);
+                            }
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <MaterialIcons
+                            name={project?.id ? 'arrow-forward' : 'open-in-new'}
+                            size={12}
+                            color="#16a34a"
+                          />
+                          <Text style={styles.selectedDayEventDetailsButtonText}>
+                            {project?.id ? 'View Details' : 'View in Google Calendar'}
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                  );
+                })
+              ) : (
+                <View style={styles.emptySelectedDayEvents}>
+                  <MaterialIcons name="event-busy" size={28} color="#94a3b8" />
+                  <Text style={styles.emptyUpcomingText}>No events scheduled</Text>
+                </View>
+              )}
+            </View>
+          ) : (
           <View style={styles.upcomingEventsSection}>
             <View style={styles.upcomingHeaderRow}>
               <Text style={styles.upcomingTitle}>Upcoming Events</Text>
@@ -956,6 +1078,7 @@ export default function ProjectTimelineCalendarCard({
               )}
             </View>
           </View>
+          )}
 
         </View>
 
@@ -1496,5 +1619,108 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     textAlign: 'center',
     paddingVertical: 12,
+  },
+  selectedDayEventsSection: {
+    borderTopWidth: 1,
+    borderTopColor: '#cbd5e1',
+    paddingTop: 12,
+  },
+  selectedDayEventsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    paddingBottom: 10,
+    marginBottom: 12,
+  },
+  selectedDayEventsTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  selectedDayEventCard: {
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#f8fafc',
+    borderLeftWidth: 3,
+    borderLeftColor: '#16a34a',
+    marginBottom: 10,
+  },
+  selectedDayEventHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  selectedDayEventName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  selectedDayEventBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  selectedDayEventTypeBadge: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#16a34a',
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  selectedDayEventStatusBadge: {
+    fontSize: 9,
+    fontWeight: '700',
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  selectedDayEventMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+    marginTop: 6,
+  },
+  selectedDayEventMetaText: {
+    flex: 1,
+    fontSize: 10,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  selectedDayEventDescription: {
+    fontSize: 10,
+    color: '#64748b',
+    lineHeight: 14,
+    marginTop: 6,
+  },
+  selectedDayEventDetailsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 6,
+    paddingVertical: 6,
+    marginTop: 8,
+  },
+  selectedDayEventDetailsButtonText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#16a34a',
+  },
+  emptySelectedDayEvents: {
+    alignItems: 'center',
+    paddingVertical: 18,
   },
 });
