@@ -21,7 +21,6 @@ import DocumentPreviewModal from '../components/DocumentPreviewModal';
 import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  deleteUser,
   getAllPartners,
   getPartner,
   getAllUsers,
@@ -37,6 +36,7 @@ import {
   getPendingUserApprovals,
   approveUser,
   rejectUser,
+  setUserAccountEnabled,
 } from '../models/storage';
 import { NVCSector, Partner, User, UserRole, UserType, Volunteer } from '../models/types';
 import { getAttachmentLabel, isImageMediaUri } from '../utils/media';
@@ -73,6 +73,7 @@ export default function UserManagementScreen({ navigation }: any) {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
   const [pendingUserApprovals, setPendingUserApprovals] = useState<User[]>([]);
+  const [updatingAccountId, setUpdatingAccountId] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showExportPreview, setShowExportPreview] = useState(false);
@@ -80,7 +81,6 @@ export default function UserManagementScreen({ navigation }: any) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
   const loadVersionRef = useRef(0);
-  const deletedUserIdsRef = useRef<Set<string>>(new Set());
 
   // Form state drafts
   const [nameDraft, setNameDraft] = useState('');
@@ -97,7 +97,7 @@ export default function UserManagementScreen({ navigation }: any) {
   const [documentPreview, setDocumentPreview] = useState<{ title: string; uri: string } | null>(null);
   const [accountSearch, setAccountSearch] = useState('');
   const [accountFilter, setAccountFilter] = useState<'all' | UserRole>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'pending' | 'disabled'>('all');
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -134,9 +134,7 @@ export default function UserManagementScreen({ navigation }: any) {
           ]);
           if (requestVersion !== loadVersionRef.current) return;
           setVolunteers(allVolunteersResult || []);
-          setPendingUserApprovals(
-            pendingApprovals.filter(approval => !deletedUserIdsRef.current.has(approval.id))
-          );
+          setPendingUserApprovals(pendingApprovals);
         } catch {}
       };
 
@@ -155,9 +153,7 @@ export default function UserManagementScreen({ navigation }: any) {
         }
         return a.name.localeCompare(b.name);
       });
-      setUsers(
-        sortedUsers.filter(existingUser => !deletedUserIdsRef.current.has(existingUser.id))
-      );
+      setUsers(sortedUsers);
       setPartners(allPartners);
       setLoadError(null);
     } catch (error) {
@@ -304,52 +300,47 @@ export default function UserManagementScreen({ navigation }: any) {
     }
   };
 
-  // Delete user logic
-  const handleDeleteUser = async (targetUser: User) => {
+  // Disable or re-enable an account without deleting its data.
+  const handleToggleAccountStatus = (targetUser: User) => {
     setShowActionMenuUser(null);
-    if (targetUser.id === user?.id) {
-      Alert.alert('Restricted', 'You cannot delete the currently signed-in admin account.');
-      return;
-    }
+    const nextEnabled = targetUser.isEnabled === false;
 
-    const executeDelete = async () => {
-      const previousUsers = users;
-      deletedUserIdsRef.current.add(targetUser.id);
-      setUsers(currentUsers => currentUsers.filter(existingUser => existingUser.id !== targetUser.id));
-      setPendingUserApprovals(currentApprovals =>
-        currentApprovals.filter(existingUser => existingUser.id !== targetUser.id)
-      );
+    const executeToggle = async () => {
+      setUpdatingAccountId(targetUser.id);
       try {
-        await deleteUser(targetUser.id);
-        // Refresh from the authoritative backend before leaving the delete
-        // flow. This prevents a slow, pre-delete list request from restoring
-        // the removed row in the web view.
+        const updatedUser = await setUserAccountEnabled(targetUser.id, nextEnabled);
+        setUsers(currentUsers =>
+          currentUsers.map(existingUser => existingUser.id === updatedUser.id ? updatedUser : existingUser)
+        );
         await loadUsers(true);
-        // A refresh that started before the delete can still finish with the
-        // old row. Keep the successful deletion authoritative for this screen.
-        setUsers(currentUsers => currentUsers.filter(existingUser => existingUser.id !== targetUser.id));
         setSuccessNotice({
-          title: 'Account Deleted',
-          message: `${targetUser.name}'s account has been removed.`,
+          title: nextEnabled ? 'Account Enabled' : 'Account Disabled',
+          message: nextEnabled
+            ? `${targetUser.name} can sign in again.`
+            : `${targetUser.name} has been signed out and can no longer sign in. Their account data is kept.`,
         });
-        Alert.alert('Account Deleted', `${targetUser.name}'s account has been removed.`);
       } catch (error) {
-        deletedUserIdsRef.current.delete(targetUser.id);
-        setUsers(previousUsers);
-        Alert.alert(getRequestErrorTitle(error), getRequestErrorMessage(error, 'Failed to delete user account.'));
+        Alert.alert(
+          getRequestErrorTitle(error),
+          getRequestErrorMessage(error, `Failed to ${nextEnabled ? 'enable' : 'disable'} account.`),
+        );
+      } finally {
+        setUpdatingAccountId(null);
       }
     };
 
     showConfirm({
-      title: 'Delete Account',
-      message: `Are you sure you want to delete ${targetUser.name}'s account? This action cannot be undone.`,
-      confirmText: 'Delete',
+      title: nextEnabled ? 'Enable Account' : 'Disable Account',
+      message: nextEnabled
+        ? `${targetUser.name} will be able to sign in again.`
+        : `${targetUser.name} will be signed out and unable to sign in. Their account and records will be kept.`,
+      confirmText: nextEnabled ? 'Enable' : 'Disable',
       cancelText: 'Cancel',
-      icon: 'person-remove',
-      iconColor: '#DC2626',
-      confirmColor: '#DC2626',
-      loadingText: 'Deleting...',
-      onConfirm: executeDelete,
+      icon: nextEnabled ? 'toggle-on' : 'block',
+      iconColor: nextEnabled ? '#16a34a' : '#DC2626',
+      confirmColor: nextEnabled ? '#16a34a' : '#DC2626',
+      loadingText: nextEnabled ? 'Enabling...' : 'Disabling...',
+      onConfirm: executeToggle,
     });
   };
 
@@ -431,6 +422,7 @@ export default function UserManagementScreen({ navigation }: any) {
       : account.role === 'partner'
         ? 'Partner'
         : 'Volunteer';
+    const isDisabled = account.isEnabled === false;
     const isPending = account.approvalStatus?.toLowerCase() === 'pending';
 
     return {
@@ -440,7 +432,7 @@ export default function UserManagementScreen({ navigation }: any) {
       role: roleLabel,
       email: account.email || '',
       organization: partner?.name || (account.role === 'admin' ? 'NVC' : ''),
-      status: isPending ? 'Pending' : 'Active',
+      status: isDisabled ? 'Disabled' : isPending ? 'Pending' : 'Active',
       joined: format(new Date(account.createdAt || Date.now()), 'MMM dd, yyyy'),
     };
   }), [users, partners]);
@@ -498,11 +490,13 @@ export default function UserManagementScreen({ navigation }: any) {
   // Filtered users list
   const visibleUsers = users.filter(account => {
     const roleMatches = accountFilter === 'all' || account.role === accountFilter;
-            const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+    const isDisabled = account.isEnabled === false;
+    const isPending = account.approvalStatus?.toLowerCase() === 'pending';
     const statusMatches =
       statusFilter === 'all' ||
-      (statusFilter === 'pending' && isPending) ||
-      (statusFilter === 'active' && !isPending);
+      (statusFilter === 'disabled' && isDisabled) ||
+      (statusFilter === 'pending' && !isDisabled && isPending) ||
+      (statusFilter === 'active' && !isDisabled && !isPending);
 
     const partner = getLinkedPartnerForUser(account);
     const query = accountSearch.trim().toLowerCase();
@@ -748,7 +742,7 @@ export default function UserManagementScreen({ navigation }: any) {
 
         {showStatusDropdown && (
           <View style={[styles.dropdownMenuOverlay, { right: 70 }]}>
-            {(['all', 'active', 'pending'] as const).map(statKey => (
+            {(['all', 'active', 'pending', 'disabled'] as const).map(statKey => (
               <TouchableOpacity
                 key={statKey}
                 style={[styles.dropdownMenuItem, statusFilter === statKey && styles.dropdownMenuItemActive]}
@@ -804,7 +798,23 @@ export default function UserManagementScreen({ navigation }: any) {
             </View>
           ) : paginatedUsers.map(account => {
             const partner = getLinkedPartnerForUser(account);
-                    const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+            const isDisabled = account.isEnabled === false;
+            const isPending = account.approvalStatus?.toLowerCase() === 'pending';
+            const statusStyle = isDisabled
+              ? [styles.statusPill, styles.statusPillDisabled]
+              : isPending
+                ? [styles.statusPill, styles.statusPillPending]
+                : [styles.statusPill, styles.statusPillActive];
+            const statusDotStyle = isDisabled
+              ? [styles.statusDot, styles.statusDotDisabled]
+              : isPending
+                ? [styles.statusDot, styles.statusDotPending]
+                : [styles.statusDot, styles.statusDotActive];
+            const statusTextStyle = isDisabled
+              ? [styles.statusText, styles.statusTextDisabled]
+              : isPending
+                ? [styles.statusText, styles.statusTextPending]
+                : [styles.statusText, styles.statusTextActive];
 
             // Role Badge styling
             let badgeBg = '#f0fdf4';
@@ -875,10 +885,10 @@ export default function UserManagementScreen({ navigation }: any) {
 
                 {/* Status Column */}
                 <View style={[styles.colCell, styles.colStatus]}>
-                  <View style={[styles.statusPill, isPending ? styles.statusPillPending : styles.statusPillActive]}>
-                    <View style={[styles.statusDot, isPending ? styles.statusDotPending : styles.statusDotActive]} />
-                    <Text style={[styles.statusText, isPending ? styles.statusTextPending : styles.statusTextActive]}>
-                      {isPending ? 'Pending' : 'Active'}
+                  <View style={statusStyle}>
+                    <View style={statusDotStyle} />
+                    <Text style={statusTextStyle}>
+                      {isDisabled ? 'Disabled' : isPending ? 'Pending' : 'Active'}
                     </Text>
                   </View>
                 </View>
@@ -911,19 +921,24 @@ export default function UserManagementScreen({ navigation }: any) {
                   <TouchableOpacity
                     style={[
                       styles.actionIconButton,
-                      styles.actionBtnDelete,
-                      account.id === user?.id && styles.actionBtnDisabled,
+                      isDisabled ? styles.actionBtnStatusEnable : styles.actionBtnStatusDisable,
+                      (account.id === user?.id || updatingAccountId === account.id) && styles.actionBtnDisabled,
                     ]}
-                    onPress={() => handleDeleteUser(account)}
+                    onPress={() => handleToggleAccountStatus(account)}
                     activeOpacity={0.75}
-                    disabled={account.id === user?.id}
-                    accessibilityLabel="Delete account"
+                    disabled={account.id === user?.id || updatingAccountId === account.id}
+                    accessibilityLabel={isDisabled ? 'Enable account' : 'Disable account'}
+                    accessibilityHint={isDisabled ? 'Allow this account to sign in again' : 'Sign this account out and block future sign-ins'}
                   >
-                    <MaterialIcons
-                      name="delete-outline"
-                      size={17}
-                      color={account.id === user?.id ? "#cbd5e1" : "#ef4444"}
-                    />
+                    {updatingAccountId === account.id ? (
+                      <ActivityIndicator size="small" color={isDisabled ? '#15803d' : '#ef4444'} />
+                    ) : (
+                      <MaterialIcons
+                        name={isDisabled ? 'toggle-off' : 'block'}
+                        size={17}
+                        color={account.id === user?.id ? '#cbd5e1' : isDisabled ? '#15803d' : '#ef4444'}
+                      />
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1036,21 +1051,35 @@ export default function UserManagementScreen({ navigation }: any) {
               <TextInput style={styles.formInput} placeholder="Leave blank to keep current password" value={passwordDraft} onChangeText={setPasswordDraft} secureTextEntry />
 
               {selectedUser && selectedUser.id !== user?.id && (
-                <>
-                  <View style={{ marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' }}>
-                    <TouchableOpacity 
-                      style={styles.deleteAccountButton} 
-                      onPress={() => {
-                        const target = selectedUser;
-                        closeEditModal();
-                        handleDeleteUser(target);
-                      }}
+                <View style={{ marginTop: 20, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#e2e8f0' }}>
+                  <TouchableOpacity
+                    style={[
+                      styles.accountStatusButton,
+                      selectedUser.isEnabled === false
+                        ? styles.accountStatusButtonEnable
+                        : styles.accountStatusButtonDisable,
+                    ]}
+                    onPress={() => {
+                      const target = selectedUser;
+                      closeEditModal();
+                      handleToggleAccountStatus(target);
+                    }}
+                  >
+                    <MaterialIcons
+                      name={selectedUser.isEnabled === false ? 'toggle-on' : 'block'}
+                      size={18}
+                      color={selectedUser.isEnabled === false ? '#15803d' : '#ef4444'}
+                    />
+                    <Text
+                      style={[
+                        styles.accountStatusButtonText,
+                        { color: selectedUser.isEnabled === false ? '#15803d' : '#ef4444' },
+                      ]}
                     >
-                      <MaterialIcons name="delete-outline" size={18} color="#ef4444" />
-                      <Text style={styles.deleteAccountButtonText}>Delete This Account</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
+                      {selectedUser.isEnabled === false ? 'Enable This Account' : 'Disable This Account'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </ScrollView>
 
@@ -1818,6 +1847,9 @@ const styles = StyleSheet.create({
   statusPillPending: {
     backgroundColor: '#fffbeb',
   },
+  statusPillDisabled: {
+    backgroundColor: '#f1f5f9',
+  },
   statusDot: {
     width: 6,
     height: 6,
@@ -1829,6 +1861,9 @@ const styles = StyleSheet.create({
   statusDotPending: {
     backgroundColor: '#d97706',
   },
+  statusDotDisabled: {
+    backgroundColor: '#64748b',
+  },
   statusText: {
     fontSize: 12,
     fontWeight: '600',
@@ -1839,6 +1874,9 @@ const styles = StyleSheet.create({
   },
   statusTextPending: {
     color: '#b45309',
+  },
+  statusTextDisabled: {
+    color: '#475569',
   },
   tdText: {
     fontSize: 13,
@@ -1861,9 +1899,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0fdf4',
     borderColor: '#bbf7d0',
   },
-  actionBtnDelete: {
+  actionBtnStatusDisable: {
     backgroundColor: '#fef2f2',
     borderColor: '#fecaca',
+  },
+  actionBtnStatusEnable: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
   },
   actionBtnDisabled: {
     backgroundColor: '#f8fafc',
@@ -2377,20 +2419,25 @@ const styles = StyleSheet.create({
     color: '#166534',
     textDecorationLine: 'underline',
   },
-  deleteAccountButton: {
+  accountStatusButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingVertical: 10,
     paddingHorizontal: 14,
-    backgroundColor: '#fef2f2',
     borderWidth: 1,
-    borderColor: '#fecaca',
     borderRadius: 8,
   },
-  deleteAccountButtonText: {
+  accountStatusButtonDisable: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  accountStatusButtonEnable: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  accountStatusButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#ef4444',
   },
 });

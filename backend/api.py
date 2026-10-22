@@ -37,6 +37,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request as FastAPIR
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 
 try:
@@ -79,6 +80,7 @@ from .realtime_bus import stop as stop_realtime_bus
 from .relational_mirror import (
     TABLE_SPECS,
     LIGHTWEIGHT_MEDIA_COLUMNS,
+    ensure_relational_mirror_tables,
     ensure_volunteer_time_logs_table_shape,
     get_relational_item_by_id,
     get_relational_items_by_ids,
@@ -157,6 +159,19 @@ ADMIN_ONLY_API_PREFIXES = (
 
 def _is_public_api_path(path: str) -> bool:
     return path in PUBLIC_API_PATHS or path.startswith("/validation/dswd-accreditation/")
+
+
+def _session_account_is_enabled(user_id: str) -> bool:
+    """Read current account status so disabled accounts lose existing sessions."""
+    with get_connection() as connection:
+        ensure_relational_mirror_tables(connection)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "select is_enabled from public.users where users_id = %s",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+    return row is not None and row[0] is not False
 
 
 # Public account bootstrap endpoints are intentionally unauthenticated, but
@@ -305,6 +320,26 @@ async def require_api_session(request: FastAPIRequest, call_next):
         return _apply_security_headers(JSONResponse(
             status_code=401,
             content={"detail": "Authentication required. Please sign in again."},
+            headers={"Cache-Control": "no-store"},
+        ), request)
+
+    try:
+        account_enabled = await run_in_threadpool(
+            _session_account_is_enabled,
+            str(session.get("sub") or "").strip(),
+        )
+    except Exception as error:
+        print(f"[WARN] Session account status could not be checked: {type(error).__name__}", flush=True)
+        return _apply_security_headers(JSONResponse(
+            status_code=503,
+            content={"detail": "Unable to verify account access right now. Please try again."},
+            headers={"Cache-Control": "no-store", "Retry-After": "2"},
+        ), request)
+
+    if not account_enabled:
+        return _apply_security_headers(JSONResponse(
+            status_code=401,
+            content={"detail": "Your account has been disabled. Contact an administrator for help."},
             headers={"Cache-Control": "no-store"},
         ), request)
 
@@ -664,6 +699,11 @@ class PasswordResetConfirmPayload(BaseModel):
 class UserApprovalPayload(BaseModel):
     status: str  # 'approved' or 'rejected'
     rejectionReason: str | None = None
+
+
+# Request payload for enabling or disabling an account from User Management.
+class UserAccountStatusPayload(BaseModel):
+    enabled: bool
 
 
 # Request payload for sending application rejection notification emails.
@@ -2144,7 +2184,7 @@ class ConnectionManager:
     # Initializes the in-memory websocket connection registries.
     def __init__(self) -> None:
         self._connections: dict[str, set[WebSocket]] = {}
-        self._storage_connections: set[WebSocket] = set()
+        self._storage_connections: dict[str, set[WebSocket]] = {}
 
     # Registers a websocket for a specific user id.
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
@@ -2152,9 +2192,9 @@ class ConnectionManager:
         self._connections.setdefault(user_id, set()).add(websocket)
 
     # Registers a websocket that listens for shared storage changes.
-    async def connect_storage(self, websocket: WebSocket) -> None:
+    async def connect_storage(self, user_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
-        self._storage_connections.add(websocket)
+        self._storage_connections.setdefault(user_id, set()).add(websocket)
 
     # Removes a user-specific websocket connection.
     def disconnect(self, user_id: str, websocket: WebSocket) -> None:
@@ -2166,8 +2206,31 @@ class ConnectionManager:
             self._connections.pop(user_id, None)
 
     # Removes a shared-storage websocket connection.
-    def disconnect_storage(self, websocket: WebSocket) -> None:
-        self._storage_connections.discard(websocket)
+    def disconnect_storage(self, user_id: str, websocket: WebSocket) -> None:
+        sockets = self._storage_connections.get(user_id)
+        if not sockets:
+            return
+        sockets.discard(websocket)
+        if not sockets:
+            self._storage_connections.pop(user_id, None)
+
+    async def disconnect_user_sessions(self, user_id: str) -> None:
+        """Close every local realtime connection belonging to an account."""
+        message_sockets = list(self._connections.get(user_id, set()))
+        storage_sockets = list(self._storage_connections.get(user_id, set()))
+        for websocket in message_sockets + storage_sockets:
+            try:
+                await websocket.close(code=1008, reason="Account disabled")
+            except Exception:
+                pass
+        for websocket in message_sockets:
+            self.disconnect(user_id, websocket)
+        for websocket in storage_sockets:
+            self.disconnect_storage(user_id, websocket)
+
+    async def revoke_user_sessions(self, user_id: str) -> None:
+        await self.disconnect_user_sessions(user_id)
+        await self._publish_cross_worker({"kind": "account.disabled", "userId": user_id})
 
     # Sends one event payload to all active sockets for a user.
     async def send_user_event(self, user_id: str, payload: dict[str, Any]) -> None:
@@ -2407,7 +2470,7 @@ class ConnectionManager:
             return
 
         payload = {"type": "storage.changed", "keys": normalized_keys}
-        sockets = list(self._storage_connections)
+        sockets = [socket for user_sockets in self._storage_connections.values() for socket in user_sockets]
 
         # Publish independently of local sockets. Previously, a worker with
         # no local storage subscribers returned here and never relayed the
@@ -2437,7 +2500,10 @@ class ConnectionManager:
             ]
 
         for socket in stale:
-            self.disconnect_storage(socket)
+            for user_id, user_sockets in list(self._storage_connections.items()):
+                if socket in user_sockets:
+                    self.disconnect_storage(user_id, socket)
+                    break
         if publish_task:
             await publish_task
 
@@ -2457,6 +2523,12 @@ class ConnectionManager:
             keys = [str(key).strip() for key in (event.get("keys") or []) if str(key).strip()]
             _invalidate_cross_worker_storage_caches(keys)
             await self.broadcast_storage_event(list(dict.fromkeys(keys)), publish=False)
+            return
+
+        if kind == "account.disabled":
+            user_id = str(event.get("userId") or "").strip()
+            if user_id:
+                await self.disconnect_user_sessions(user_id)
             return
 
         if kind == "message.changed":
@@ -4245,6 +4317,18 @@ def _assert_storage_item_write_access(
 ) -> None:
     """Keep legacy item writes compatible while removing cross-role writes."""
     if _normalize_role(session) == "admin":
+        if key == "users":
+            item_id = str(item.get("id") or "").strip()
+            existing = _postgres_get_hot_item_by_id(connection, "users", item_id) if item_id else None
+            if (
+                existing is not None
+                and "isEnabled" in item
+                and item.get("isEnabled") != existing.get("isEnabled")
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Account access must be changed from the account status control.",
+                )
         return
 
     session_user_id = str(session.get("sub") or "").strip()
@@ -4258,7 +4342,7 @@ def _assert_storage_item_write_access(
         _reject_protected_storage_mutations(
             existing,
             item,
-            {"id", "email", "password", "role", "approvalStatus", "status", "approvedBy", "reviewedBy", "rejectionReason"},
+            {"id", "email", "password", "role", "approvalStatus", "status", "isEnabled", "approvedBy", "reviewedBy", "rejectionReason"},
         )
         return
 
@@ -8389,6 +8473,7 @@ def _get_user_by_identifier(identifier: str, connection: Any | None = None) -> d
         _require_postgres()
 
     def query_user(active_connection: Any) -> dict[str, Any] | None:
+        ensure_relational_mirror_tables(active_connection)
         with active_connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -9925,6 +10010,12 @@ def auth_login(payload: AuthLoginPayload, request: FastAPIRequest, response: Res
     if not verify_password(submitted_password, stored_password):
         raise HTTPException(status_code=401, detail="Invalid email, username, or password.")
 
+    if user.get("isEnabled") is False:
+        raise HTTPException(
+            status_code=403,
+            detail="This account has been disabled. Contact an administrator for help.",
+        )
+
     # Upgrade any legacy plaintext value immediately if startup migration did
     # not already handle it. This keeps the compatibility window short.
     if not is_demo_account and isinstance(stored_password, str) and not is_bcrypt_hash(stored_password):
@@ -9983,6 +10074,12 @@ def auth_google(payload: GoogleAuthPayload, request: FastAPIRequest, response: R
                 raise HTTPException(
                     status_code=403,
                     detail="This Google email is not registered in NVC Connect. Please register first.",
+                )
+
+            if user.get("isEnabled") is False:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This account has been disabled. Contact an administrator for help.",
                 )
 
             block_reason = (
@@ -10199,6 +10296,78 @@ async def approve_user(
             }
         else:
             raise HTTPException(status_code=400, detail="Invalid approval status. Use 'approved' or 'rejected'.")
+
+
+@app.post("/auth/users/{user_id}/status")
+async def set_user_account_status(
+    request: FastAPIRequest,
+    user_id: str,
+    payload: UserAccountStatusPayload,
+) -> dict[str, Any]:
+    """Change account access without deleting the account or its records."""
+    session = _require_admin_session(request)
+    _require_postgres()
+    normalized_user_id = str(user_id or "").strip()
+    admin_id = str(session.get("sub") or "").strip()
+
+    with get_connection() as connection:
+        ensure_relational_mirror_tables(connection)
+        with connection.cursor() as cursor:
+            # Serialize status changes so two admins cannot concurrently disable
+            # each other and leave the system without an enabled administrator.
+            cursor.execute("select pg_advisory_xact_lock(727681554321700000)")
+            cursor.execute(
+                """
+                select role, is_enabled
+                from public.users
+                where users_id = %s
+                for update
+                """,
+                (normalized_user_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="User not found.")
+
+            target_role = str(row[0] or "").strip().lower()
+            currently_enabled = row[1] is not False
+            if currently_enabled != payload.enabled and not payload.enabled:
+                if normalized_user_id == admin_id:
+                    raise HTTPException(status_code=400, detail="You cannot disable your own administrator account.")
+                if target_role == "admin":
+                    cursor.execute(
+                        """
+                        select count(*)
+                        from public.users
+                        where lower(trim(coalesce(role, ''))) = 'admin'
+                          and is_enabled is not false
+                          and users_id <> %s
+                        """,
+                        (normalized_user_id,),
+                    )
+                    active_admin_count = int((cursor.fetchone() or [0])[0] or 0)
+                    if active_admin_count == 0:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="At least one active administrator must remain enabled.",
+                        )
+
+            if currently_enabled != payload.enabled:
+                cursor.execute(
+                    "update public.users set is_enabled = %s where users_id = %s",
+                    (payload.enabled, normalized_user_id),
+                )
+        user = _postgres_get_hot_item_by_id(connection, "users", normalized_user_id)
+        connection.commit()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _invalidate_collection_cache(["users"])
+    _message_query_cache.delete("users:directory")
+    if not payload.enabled:
+        await connection_manager.revoke_user_sessions(normalized_user_id)
+    await connection_manager.broadcast_storage_event(["users"])
+    return {"status": "ok", "user": user, "enabled": payload.enabled}
 
 
 @app.get("/auth/users/pending")
@@ -14114,6 +14283,14 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
     if str(session.get("sub") or "").strip() != str(user_id).strip():
         await websocket.close(code=1008, reason="You are not allowed to open this channel")
         return
+    try:
+        account_enabled = await run_in_threadpool(_session_account_is_enabled, user_id)
+    except Exception:
+        await websocket.close(code=1011, reason="Unable to verify account access")
+        return
+    if not account_enabled:
+        await websocket.close(code=1008, reason="Account disabled")
+        return
 
     await connection_manager.connect(user_id, websocket)
     try:
@@ -14151,20 +14328,31 @@ async def messages_websocket(websocket: WebSocket, user_id: str) -> None:
 @app.websocket("/ws/storage")
 # Websocket endpoint that streams shared storage changes to all listeners.
 async def storage_websocket(websocket: WebSocket) -> None:
-    if verify_session_token(
+    session = verify_session_token(
         websocket.query_params.get("token") or websocket.cookies.get(SESSION_COOKIE_NAME)
-    ) is None:
+    )
+    if session is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 
-    await connection_manager.connect_storage(websocket)
+    user_id = str(session.get("sub") or "").strip()
+    try:
+        account_enabled = await run_in_threadpool(_session_account_is_enabled, user_id)
+    except Exception:
+        await websocket.close(code=1011, reason="Unable to verify account access")
+        return
+    if not account_enabled:
+        await websocket.close(code=1008, reason="Account disabled")
+        return
+
+    await connection_manager.connect_storage(user_id, websocket)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        connection_manager.disconnect_storage(websocket)
+        connection_manager.disconnect_storage(user_id, websocket)
     except Exception:
-        connection_manager.disconnect_storage(websocket)
+        connection_manager.disconnect_storage(user_id, websocket)
 
 
 # Reads notification ids already opened by the signed-in administrator.

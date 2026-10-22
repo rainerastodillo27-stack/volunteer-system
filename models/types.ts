@@ -50,6 +50,8 @@ export interface User {
   userType?: UserType;
   pillarsOfInterest?: NVCSector[];
   approvalStatus?: 'pending' | 'approved' | 'rejected'; // Admin approval for new users
+  /** Whether an administrator has allowed this account to access the system. */
+  isEnabled?: boolean;
   approvedBy?: string; // Admin user ID who approved
   approvedAt?: string; // When the account was approved
   rejectionReason?: string; // Reason if rejected

@@ -82,7 +82,8 @@ RELATIONAL_TABLE_DDL = [
       rejection_reason text,
       created_at text,
       profile_photo text,
-      social_media text not null default '{{}}'
+      social_media text not null default '{{}}',
+      is_enabled boolean not null default true
     )
     """,
     "create index if not exists users_email_idx on users (lower(coalesce(email, '')))",
@@ -97,6 +98,7 @@ RELATIONAL_TABLE_DDL = [
     "alter table users add column if not exists rejection_reason text",
     "alter table users add column if not exists profile_photo text",
     "alter table users add column if not exists social_media text not null default '{}'",
+    "alter table users add column if not exists is_enabled boolean not null default true",
     f"""
     create table if not exists partners (
       id text primary key,
@@ -706,6 +708,7 @@ TABLE_SPECS: dict[str, dict[str, Any]] = {
             ("created_at", False),
             ("profile_photo", False),
             ("social_media", False),
+            ("is_enabled", False),
         ],
     },
     "partners": {
@@ -1086,6 +1089,7 @@ FIELD_NAME_MAPS: dict[str, dict[str, str]] = {
     "users": {
         "profilePhoto": "profile_photo",
         "socialMedia": "social_media",
+        "isEnabled": "is_enabled",
     },
     "projects": {
         "partnerId": "partner_id",
@@ -1482,6 +1486,7 @@ def _normalize_row(key: str, item: dict[str, Any]) -> tuple[Any, ...]:
             item.get("createdAt"),
             item.get("profilePhoto"),
             _json_dump(item.get("socialMedia"), {}),
+            item.get("isEnabled", True) is not False,
         )
 
     if key == "partners":
@@ -1880,6 +1885,7 @@ def _row_to_item(
             "createdAt": row["created_at"],
             "profilePhoto": row.get("profile_photo"),
             "socialMedia": _json_load(row.get("social_media"), {}),
+            "isEnabled": row.get("is_enabled") is not False,
         }
         if include_password:
             user["password"] = row["password"]
@@ -2452,25 +2458,37 @@ def sync_relational_mirror_collection(connection: Any, key: str, items: list[Any
     normalized_items = [item for item in items if isinstance(item, dict) and item.get("id")]
     if key == "users":
         # User objects returned to the client intentionally omit passwords. Keep
-        # the database hash when a profile/status update replaces the collection.
+        # the database hash and status when a profile/status update replaces the collection.
         existing_passwords: dict[str, str] = {}
+        existing_enabled_states: dict[str, bool] = {}
         try:
             with connection.cursor() as cursor:
-                cursor.execute("select users_id, password from users")
-                existing_passwords = {
-                    str(user_id): str(password)
-                    for user_id, password in cursor.fetchall()
-                    if user_id and password
-                }
+                cursor.execute("select users_id, password, is_enabled from users")
+                for user_id, password, is_enabled in cursor.fetchall():
+                    normalized_id = str(user_id or "")
+                    if not normalized_id:
+                        continue
+                    if password:
+                        existing_passwords[normalized_id] = str(password)
+                    existing_enabled_states[normalized_id] = is_enabled is not False
         except Exception:
             existing_passwords = {}
+            existing_enabled_states = {}
 
         normalized_items = [
-            (
-                {**item, "password": existing_passwords.get(str(item.get("id")), "")}
-                if not str(item.get("password") or "").strip()
-                else item
-            )
+            {
+                **item,
+                **(
+                    {"password": existing_passwords.get(str(item.get("id")), "")}
+                    if not str(item.get("password") or "").strip()
+                    else {}
+                ),
+                **(
+                    {"isEnabled": existing_enabled_states[str(item.get("id"))]}
+                    if str(item.get("id")) in existing_enabled_states
+                    else {"isEnabled": item.get("isEnabled", True) is not False}
+                ),
+            }
             for item in normalized_items
         ]
 

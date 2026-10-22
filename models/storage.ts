@@ -4015,6 +4015,25 @@ export async function deleteUser(userId: string): Promise<void> {
   }
 }
 
+// Updates a user's sign-in access while preserving their account and records.
+export async function setUserAccountEnabled(userId: string, enabled: boolean): Promise<User> {
+  const payload = await requestApiJson<{ user?: User }>(
+    `/auth/users/${encodeURIComponent(userId)}/status`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+
+  invalidateSharedStorageCache([STORAGE_KEYS.USERS]);
+  notifyStorageChanged([STORAGE_KEYS.USERS]);
+  if (!payload.user) {
+    throw new Error('The account status could not be confirmed. Refresh the account list and try again.');
+  }
+  return payload.user;
+}
+
 // Persists the currently signed-in user in local-only storage.
 export async function setCurrentUser(user: User | null): Promise<void> {
   if (!user && typeof document !== 'undefined') {

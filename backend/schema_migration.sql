@@ -70,6 +70,7 @@ CREATE TABLE public.users (
   approved_at text,
   rejection_reason text,
   social_media text NOT NULL DEFAULT '{}',
+  is_enabled boolean NOT NULL DEFAULT true,
   CONSTRAINT users_pkey PRIMARY KEY (users_id)
 );
 
